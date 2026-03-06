@@ -1,0 +1,61 @@
+# Default configuration for LTX-2 Dataset Builder
+# Copy this file and customize for your use case
+
+# Character identifier (required)
+token: character_person
+
+# Input/Output paths
+source_dir: /mnt/nas/movies
+output_dir: ./dataset
+cache_dir: ./.cache
+db_path: ./.cache/index.db
+
+# Supported video formats
+video_extensions:
+  - .mkv
+  - .mp4
+  - .avi
+  - .mov
+  - .webm
+
+# Processing options
+num_workers: 4
+gpu_batch_size: 8
+skip_existing: true
+verbose: false
+
+# Scene detection settings
+scene:
+  min_duration: 2.0      # Minimum scene length in seconds
+  max_duration: 8.0      # Maximum scene length in seconds
+  threshold: 27.0        # Content detection threshold (lower = more sensitive)
+  min_scene_len: 15      # Minimum scene length in frames
+
+# Face detection settings
+face:
+  min_face_presence: 0.5      # Minimum fraction of frames with face
+  min_face_size: 64           # Minimum face size in pixels
+  detection_threshold: 0.5    # Face detection confidence threshold
+  embedding_model: buffalo_l  # InsightFace model name
+  similarity_threshold: 0.4   # Cosine similarity for identity matching
+
+# Crop generation settings
+crop:
+  expansion_ratio: 0.2   # Bounding box expansion ratio
+  face_crop_scale: 1.5   # Scale factor for face crops
+  half_body_scale: 2.5   # Scale factor for half-body crops
+  smoothing_window: 5    # Window size for bbox smoothing
+
+# Render settings (LTX-2 compatible)
+render:
+  resolution: 1024       # Target resolution (square)
+  frame_count: 121       # Exact frame count per bucket
+  fps: 24                # Target FPS
+  output_format: png     # Output image format (png or jpg)
+  jpeg_quality: 95       # JPEG quality if using jpg format
+
+# Caption settings
+caption:
+  template: "{token}, cinematic, high quality"
+  auto_caption: false
+  vlm_model: null

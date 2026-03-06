@@ -1,0 +1,3 @@
+"""
+Candidate clip generation module.
+"""

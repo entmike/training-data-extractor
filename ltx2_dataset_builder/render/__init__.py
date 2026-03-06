@@ -1,0 +1,3 @@
+"""
+Bucket rendering module.
+"""

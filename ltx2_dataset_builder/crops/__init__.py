@@ -1,0 +1,3 @@
+"""
+Crop generation module.
+"""
