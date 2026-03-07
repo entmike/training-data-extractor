@@ -742,7 +742,7 @@ HTML_TEMPLATE = """
             border-radius: 12px;
             padding: 20px;
             width: 100%;
-            max-width: 480px;
+            max-width: 600px;
             max-height: 80vh;
             overflow-y: auto;
         }
@@ -755,12 +755,18 @@ HTML_TEMPLATE = """
         .manage-tags-header h2 { font-size: 16px; color: #f0f6fc; font-weight: 600; }
         .manage-tags-row {
             display: flex;
-            gap: 8px;
-            align-items: center;
-            padding: 6px 0;
+            flex-direction: column;
+            gap: 4px;
+            padding: 10px 0;
             border-bottom: 1px solid #21262d;
         }
         .manage-tags-row:last-child { border-bottom: none; }
+        .manage-tags-name-line,
+        .manage-tags-desc-line {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
         .manage-tags-input {
             flex: 1;
             background: #0d1117;
@@ -772,6 +778,19 @@ HTML_TEMPLATE = """
             outline: none;
         }
         .manage-tags-input:focus { border-color: #388bfd; }
+        .manage-tags-desc-input {
+            flex: 1;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 5px;
+            color: #8b949e;
+            font-size: 12px;
+            padding: 4px 8px;
+            outline: none;
+            font-style: italic;
+        }
+        .manage-tags-desc-input::placeholder { color: #484f58; }
+        .manage-tags-desc-input:focus { border-color: #388bfd; color: #c9d1d9; font-style: normal; }
         .manage-tags-save {
             padding: 4px 12px;
             border: 1px solid #238636;
@@ -1583,7 +1602,7 @@ HTML_TEMPLATE = """
                 const resp = await fetch(url);
                 if (!resp.ok) return;
                 const data = await resp.json();
-                allKnownTags = data.tags || [];
+                allKnownTags = (data.tags || []).map(t => typeof t === 'string' ? t : t.tag);
                 refreshFilterBar();
             } catch(e) { /* best-effort */ }
         }
@@ -1691,13 +1710,27 @@ HTML_TEMPLATE = """
                 return;
             }
 
-            list.innerHTML = tags.map(tag => {
+            list.innerHTML = tags.map(({tag, description}) => {
                 const safe = tag.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+                const safeDesc = (description || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
                 return `<div class="manage-tags-row" id="manage-row-${safe}">
-                    <input class="manage-tags-input" type="text" value="${safe}" data-original="${safe}"
-                           oninput="onManageTagInput(this)" onkeydown="onManageTagKeydown(event, this)">
-                    <button class="manage-tags-save" disabled onclick="doRenameTag(this)">Rename</button>
-                    <span class="manage-tags-status" id="manage-status-${safe}"></span>
+                    <div class="manage-tags-name-line">
+                        <input class="manage-tags-input" type="text" value="${safe}" data-original="${safe}"
+                               oninput="onManageTagInput(this)" onkeydown="onManageTagKeydown(event, this)">
+                        <button class="manage-tags-save" disabled onclick="doRenameTag(this)">Rename</button>
+                        <span class="manage-tags-status" id="manage-status-${safe}"></span>
+                    </div>
+                    <div class="manage-tags-desc-line">
+                        <input class="manage-tags-desc-input" type="text"
+                               value="${safeDesc}" data-tag="${safe}"
+                               placeholder="Add a description…"
+                               data-original-desc="${safeDesc}"
+                               oninput="onDescInput(this)"
+                               onblur="onDescBlur(this)"
+                               onkeydown="onDescKeydown(event, this)">
+                        <button class="manage-tags-save" id="desc-save-${safe}" disabled onclick="doSaveDescription(this)">Save</button>
+                        <span class="manage-tags-status" id="desc-status-${safe}"></span>
+                    </div>
                 </div>`;
             }).join('');
         }
@@ -1763,7 +1796,67 @@ HTML_TEMPLATE = """
                     pill.childNodes[0].textContent = newTag;
                 });
 
+                // Update desc input data-tag so save still works
+                const descInput = row.querySelector('.manage-tags-desc-input');
+                if (descInput) descInput.dataset.tag = newTag;
+                const descSaveBtn = row.querySelector('#desc-save-' + CSS.escape(oldTag));
+                if (descSaveBtn) descSaveBtn.id = 'desc-save-' + newTag;
+                const descStatus = row.querySelector('#desc-status-' + CSS.escape(oldTag));
+                if (descStatus) descStatus.id = 'desc-status-' + newTag;
+
                 refreshFilterBar();
+                setTimeout(() => { statusEl.textContent = ''; }, 3000);
+            } catch(e) {
+                statusEl.textContent = 'Error';
+                statusEl.style.color = '#f85149';
+                btn.disabled = false;
+            }
+        }
+
+        function onDescInput(input) {
+            const tag = input.dataset.tag;
+            const btn = document.getElementById('desc-save-' + tag);
+            if (btn) btn.disabled = input.value === input.dataset.originalDesc;
+        }
+
+        function onDescBlur(input) {
+            // auto-save on blur if changed
+            const tag = input.dataset.tag;
+            const btn = document.getElementById('desc-save-' + tag);
+            if (btn && !btn.disabled) doSaveDescription(btn);
+        }
+
+        function onDescKeydown(event, input) {
+            if (event.key === 'Enter') {
+                const tag = input.dataset.tag;
+                const btn = document.getElementById('desc-save-' + tag);
+                if (btn && !btn.disabled) doSaveDescription(btn);
+            } else if (event.key === 'Escape') {
+                closeManageTags();
+            }
+        }
+
+        async function doSaveDescription(btn) {
+            const row = btn.closest('.manage-tags-row');
+            const input = row.querySelector('.manage-tags-desc-input');
+            const tag = input.dataset.tag;
+            const description = input.value.trim();
+            const statusEl = document.getElementById('desc-status-' + tag);
+
+            btn.disabled = true;
+            statusEl.textContent = 'Saving…';
+            statusEl.style.color = '#58a6ff';
+
+            try {
+                const resp = await fetch('/api/tags/description', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({tag, description})
+                });
+                if (!resp.ok) throw new Error('Failed');
+                input.dataset.originalDesc = description;
+                statusEl.textContent = '✓ Saved';
+                statusEl.style.color = '#238636';
                 setTimeout(() => { statusEl.textContent = ''; }, 3000);
             } catch(e) {
                 statusEl.textContent = 'Error';
@@ -2050,6 +2143,20 @@ HTML_TEMPLATE = """
                 if (statVal) statVal.textContent = `${data.captioned} / ${data.total}`;
                 const fill = document.querySelector('.progress-fill');
                 if (fill) fill.style.width = data.total > 0 ? `${(data.captioned / data.total * 100)}%` : '0%';
+
+                // Only reload scenes if near the top to avoid jarring scroll jump mid-browse
+                if (window.scrollY < 400) {
+                    const grid = document.getElementById('scenes-grid');
+                    grid.innerHTML = '';
+                    document.getElementById('top-spacer').style.height = '0px';
+                    loadedBatches = [];
+                    recycledTop = [];
+                    topSpacerHeight = 0;
+                    nextPage = 1;
+                    hasMore = true;
+                    document.getElementById('empty-state').style.display = 'none';
+                    await loadNextBatch();
+                }
             } catch(e) { /* best-effort */ }
         }
 
@@ -2132,8 +2239,22 @@ def ensure_tags_table():
     conn.close()
 
 
+def ensure_tag_definitions_table():
+    """Create tag_definitions table if it doesn't exist."""
+    conn = get_db_connection()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tag_definitions (
+            tag         TEXT PRIMARY KEY,
+            description TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
 try:
     ensure_tags_table()
+    ensure_tag_definitions_table()
 except Exception:
     pass
 
@@ -2284,7 +2405,7 @@ def index():
     stats = conn.execute("""
         SELECT
             COUNT(*) as total,
-            SUM(CASE WHEN caption IS NOT NULL AND caption != '' THEN 1 ELSE 0 END) as captioned
+            SUM(CASE WHEN caption IS NOT NULL AND caption != '' AND substr(caption, 1, 2) != '__' THEN 1 ELSE 0 END) as captioned
         FROM scenes
     """).fetchone()
     stats = dict(stats)
@@ -2479,9 +2600,9 @@ def get_scenes():
     params = []
 
     if filter_type == 'captioned':
-        conditions.append("s.caption IS NOT NULL AND s.caption != ''")
+        conditions.append("s.caption IS NOT NULL AND s.caption != '' AND substr(s.caption, 1, 2) != '__'")
     elif filter_type == 'uncaptioned':
-        conditions.append("(s.caption IS NULL OR s.caption = '')")
+        conditions.append("(s.caption IS NULL OR s.caption = '' OR substr(s.caption, 1, 2) = '__')")
 
     if video_filter:
         conditions.append("(v.path LIKE ? OR v.path LIKE ?)")
@@ -2551,9 +2672,9 @@ def api_stats():
     """Get caption stats as JSON."""
     conn = get_db_connection()
     stats = conn.execute("""
-        SELECT 
+        SELECT
             COUNT(*) as total,
-            SUM(CASE WHEN caption IS NOT NULL AND caption != '' THEN 1 ELSE 0 END) as captioned
+            SUM(CASE WHEN caption IS NOT NULL AND caption != '' AND substr(caption, 1, 2) != '__' THEN 1 ELSE 0 END) as captioned
         FROM scenes
     """).fetchone()
     conn.close()
@@ -2600,24 +2721,29 @@ def update_caption(scene_id: int):
 
 @app.route('/api/tags/all', methods=['GET'])
 def get_all_tags():
-    """Return all distinct tags in the DB for autocomplete."""
+    """Return all distinct tags in the DB with optional descriptions."""
     video_filter = request.args.get('video', '')
     conn = get_db_connection()
     if video_filter:
         rows = conn.execute(
-            """SELECT DISTINCT st.tag FROM scene_tags st
+            """SELECT DISTINCT st.tag, COALESCE(td.description, '') as description
+               FROM scene_tags st
                JOIN scenes s ON st.scene_id = s.id
                JOIN videos v ON s.video_id = v.id
+               LEFT JOIN tag_definitions td ON td.tag = st.tag
                WHERE (v.path LIKE ? OR v.path LIKE ?)
                ORDER BY st.tag""",
             [f'%/{video_filter}.%', f'{video_filter}.%']
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT DISTINCT tag FROM scene_tags ORDER BY tag"
+            """SELECT st.tag, COALESCE(td.description, '') as description
+               FROM (SELECT DISTINCT tag FROM scene_tags) st
+               LEFT JOIN tag_definitions td ON td.tag = st.tag
+               ORDER BY st.tag"""
         ).fetchall()
     conn.close()
-    return jsonify({"tags": [r["tag"] for r in rows]})
+    return jsonify({"tags": [{"tag": r["tag"], "description": r["description"]} for r in rows]})
 
 
 @app.route('/api/tags/<int:scene_id>', methods=['GET'])
@@ -2684,9 +2810,39 @@ def rename_tag():
         (new_tag, old_tag)
     )
     conn.execute("DELETE FROM scene_tags WHERE tag = ?", (old_tag,))
+    # Migrate description to new tag name
+    conn.execute(
+        "INSERT INTO tag_definitions (tag, description) "
+        "SELECT ?, description FROM tag_definitions WHERE tag = ? "
+        "ON CONFLICT(tag) DO NOTHING",
+        (new_tag, old_tag)
+    )
+    conn.execute("DELETE FROM tag_definitions WHERE tag = ?", (old_tag,))
     conn.commit()
     conn.close()
     return jsonify({"updated": count})
+
+
+@app.route('/api/tags/description', methods=['PUT'])
+def set_tag_description():
+    """Set or update the description for a tag."""
+    data = request.get_json()
+    if not data or 'tag' not in data:
+        return jsonify({"error": "Missing tag"}), 400
+    tag = data['tag'].strip().lower()
+    description = (data.get('description') or '').strip()
+    if not tag:
+        return jsonify({"error": "Empty tag"}), 400
+
+    conn = get_db_connection()
+    conn.execute(
+        "INSERT INTO tag_definitions (tag, description) VALUES (?, ?) "
+        "ON CONFLICT(tag) DO UPDATE SET description = excluded.description",
+        (tag, description)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"tag": tag, "description": description})
 
 
 @app.route('/api/tags/<int:scene_id>/<path:tag>', methods=['DELETE'])
