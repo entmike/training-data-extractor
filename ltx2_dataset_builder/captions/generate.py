@@ -360,8 +360,8 @@ def caption_all_scenes(
                    ORDER BY st.created_at, st.tag""",
                 (scene["id"],)
             ).fetchall()
-        scene_tags = [r["tag"] for r in tag_rows] if tag_rows else None
-        # Use display_name as the prompt key if set, otherwise fall back to tag name
+        # Use display_name everywhere the model sees tag names; fall back to tag key
+        scene_tags = [r["display_name"] or r["tag"] for r in tag_rows] if tag_rows else None
         scene_tag_definitions = (
             {(r["display_name"] or r["tag"]): r["description"] for r in tag_rows if r["description"]}
             if tag_rows else None
