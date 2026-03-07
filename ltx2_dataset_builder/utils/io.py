@@ -69,6 +69,18 @@ class Database:
                 conn.execute("ALTER TABLE scenes ADD COLUMN caption TEXT")
             except:
                 pass
+            try:
+                conn.execute("ALTER TABLE scenes ADD COLUMN caption_started_at TIMESTAMP")
+            except:
+                pass
+            try:
+                conn.execute("ALTER TABLE scenes ADD COLUMN caption_finished_at TIMESTAMP")
+            except:
+                pass
+            try:
+                conn.execute("ALTER TABLE scenes ADD COLUMN caption_prompt TEXT")
+            except:
+                pass
             
             # Add frame_offset column to videos (codec timing compensation, default 0)
             try:
@@ -257,12 +269,24 @@ class Database:
                 ).fetchall()
             return [dict(row) for row in rows]
     
-    def update_scene_caption(self, scene_id: int, caption: str) -> None:
-        """Update the caption for a scene."""
+    def update_scene_caption(
+        self,
+        scene_id: int,
+        caption: str,
+        started_at: Optional[str] = None,
+        finished_at: Optional[str] = None,
+        prompt: Optional[str] = None,
+    ) -> None:
+        """Update the caption for a scene, optionally recording timing and prompt."""
         with self._connection() as conn:
             conn.execute(
-                "UPDATE scenes SET caption = ? WHERE id = ?",
-                (caption, scene_id)
+                """UPDATE scenes
+                   SET caption = ?,
+                       caption_started_at = COALESCE(?, caption_started_at),
+                       caption_finished_at = COALESCE(?, caption_finished_at),
+                       caption_prompt = COALESCE(?, caption_prompt)
+                   WHERE id = ?""",
+                (caption, started_at, finished_at, prompt, scene_id)
             )
             conn.commit()
     

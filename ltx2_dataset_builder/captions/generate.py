@@ -8,8 +8,9 @@ import logging
 import subprocess
 import tempfile
 import os
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from tqdm import tqdm
 
 from ..config import PipelineConfig
@@ -120,6 +121,32 @@ def extract_scene_clip(
     return result.returncode == 0 and output_path.exists()
 
 
+def _now_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _build_caption_prompt(
+    video_prompt: Optional[str],
+    tag_definitions: Optional[Dict[str, str]],
+) -> str:
+    """Build the full prompt string that will be (or was) sent to Qwen."""
+    caption_prompt = video_prompt if video_prompt else (
+        "Describe this video scene in one detailed sentence, including both the visuals "
+        "and any audio (dialogue, music, sound effects). Focus on actions, subjects, "
+        "setting, and what is being said or heard."
+    )
+    if tag_definitions:
+        lines = "\n".join(
+            f"- {name}: {desc}" if desc and desc.strip() else f"- {name}"
+            for name, desc in tag_definitions.items()
+        )
+        caption_prompt += (
+            "\n\nIf any of the following subjects are identifiable in this scene, "
+            "refer to them by name in your description:\n" + lines
+        )
+    return caption_prompt
+
+
 def caption_scene_with_qwen(
     video_path: Path,
     start_time: float,
@@ -149,12 +176,12 @@ def caption_scene_with_qwen(
             those subjects by name.
 
     Returns:
-        Generated caption string
+        Tuple of (generated caption string, full prompt string used)
     """
     import torch
-    
+
     model, processor = load_qwen_model()
-    
+
     # Derive timestamps from frame numbers if available (matches web preview logic)
     # +1 on start_frame compensates for ffmpeg fast-seek landing one frame early
     if start_frame is not None and end_frame is not None and fps > 0:
@@ -164,34 +191,17 @@ def caption_scene_with_qwen(
         time_offset = frame_offset / fps if fps > 0 else 0
         adjusted_start = max(0, start_time + time_offset)
         adjusted_end = end_time + time_offset
-    
+
+    caption_prompt = _build_caption_prompt(prompt, tag_definitions)
+    logger.info(f"[PROMPT]\n{caption_prompt}")
+
     with tempfile.TemporaryDirectory() as tmpdir:
         # Extract clip for captioning
         clip_path = Path(tmpdir) / "clip.mp4"
-        
+
         if not extract_scene_clip(video_path, adjusted_start, adjusted_end, clip_path):
             logger.warning(f"Failed to extract clip from {video_path}")
-            return ""
-        
-        # Build conversation for Qwen3-Omni
-        caption_prompt = prompt if prompt else (
-            "Describe this video scene in one detailed sentence, including both the visuals "
-            "and any audio (dialogue, music, sound effects). Focus on actions, subjects, "
-            "setting, and what is being said or heard."
-        )
-
-        # Append tag context for all known subjects (display_name as key, description optional)
-        if tag_definitions:
-            lines = "\n".join(
-                f"- {name}: {desc}" if desc and desc.strip() else f"- {name}"
-                for name, desc in tag_definitions.items()
-            )
-            caption_prompt += (
-                "\n\nIf any of the following subjects are identifiable in this scene, "
-                "refer to them by name in your description:\n" + lines
-            )
-
-        logger.info(f"[PROMPT]\n{caption_prompt}")
+            return "", caption_prompt
 
         conversation = []
         if tags:
@@ -250,8 +260,8 @@ def caption_scene_with_qwen(
 
             logger.info(f"[RESPONSE]\n{response}")
 
-            return response
-            
+            return response, caption_prompt
+
         except Exception as e:
             logger.error(f"Captioning error: {e}")
             raise
@@ -295,6 +305,64 @@ def _pick_next_scene(db: Database, video_id: Optional[int]) -> Optional[Dict[str
         return dict(row) if row else None
 
 
+def _retrofit_caption_metadata(db: Database) -> None:
+    """
+    For scenes that have a real caption but no caption_started_at, backfill
+    caption_prompt (reconstructed) and set both timestamps to now.
+    """
+    with db._connection() as conn:
+        rows = conn.execute(
+            """SELECT s.id, s.video_id, s.start_time, s.end_time,
+                      s.start_frame, s.end_frame,
+                      v.prompt as video_prompt, v.fps
+               FROM scenes s
+               JOIN videos v ON v.id = s.video_id
+               WHERE s.caption IS NOT NULL
+                 AND s.caption != ''
+                 AND substr(s.caption, 1, 2) != '__'
+                 AND s.caption_started_at IS NULL"""
+        ).fetchall()
+
+    if not rows:
+        return
+
+    logger.info(f"Retrofitting caption metadata for {len(rows)} existing scenes...")
+    now = _now_utc()
+
+    for row in rows:
+        scene_id = row["id"]
+        with db._connection() as conn:
+            tag_rows = conn.execute(
+                """SELECT st.tag,
+                          COALESCE(td.description, '') as description,
+                          COALESCE(td.display_name, '') as display_name
+                   FROM scene_tags st
+                   LEFT JOIN tag_definitions td ON td.tag = st.tag
+                   WHERE st.scene_id = ?
+                   ORDER BY st.created_at, st.tag""",
+                (scene_id,)
+            ).fetchall()
+
+        tag_definitions = (
+            {(r["display_name"] or r["tag"]): r["description"] for r in tag_rows if r["description"]}
+            if tag_rows else None
+        )
+        prompt = _build_caption_prompt(row["video_prompt"] or None, tag_definitions)
+
+        with db._connection() as conn:
+            conn.execute(
+                """UPDATE scenes
+                   SET caption_started_at = ?,
+                       caption_finished_at = ?,
+                       caption_prompt = ?
+                   WHERE id = ?""",
+                (now, now, prompt, scene_id)
+            )
+            conn.commit()
+
+    logger.info("Retrofit complete.")
+
+
 def caption_all_scenes(
     config: PipelineConfig,
     video_id: Optional[int] = None
@@ -315,6 +383,7 @@ def caption_all_scenes(
         Number of scenes captioned
     """
     db = Database(config.db_path)
+    _retrofit_caption_metadata(db)
     count = 0
 
     while True:
@@ -363,8 +432,9 @@ def caption_all_scenes(
             if tag_rows else None
         )
 
+        started_at = _now_utc()
         try:
-            caption = caption_scene_with_qwen(
+            caption, prompt_used = caption_scene_with_qwen(
                 video_path,
                 scene["start_time"],
                 scene["end_time"],
@@ -376,19 +446,29 @@ def caption_all_scenes(
                 tags=scene_tags,
                 tag_definitions=scene_tag_definitions,
             )
+            finished_at = _now_utc()
 
             if caption:
-                db.update_scene_caption(scene["id"], caption)
+                db.update_scene_caption(
+                    scene["id"], caption,
+                    started_at=started_at, finished_at=finished_at, prompt=prompt_used
+                )
                 count += 1
                 print(f"\n[Scene {scene['id']}] {scene['start_time']:.1f}s-{scene['end_time']:.1f}s")
                 print(f"  {caption}")
             else:
                 logger.warning(f"Empty caption for scene {scene['id']}, skipping")
-                db.update_scene_caption(scene["id"], "__empty__")
+                db.update_scene_caption(
+                    scene["id"], "__empty__",
+                    started_at=started_at, finished_at=_now_utc(), prompt=prompt_used
+                )
 
         except Exception as e:
             logger.error(f"Failed to caption scene {scene['id']}: {e}")
-            db.update_scene_caption(scene["id"], f"__error__: {e}")
+            db.update_scene_caption(
+                scene["id"], f"__error__: {e}",
+                started_at=started_at, finished_at=_now_utc()
+            )
             break
 
     logger.info(f"Captioned {count} scenes")

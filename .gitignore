@@ -12,6 +12,10 @@ config.yaml
 vids/
 dataset/
 
+# Node
+ui/node_modules/
+ui/dist/
+
 # Misc
 .DS_Store
 *.log
