@@ -349,10 +349,11 @@ def caption_all_scenes(
             db.update_scene_caption(scene["id"], "__skip__")
             continue
 
-        # Fetch scene tags and their descriptions to pass as context
+        # Fetch scene tags and their descriptions/display names to pass as context
         with db._connection() as conn:
             tag_rows = conn.execute(
-                """SELECT st.tag, COALESCE(td.description, '') as description
+                """SELECT st.tag, COALESCE(td.description, '') as description,
+                          COALESCE(td.display_name, '') as display_name
                    FROM scene_tags st
                    LEFT JOIN tag_definitions td ON td.tag = st.tag
                    WHERE st.scene_id = ?
@@ -360,8 +361,9 @@ def caption_all_scenes(
                 (scene["id"],)
             ).fetchall()
         scene_tags = [r["tag"] for r in tag_rows] if tag_rows else None
+        # Use display_name as the prompt key if set, otherwise fall back to tag name
         scene_tag_definitions = (
-            {r["tag"]: r["description"] for r in tag_rows if r["description"]}
+            {(r["display_name"] or r["tag"]): r["description"] for r in tag_rows if r["description"]}
             if tag_rows else None
         )
 

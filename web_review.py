@@ -1710,9 +1710,10 @@ HTML_TEMPLATE = """
                 return;
             }
 
-            list.innerHTML = tags.map(({tag, description}) => {
+            list.innerHTML = tags.map(({tag, description, display_name}) => {
                 const safe = tag.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
                 const safeDesc = (description || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+                const safeDN = (display_name || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
                 return `<div class="manage-tags-row" id="manage-row-${safe}">
                     <div class="manage-tags-name-line">
                         <input class="manage-tags-input" type="text" value="${safe}" data-original="${safe}"
@@ -1722,14 +1723,25 @@ HTML_TEMPLATE = """
                     </div>
                     <div class="manage-tags-desc-line">
                         <input class="manage-tags-desc-input" type="text"
-                               value="${safeDesc}" data-tag="${safe}"
-                               placeholder="Add a description…"
-                               data-original-desc="${safeDesc}"
+                               value="${safeDN}" data-tag="${safe}"
+                               placeholder="Display name (e.g. Jules, Patrick Bateman)…"
+                               data-original-desc="${safeDN}"
+                               data-field="display_name"
                                oninput="onDescInput(this)"
                                onblur="onDescBlur(this)"
                                onkeydown="onDescKeydown(event, this)">
                         <button class="manage-tags-save" id="desc-save-${safe}" disabled onclick="doSaveDescription(this)">Save</button>
                         <span class="manage-tags-status" id="desc-status-${safe}"></span>
+                    </div>
+                    <div class="manage-tags-desc-line">
+                        <input class="manage-tags-desc-input" type="text"
+                               value="${safeDesc}" data-tag="${safe}"
+                               placeholder="Description for captioner prompt…"
+                               data-original-desc="${safeDesc}"
+                               data-field="description"
+                               oninput="onDescInput(this)"
+                               onblur="onDescBlur(this)"
+                               onkeydown="onDescKeydown(event, this)">
                     </div>
                 </div>`;
             }).join('');
@@ -1838,10 +1850,16 @@ HTML_TEMPLATE = """
 
         async function doSaveDescription(btn) {
             const row = btn.closest('.manage-tags-row');
-            const input = row.querySelector('.manage-tags-desc-input');
-            const tag = input.dataset.tag;
-            const description = input.value.trim();
+            const inputs = row.querySelectorAll('.manage-tags-desc-input');
+            const tag = inputs[0].dataset.tag;
             const statusEl = document.getElementById('desc-status-' + tag);
+
+            // Collect display_name and description from their respective inputs
+            let display_name = '', description = '';
+            inputs.forEach(inp => {
+                if (inp.dataset.field === 'display_name') display_name = inp.value.trim();
+                else if (inp.dataset.field === 'description') description = inp.value.trim();
+            });
 
             btn.disabled = true;
             statusEl.textContent = 'Saving…';
@@ -1851,10 +1869,10 @@ HTML_TEMPLATE = """
                 const resp = await fetch('/api/tags/description', {
                     method: 'PUT',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({tag, description})
+                    body: JSON.stringify({tag, description, display_name})
                 });
                 if (!resp.ok) throw new Error('Failed');
-                input.dataset.originalDesc = description;
+                inputs.forEach(inp => { inp.dataset.originalDesc = inp.value.trim(); });
                 statusEl.textContent = '✓ Saved';
                 statusEl.style.color = '#238636';
                 setTimeout(() => { statusEl.textContent = ''; }, 3000);
@@ -2240,14 +2258,20 @@ def ensure_tags_table():
 
 
 def ensure_tag_definitions_table():
-    """Create tag_definitions table if it doesn't exist."""
+    """Create tag_definitions table if it doesn't exist, and migrate schema."""
     conn = get_db_connection()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS tag_definitions (
-            tag         TEXT PRIMARY KEY,
-            description TEXT NOT NULL DEFAULT ''
+            tag          TEXT PRIMARY KEY,
+            description  TEXT NOT NULL DEFAULT '',
+            display_name TEXT NOT NULL DEFAULT ''
         )
     """)
+    # Migrate: add display_name column if upgrading from older schema
+    try:
+        conn.execute("ALTER TABLE tag_definitions ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
+    except Exception:
+        pass  # column already exists
     conn.commit()
     conn.close()
 
@@ -2726,7 +2750,7 @@ def get_all_tags():
     conn = get_db_connection()
     if video_filter:
         rows = conn.execute(
-            """SELECT DISTINCT st.tag, COALESCE(td.description, '') as description
+            """SELECT DISTINCT st.tag, COALESCE(td.description, '') as description, COALESCE(td.display_name, '') as display_name
                FROM scene_tags st
                JOIN scenes s ON st.scene_id = s.id
                JOIN videos v ON s.video_id = v.id
@@ -2737,13 +2761,13 @@ def get_all_tags():
         ).fetchall()
     else:
         rows = conn.execute(
-            """SELECT st.tag, COALESCE(td.description, '') as description
+            """SELECT st.tag, COALESCE(td.description, '') as description, COALESCE(td.display_name, '') as display_name
                FROM (SELECT DISTINCT tag FROM scene_tags) st
                LEFT JOIN tag_definitions td ON td.tag = st.tag
                ORDER BY st.tag"""
         ).fetchall()
     conn.close()
-    return jsonify({"tags": [{"tag": r["tag"], "description": r["description"]} for r in rows]})
+    return jsonify({"tags": [{"tag": r["tag"], "description": r["description"], "display_name": r["display_name"]} for r in rows]})
 
 
 @app.route('/api/tags/<int:scene_id>', methods=['GET'])
@@ -2812,8 +2836,8 @@ def rename_tag():
     conn.execute("DELETE FROM scene_tags WHERE tag = ?", (old_tag,))
     # Migrate description to new tag name
     conn.execute(
-        "INSERT INTO tag_definitions (tag, description) "
-        "SELECT ?, description FROM tag_definitions WHERE tag = ? "
+        "INSERT INTO tag_definitions (tag, description, display_name) "
+        "SELECT ?, description, display_name FROM tag_definitions WHERE tag = ? "
         "ON CONFLICT(tag) DO NOTHING",
         (new_tag, old_tag)
     )
@@ -2831,18 +2855,19 @@ def set_tag_description():
         return jsonify({"error": "Missing tag"}), 400
     tag = data['tag'].strip().lower()
     description = (data.get('description') or '').strip()
+    display_name = (data.get('display_name') or '').strip()
     if not tag:
         return jsonify({"error": "Empty tag"}), 400
 
     conn = get_db_connection()
     conn.execute(
-        "INSERT INTO tag_definitions (tag, description) VALUES (?, ?) "
-        "ON CONFLICT(tag) DO UPDATE SET description = excluded.description",
-        (tag, description)
+        "INSERT INTO tag_definitions (tag, description, display_name) VALUES (?, ?, ?) "
+        "ON CONFLICT(tag) DO UPDATE SET description = excluded.description, display_name = excluded.display_name",
+        (tag, description, display_name)
     )
     conn.commit()
     conn.close()
-    return jsonify({"tag": tag, "description": description})
+    return jsonify({"tag": tag, "description": description, "display_name": display_name})
 
 
 @app.route('/api/tags/<int:scene_id>/<path:tag>', methods=['DELETE'])
