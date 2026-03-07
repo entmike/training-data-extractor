@@ -742,7 +742,7 @@ HTML_TEMPLATE = """
             border-radius: 12px;
             padding: 20px;
             width: 100%;
-            max-width: 480px;
+            max-width: 600px;
             max-height: 80vh;
             overflow-y: auto;
         }
@@ -753,16 +753,28 @@ HTML_TEMPLATE = """
             margin-bottom: 16px;
         }
         .manage-tags-header h2 { font-size: 16px; color: #f0f6fc; font-weight: 600; }
-        .manage-tags-row {
-            display: flex;
-            gap: 8px;
+        #manage-tags-list {
+            display: grid;
+            grid-template-columns: minmax(100px, 1fr) minmax(130px, 1.2fr) minmax(180px, 2fr) auto auto;
+            gap: 5px 8px;
             align-items: center;
-            padding: 6px 0;
-            border-bottom: 1px solid #21262d;
         }
-        .manage-tags-row:last-child { border-bottom: none; }
+        .mtg-header {
+            font-size: 11px;
+            color: #6e7681;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #30363d;
+        }
+        .mtg-sep {
+            grid-column: 1 / -1;
+            height: 1px;
+            background: #21262d;
+        }
         .manage-tags-input {
-            flex: 1;
+            width: 100%;
+            box-sizing: border-box;
             background: #0d1117;
             border: 1px solid #30363d;
             border-radius: 5px;
@@ -772,8 +784,22 @@ HTML_TEMPLATE = """
             outline: none;
         }
         .manage-tags-input:focus { border-color: #388bfd; }
+        .manage-tags-desc-input {
+            width: 100%;
+            box-sizing: border-box;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 5px;
+            color: #8b949e;
+            font-size: 12px;
+            padding: 4px 8px;
+            outline: none;
+            font-style: italic;
+        }
+        .manage-tags-desc-input::placeholder { color: #484f58; }
+        .manage-tags-desc-input:focus { border-color: #388bfd; color: #c9d1d9; font-style: normal; }
         .manage-tags-save {
-            padding: 4px 12px;
+            padding: 4px 10px;
             border: 1px solid #238636;
             background: transparent;
             color: #238636;
@@ -785,7 +811,7 @@ HTML_TEMPLATE = """
         }
         .manage-tags-save:hover { background: #238636; color: #fff; }
         .manage-tags-save:disabled { opacity: 0.4; cursor: default; }
-        .manage-tags-status { font-size: 11px; min-width: 50px; text-align: right; }
+        .manage-tags-status { font-size: 11px; color: #8b949e; white-space: nowrap; }
         .manage-tags-empty { color: #6e7681; font-size: 14px; text-align: center; padding: 20px 0; }
 
         /* Manage Videos modal */
@@ -1583,7 +1609,7 @@ HTML_TEMPLATE = """
                 const resp = await fetch(url);
                 if (!resp.ok) return;
                 const data = await resp.json();
-                allKnownTags = data.tags || [];
+                allKnownTags = (data.tags || []).map(t => typeof t === 'string' ? t : t.tag);
                 refreshFilterBar();
             } catch(e) { /* best-effort */ }
         }
@@ -1691,14 +1717,34 @@ HTML_TEMPLATE = """
                 return;
             }
 
-            list.innerHTML = tags.map(tag => {
-                const safe = tag.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-                return `<div class="manage-tags-row" id="manage-row-${safe}">
-                    <input class="manage-tags-input" type="text" value="${safe}" data-original="${safe}"
+            const e = s => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+            list.innerHTML =
+                `<div class="mtg-header">Tag key</div>
+                 <div class="mtg-header">Display name</div>
+                 <div class="mtg-header">Captioner description</div>
+                 <div class="mtg-header"></div>
+                 <div class="mtg-header"></div>`
+                + tags.map(({tag, description, display_name}) => {
+                const safe = e(tag);
+                const safeDesc = e(description || '');
+                const safeDN = e(display_name || '');
+                return `<div class="mtg-sep"></div>
+                    <input class="manage-tags-input" id="manage-tag-input-${safe}" type="text"
+                           value="${safe}" data-original="${safe}"
                            oninput="onManageTagInput(this)" onkeydown="onManageTagKeydown(event, this)">
-                    <button class="manage-tags-save" disabled onclick="doRenameTag(this)">Rename</button>
-                    <span class="manage-tags-status" id="manage-status-${safe}"></span>
-                </div>`;
+                    <input class="manage-tags-desc-input" type="text"
+                           value="${safeDN}" data-tag="${safe}"
+                           placeholder="e.g. Jules, Patrick Bateman…"
+                           data-original-desc="${safeDN}" data-field="display_name"
+                           oninput="onDescInput(this)" onblur="onDescBlur(this)" onkeydown="onDescKeydown(event, this)">
+                    <input class="manage-tags-desc-input" type="text"
+                           value="${safeDesc}" data-tag="${safe}"
+                           placeholder="Visual description for captioner…"
+                           data-original-desc="${safeDesc}" data-field="description"
+                           oninput="onDescInput(this)" onblur="onDescBlur(this)" onkeydown="onDescKeydown(event, this)">
+                    <button class="manage-tags-save" id="manage-rename-btn-${safe}" data-tag="${safe}"
+                            disabled onclick="doRenameTag(this)">Rename</button>
+                    <span class="manage-tags-status" id="manage-rename-status-${safe}"></span>`;
             }).join('');
         }
 
@@ -1712,25 +1758,24 @@ HTML_TEMPLATE = """
         }
 
         function onManageTagInput(input) {
-            const btn = input.parentElement.querySelector('.manage-tags-save');
-            btn.disabled = input.value.trim() === '' || input.value.trim() === input.dataset.original;
+            const btn = document.getElementById('manage-rename-btn-' + input.dataset.original);
+            if (btn) btn.disabled = input.value.trim() === '' || input.value.trim() === input.dataset.original;
         }
 
         function onManageTagKeydown(event, input) {
             if (event.key === 'Enter') {
-                const btn = input.parentElement.querySelector('.manage-tags-save');
-                if (!btn.disabled) doRenameTag(btn);
+                const btn = document.getElementById('manage-rename-btn-' + input.dataset.original);
+                if (btn && !btn.disabled) doRenameTag(btn);
             } else if (event.key === 'Escape') {
                 closeManageTags();
             }
         }
 
         async function doRenameTag(btn) {
-            const row = btn.parentElement;
-            const input = row.querySelector('.manage-tags-input');
-            const oldTag = input.dataset.original;
+            const oldTag = btn.dataset.tag;
+            const input = document.getElementById('manage-tag-input-' + oldTag);
             const newTag = input.value.trim().toLowerCase();
-            const statusEl = row.querySelector('.manage-tags-status');
+            const statusEl = document.getElementById('manage-rename-status-' + oldTag);
 
             if (!newTag || newTag === oldTag) return;
 
@@ -1763,12 +1808,63 @@ HTML_TEMPLATE = """
                     pill.childNodes[0].textContent = newTag;
                 });
 
+                // Update grid cell IDs and data attrs to reflect new tag key
+                const updateId = (id, newId) => { const el = document.getElementById(id); if (el) el.id = newId; };
+                updateId('manage-tag-input-' + oldTag, 'manage-tag-input-' + newTag);
+                updateId('manage-rename-btn-' + oldTag, 'manage-rename-btn-' + newTag);
+                updateId('manage-rename-status-' + oldTag, 'manage-rename-status-' + newTag);
+                btn.dataset.tag = newTag;
+                document.querySelectorAll(`.manage-tags-desc-input[data-tag="${CSS.escape(oldTag)}"]`).forEach(el => {
+                    el.dataset.tag = newTag;
+                });
+
                 refreshFilterBar();
                 setTimeout(() => { statusEl.textContent = ''; }, 3000);
             } catch(e) {
                 statusEl.textContent = 'Error';
                 statusEl.style.color = '#f85149';
                 btn.disabled = false;
+            }
+        }
+
+        function onDescInput(input) { /* auto-saves on blur — nothing needed here */ }
+
+        function onDescBlur(input) {
+            if (input.value.trim() !== input.dataset.originalDesc) saveDescFields(input.dataset.tag);
+        }
+
+        function onDescKeydown(event, input) {
+            if (event.key === 'Enter') { input.blur(); }
+            else if (event.key === 'Escape') { closeManageTags(); }
+        }
+
+        async function saveDescFields(tag) {
+            const inputs = document.querySelectorAll(`.manage-tags-desc-input[data-tag="${CSS.escape(tag)}"]`);
+            const statusEl = document.getElementById('manage-rename-status-' + tag);
+
+            let display_name = '', description = '';
+            inputs.forEach(inp => {
+                if (inp.dataset.field === 'display_name') display_name = inp.value.trim();
+                else if (inp.dataset.field === 'description') description = inp.value.trim();
+            });
+
+            if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = '#58a6ff'; }
+
+            try {
+                const resp = await fetch('/api/tags/description', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({tag, description, display_name})
+                });
+                if (!resp.ok) throw new Error('Failed');
+                inputs.forEach(inp => { inp.dataset.originalDesc = inp.value.trim(); });
+                if (statusEl) {
+                    statusEl.textContent = '✓ Saved';
+                    statusEl.style.color = '#238636';
+                    setTimeout(() => { statusEl.textContent = ''; }, 3000);
+                }
+            } catch(e) {
+                if (statusEl) { statusEl.textContent = 'Error'; statusEl.style.color = '#f85149'; }
             }
         }
         // ---- End Manage Tags ----
@@ -2050,6 +2146,20 @@ HTML_TEMPLATE = """
                 if (statVal) statVal.textContent = `${data.captioned} / ${data.total}`;
                 const fill = document.querySelector('.progress-fill');
                 if (fill) fill.style.width = data.total > 0 ? `${(data.captioned / data.total * 100)}%` : '0%';
+
+                // Only reload scenes if near the top to avoid jarring scroll jump mid-browse
+                if (window.scrollY < 400) {
+                    const grid = document.getElementById('scenes-grid');
+                    grid.innerHTML = '';
+                    document.getElementById('top-spacer').style.height = '0px';
+                    loadedBatches = [];
+                    recycledTop = [];
+                    topSpacerHeight = 0;
+                    nextPage = 1;
+                    hasMore = true;
+                    document.getElementById('empty-state').style.display = 'none';
+                    await loadNextBatch();
+                }
             } catch(e) { /* best-effort */ }
         }
 
@@ -2132,8 +2242,28 @@ def ensure_tags_table():
     conn.close()
 
 
+def ensure_tag_definitions_table():
+    """Create tag_definitions table if it doesn't exist, and migrate schema."""
+    conn = get_db_connection()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tag_definitions (
+            tag          TEXT PRIMARY KEY,
+            description  TEXT NOT NULL DEFAULT '',
+            display_name TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    # Migrate: add display_name column if upgrading from older schema
+    try:
+        conn.execute("ALTER TABLE tag_definitions ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
+    except Exception:
+        pass  # column already exists
+    conn.commit()
+    conn.close()
+
+
 try:
     ensure_tags_table()
+    ensure_tag_definitions_table()
 except Exception:
     pass
 
@@ -2284,7 +2414,7 @@ def index():
     stats = conn.execute("""
         SELECT
             COUNT(*) as total,
-            SUM(CASE WHEN caption IS NOT NULL AND caption != '' THEN 1 ELSE 0 END) as captioned
+            SUM(CASE WHEN caption IS NOT NULL AND caption != '' AND substr(caption, 1, 2) != '__' THEN 1 ELSE 0 END) as captioned
         FROM scenes
     """).fetchone()
     stats = dict(stats)
@@ -2479,9 +2609,9 @@ def get_scenes():
     params = []
 
     if filter_type == 'captioned':
-        conditions.append("s.caption IS NOT NULL AND s.caption != ''")
+        conditions.append("s.caption IS NOT NULL AND s.caption != '' AND substr(s.caption, 1, 2) != '__'")
     elif filter_type == 'uncaptioned':
-        conditions.append("(s.caption IS NULL OR s.caption = '')")
+        conditions.append("(s.caption IS NULL OR s.caption = '' OR substr(s.caption, 1, 2) = '__')")
 
     if video_filter:
         conditions.append("(v.path LIKE ? OR v.path LIKE ?)")
@@ -2551,9 +2681,9 @@ def api_stats():
     """Get caption stats as JSON."""
     conn = get_db_connection()
     stats = conn.execute("""
-        SELECT 
+        SELECT
             COUNT(*) as total,
-            SUM(CASE WHEN caption IS NOT NULL AND caption != '' THEN 1 ELSE 0 END) as captioned
+            SUM(CASE WHEN caption IS NOT NULL AND caption != '' AND substr(caption, 1, 2) != '__' THEN 1 ELSE 0 END) as captioned
         FROM scenes
     """).fetchone()
     conn.close()
@@ -2600,24 +2730,29 @@ def update_caption(scene_id: int):
 
 @app.route('/api/tags/all', methods=['GET'])
 def get_all_tags():
-    """Return all distinct tags in the DB for autocomplete."""
+    """Return all distinct tags in the DB with optional descriptions."""
     video_filter = request.args.get('video', '')
     conn = get_db_connection()
     if video_filter:
         rows = conn.execute(
-            """SELECT DISTINCT st.tag FROM scene_tags st
+            """SELECT DISTINCT st.tag, COALESCE(td.description, '') as description, COALESCE(td.display_name, '') as display_name
+               FROM scene_tags st
                JOIN scenes s ON st.scene_id = s.id
                JOIN videos v ON s.video_id = v.id
+               LEFT JOIN tag_definitions td ON td.tag = st.tag
                WHERE (v.path LIKE ? OR v.path LIKE ?)
                ORDER BY st.tag""",
             [f'%/{video_filter}.%', f'{video_filter}.%']
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT DISTINCT tag FROM scene_tags ORDER BY tag"
+            """SELECT st.tag, COALESCE(td.description, '') as description, COALESCE(td.display_name, '') as display_name
+               FROM (SELECT DISTINCT tag FROM scene_tags) st
+               LEFT JOIN tag_definitions td ON td.tag = st.tag
+               ORDER BY st.tag"""
         ).fetchall()
     conn.close()
-    return jsonify({"tags": [r["tag"] for r in rows]})
+    return jsonify({"tags": [{"tag": r["tag"], "description": r["description"], "display_name": r["display_name"]} for r in rows]})
 
 
 @app.route('/api/tags/<int:scene_id>', methods=['GET'])
@@ -2684,9 +2819,40 @@ def rename_tag():
         (new_tag, old_tag)
     )
     conn.execute("DELETE FROM scene_tags WHERE tag = ?", (old_tag,))
+    # Migrate description to new tag name
+    conn.execute(
+        "INSERT INTO tag_definitions (tag, description, display_name) "
+        "SELECT ?, description, display_name FROM tag_definitions WHERE tag = ? "
+        "ON CONFLICT(tag) DO NOTHING",
+        (new_tag, old_tag)
+    )
+    conn.execute("DELETE FROM tag_definitions WHERE tag = ?", (old_tag,))
     conn.commit()
     conn.close()
     return jsonify({"updated": count})
+
+
+@app.route('/api/tags/description', methods=['PUT'])
+def set_tag_description():
+    """Set or update the description for a tag."""
+    data = request.get_json()
+    if not data or 'tag' not in data:
+        return jsonify({"error": "Missing tag"}), 400
+    tag = data['tag'].strip().lower()
+    description = (data.get('description') or '').strip()
+    display_name = (data.get('display_name') or '').strip()
+    if not tag:
+        return jsonify({"error": "Empty tag"}), 400
+
+    conn = get_db_connection()
+    conn.execute(
+        "INSERT INTO tag_definitions (tag, description, display_name) VALUES (?, ?, ?) "
+        "ON CONFLICT(tag) DO UPDATE SET description = excluded.description, display_name = excluded.display_name",
+        (tag, description, display_name)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"tag": tag, "description": description, "display_name": display_name})
 
 
 @app.route('/api/tags/<int:scene_id>/<path:tag>', methods=['DELETE'])

@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import os
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Dict, List, Any, Optional
 from tqdm import tqdm
 
 from ..config import PipelineConfig
@@ -130,6 +130,7 @@ def caption_scene_with_qwen(
     end_frame: Optional[int] = None,
     prompt: Optional[str] = None,
     tags: Optional[List[str]] = None,
+    tag_definitions: Optional[Dict[str, str]] = None,
 ) -> str:
     """
     Generate a caption for a scene using Qwen3 Omni.
@@ -143,6 +144,9 @@ def caption_scene_with_qwen(
         start_frame: Scene start frame (preferred over start_time for precision)
         end_frame: Scene end frame (preferred over end_time for precision)
         tags: Optional list of scene tags to include as context
+        tag_definitions: Optional mapping of tag name -> description; tags with
+            descriptions are appended to the prompt so the VLM knows to identify
+            those subjects by name.
 
     Returns:
         Generated caption string
@@ -175,6 +179,20 @@ def caption_scene_with_qwen(
             "and any audio (dialogue, music, sound effects). Focus on actions, subjects, "
             "setting, and what is being said or heard."
         )
+
+        # Append tag context for all known subjects (display_name as key, description optional)
+        if tag_definitions:
+            lines = "\n".join(
+                f"- {name}: {desc}" if desc and desc.strip() else f"- {name}"
+                for name, desc in tag_definitions.items()
+            )
+            caption_prompt += (
+                "\n\nIf any of the following subjects are identifiable in this scene, "
+                "refer to them by name in your description:\n" + lines
+            )
+
+        logger.info(f"[PROMPT]\n{caption_prompt}")
+
         conversation = []
         if tags:
             import json
@@ -229,12 +247,14 @@ def caption_scene_with_qwen(
                 skip_special_tokens=True,
                 clean_up_tokenization_spaces=False
             )[0].strip()
-            
+
+            logger.info(f"[RESPONSE]\n{response}")
+
             return response
             
         except Exception as e:
             logger.error(f"Captioning error: {e}")
-            return ""
+            raise
 
 
 def _pick_next_scene(db: Database, video_id: Optional[int]) -> Optional[Dict[str, Any]]:
@@ -252,7 +272,7 @@ def _pick_next_scene(db: Database, video_id: Optional[int]) -> Optional[Dict[str
                 FROM scenes s
                 LEFT JOIN scene_tags st ON st.scene_id = s.id
                 WHERE s.video_id = ?
-                  AND (s.caption IS NULL OR s.caption = '')
+                  AND (s.caption IS NULL OR s.caption = '' OR s.caption = '__empty__' OR substr(s.caption, 1, 9) = '__error__')
                 GROUP BY s.id
                 ORDER BY tag_count DESC, s.start_time
                 LIMIT 1
@@ -266,7 +286,7 @@ def _pick_next_scene(db: Database, video_id: Optional[int]) -> Optional[Dict[str
                        COUNT(st.tag) AS tag_count
                 FROM scenes s
                 LEFT JOIN scene_tags st ON st.scene_id = s.id
-                WHERE s.caption IS NULL OR s.caption = ''
+                WHERE s.caption IS NULL OR s.caption = '' OR s.caption = '__empty__' OR substr(s.caption, 1, 9) = '__error__'
                 GROUP BY s.id
                 ORDER BY tag_count DESC, s.video_id, s.start_time
                 LIMIT 1
@@ -314,18 +334,34 @@ def caption_all_scenes(
         video_prompt = video.get("prompt") or None
 
         tag_count = scene.get("tag_count", 0)
+        duration = scene["end_time"] - scene["start_time"]
         logger.info(
             f"Captioning scene {scene['id']} ({scene['start_time']:.1f}s-{scene['end_time']:.1f}s,"
             f" tags={tag_count}) from {video_path.stem}"
         )
 
-        # Fetch scene tags to pass as context
+        if duration > 60:
+            logger.warning(f"Scene {scene['id']} is {duration:.1f}s (>60s), skipping")
+            db.update_scene_caption(scene["id"], "__skip__")
+            continue
+
+        # Fetch scene tags and their descriptions/display names to pass as context
         with db._connection() as conn:
             tag_rows = conn.execute(
-                "SELECT tag FROM scene_tags WHERE scene_id = ? ORDER BY created_at, tag",
+                """SELECT st.tag, COALESCE(td.description, '') as description,
+                          COALESCE(td.display_name, '') as display_name
+                   FROM scene_tags st
+                   LEFT JOIN tag_definitions td ON td.tag = st.tag
+                   WHERE st.scene_id = ?
+                   ORDER BY st.created_at, st.tag""",
                 (scene["id"],)
             ).fetchall()
-        scene_tags = [r["tag"] for r in tag_rows] if tag_rows else None
+        # Use display_name everywhere the model sees tag names; fall back to tag key
+        scene_tags = [r["display_name"] or r["tag"] for r in tag_rows] if tag_rows else None
+        scene_tag_definitions = (
+            {(r["display_name"] or r["tag"]): r["description"] for r in tag_rows if r["description"]}
+            if tag_rows else None
+        )
 
         try:
             caption = caption_scene_with_qwen(
@@ -338,6 +374,7 @@ def caption_all_scenes(
                 end_frame=scene.get("end_frame"),
                 prompt=video_prompt,
                 tags=scene_tags,
+                tag_definitions=scene_tag_definitions,
             )
 
             if caption:
