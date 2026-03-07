@@ -265,7 +265,11 @@ HTML_TEMPLATE = """
             grid-template-columns: repeat(auto-fill, minmax(500px, 1fr));
             gap: 24px;
         }
-        
+
+        .scene-batch {
+            display: contents;
+        }
+
         .scene-card {
             background: #161b22;
             border: 1px solid #30363d;
@@ -870,19 +874,6 @@ HTML_TEMPLATE = """
         .manage-videos-save:disabled { opacity: 0.4; cursor: default; }
         .manage-videos-save-status { font-size: 11px; color: #8b949e; }
 
-        .pagination-controls {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 12px;
-            padding: 24px 0 8px;
-        }
-
-        .pagination-info {
-            font-size: 13px;
-            color: #8b949e;
-        }
-
         @media (max-width: 600px) {
             .scenes-grid {
                 grid-template-columns: 1fr;
@@ -928,9 +919,6 @@ HTML_TEMPLATE = """
                     {% endfor %}
                 </select>
                 <span class="filter-count" id="filter-count"></span>
-                {% if total_pages > 1 %}
-                <span class="filter-count">{{ page_start }}–{{ page_end }} of {{ total_scenes }}</span>
-                {% endif %}
                 <label class="autorefresh-label" title="Reload page every 5 seconds">
                     <input type="checkbox" id="autorefresh-toggle" onchange="onAutoRefreshToggle(this.checked)">
                     Auto-refresh
@@ -959,79 +947,14 @@ HTML_TEMPLATE = """
     </header>
     
     <main class="container">
-        {% if scenes %}
-        <div class="scenes-grid">
-            {% for scene in scenes %}
-            <div class="scene-card" data-frame-count="{{ ((scene.end_frame or 0) - (scene.start_frame or 0)) }}" data-video="{{ scene.video_name }}">
-                <div class="preview-container" onclick="playVideo('{{ scene.video_path }}', {{ scene.start_frame or 0 }}, {{ scene.end_frame or 0 }}, {{ scene.id }}, {{ scene.start_time }}, {{ scene.end_time }}, {{ scene.fps or 24 }}, {{ scene.frame_offset or 0 }})">
-                    {% if scene.preview_path %}
-                    <img class="scene-preview" src="/preview/{{ scene.preview_path }}" alt="Scene {{ scene.id }} preview" loading="lazy">
-                    {% else %}
-                    <img class="scene-preview" src="/scene_preview/{{ scene.id }}" alt="Scene {{ scene.id }} preview" loading="lazy">
-                    {% endif %}
-                    <div class="play-overlay">
-                        <div class="play-icon">
-                            <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                        </div>
-                    </div>
-                </div>
-                <div class="scene-info">
-                    <div class="scene-meta">
-                        <div>
-                            <span class="scene-id">Scene #{{ scene.id }}</span>
-                            <div class="scene-video">{{ scene.video_name }}</div>
-                        </div>
-                        <span class="scene-time">{{ scene.start_time_hms }} ({{ "%.1f"|format(scene.duration) }}s)</span>
-                    </div>
-                    <div class="caption-box" id="caption-box-{{ scene.id }}" data-scene-id="{{ scene.id }}">
-                        <textarea class="caption-textarea" 
-                                  id="caption-{{ scene.id }}" 
-                                  data-scene-id="{{ scene.id }}"
-                                  data-original="{{ scene.caption or '' }}"
-                                  placeholder="Enter caption..."
-                                  oninput="onCaptionChange({{ scene.id }})"
-                                  onblur="onCaptionBlur(event, {{ scene.id }})"
-                        >{{ scene.caption or '' }}</textarea>
-                        <div class="caption-footer">
-                            <span class="caption-length" id="length-{{ scene.id }}">{{ (scene.caption|length) if scene.caption else 0 }} chars</span>
-                            <div class="caption-actions">
-                                <span class="save-status" id="status-{{ scene.id }}"></span>
-                                <button class="revert-btn" id="revert-btn-{{ scene.id }}" onclick="revertCaption({{ scene.id }})" style="display:none;">Revert</button>
-                                <button class="delete-caption-btn" onclick="deleteCaption({{ scene.id }})" {% if not scene.caption %}style="display:none;"{% endif %} id="delete-btn-{{ scene.id }}">Delete</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="tag-section" id="tag-section-{{ scene.id }}">
-                        {% for tag in scene.tags %}
-                        <span class="tag-pill" data-scene="{{ scene.id }}" data-tag="{{ tag }}">{{ tag }}<button class="tag-remove" onclick="removeTagFromPill(this)">&#x2715;</button></span>
-                        {% endfor %}
-                        <button class="tag-add-btn" id="tag-add-btn-{{ scene.id }}" onclick="showTagDropdown(event, {{ scene.id }})">+ Tag</button>
-                    </div>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-        {% if total_pages > 1 %}
-        <div class="pagination-controls">
-            {% if page > 1 %}
-            <a href="?filter={{ filter }}&video={{ video_filter }}&page={{ page - 1 }}" class="filter-btn">← Prev</a>
-            {% else %}
-            <span class="filter-btn" style="opacity:0.3;cursor:default;pointer-events:none;">← Prev</span>
-            {% endif %}
-            <span class="pagination-info">Page {{ page }} of {{ total_pages }}</span>
-            {% if page < total_pages %}
-            <a href="?filter={{ filter }}&video={{ video_filter }}&page={{ page + 1 }}" class="filter-btn">Next →</a>
-            {% else %}
-            <span class="filter-btn" style="opacity:0.3;cursor:default;pointer-events:none;">Next →</span>
-            {% endif %}
-        </div>
-        {% endif %}
-        {% else %}
-        <div class="empty-state">
+        <div id="top-spacer" style="height:0;"></div>
+        <div class="scenes-grid" id="scenes-grid"></div>
+        <div id="bottom-sentinel" style="height:1px;margin-top:24px;"></div>
+        <div class="loading-indicator" id="loading-indicator" style="display:none;text-align:center;padding:24px;color:#8b949e;font-size:14px;">Loading…</div>
+        <div id="empty-state" class="empty-state" style="display:none;">
             <h2>No scenes found</h2>
-            <p>{% if filter == 'captioned' %}No captioned scenes yet{% elif filter == 'uncaptioned' %}All scenes are captioned!{% else %}No scenes in database{% endif %}</p>
+            <p id="empty-state-msg"></p>
         </div>
-        {% endif %}
     </main>
 
     <!-- Shared floating tag dropdown -->
@@ -1652,7 +1575,6 @@ HTML_TEMPLATE = """
         // ---- End tag filter ----
 
         // Load all distinct tags from DB for dropdown
-        const currentVideoFilter = {{ video_filter|tojson }};
         async function loadTagSuggestions() {
             try {
                 const url = currentVideoFilter
@@ -1954,6 +1876,155 @@ HTML_TEMPLATE = """
         }
         // ---- End Manage Videos ----
 
+        // ---- Infinite scroll + DOM recycling ----
+        const BATCH_SIZE = 50;
+        const MAX_BATCHES = 4; // max ~200 cards in DOM at once
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const currentFilter = urlParams.get('filter') || 'captioned';
+        const currentVideoFilter = {{ video_filter|tojson }};
+
+        let nextPage = 1;
+        let isLoading = false;
+        let hasMore = true;
+        let loadedBatches = []; // {el, height}
+        let recycledTop = [];   // {html, height}
+        let topSpacerHeight = 0;
+
+        function esc(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function renderSceneCard(scene) {
+            const caption = (scene.caption && !scene.caption.startsWith('__')) ? scene.caption : '';
+            const imgSrc = scene.preview_path
+                ? `/preview/${esc(scene.preview_path)}`
+                : `/scene_preview/${scene.id}`;
+            const tags = (scene.tags || []).map(tag =>
+                `<span class="tag-pill" data-scene="${scene.id}" data-tag="${esc(tag)}">${esc(tag)}<button class="tag-remove" onclick="removeTagFromPill(this)">&#x2715;</button></span>`
+            ).join('');
+            return `<div class="scene-card" data-frame-count="${scene.frame_count}" data-video="${esc(scene.video_name)}">
+                <div class="preview-container" onclick="playVideo('${esc(scene.video_path)}',${scene.start_frame},${scene.end_frame},${scene.id},${scene.start_time},${scene.end_time},${scene.fps},${scene.frame_offset})">
+                    <img class="scene-preview" src="${imgSrc}" alt="Scene ${scene.id} preview" loading="lazy">
+                    <div class="play-overlay"><div class="play-icon"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div></div>
+                </div>
+                <div class="scene-info">
+                    <div class="scene-meta">
+                        <div>
+                            <span class="scene-id">Scene #${scene.id}</span>
+                            <div class="scene-video">${esc(scene.video_name)}</div>
+                        </div>
+                        <span class="scene-time">${esc(scene.start_time_hms)} (${scene.duration.toFixed(1)}s)</span>
+                    </div>
+                    <div class="caption-box" id="caption-box-${scene.id}" data-scene-id="${scene.id}">
+                        <textarea class="caption-textarea"
+                            id="caption-${scene.id}"
+                            data-scene-id="${scene.id}"
+                            data-original="${esc(caption)}"
+                            placeholder="Enter caption..."
+                            oninput="onCaptionChange(${scene.id})"
+                            onblur="onCaptionBlur(event,${scene.id})"
+                        >${esc(caption)}</textarea>
+                        <div class="caption-footer">
+                            <span class="caption-length" id="length-${scene.id}">${caption.length} chars</span>
+                            <div class="caption-actions">
+                                <span class="save-status" id="status-${scene.id}"></span>
+                                <button class="revert-btn" id="revert-btn-${scene.id}" onclick="revertCaption(${scene.id})" style="display:none;">Revert</button>
+                                <button class="delete-caption-btn" onclick="deleteCaption(${scene.id})" ${!caption ? 'style="display:none;"' : ''} id="delete-btn-${scene.id}">Delete</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="tag-section" id="tag-section-${scene.id}">
+                        ${tags}
+                        <button class="tag-add-btn" id="tag-add-btn-${scene.id}" onclick="showTagDropdown(event,${scene.id})">+ Tag</button>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function recycleTopBatch() {
+            const batch = loadedBatches.shift();
+            const height = batch.el.getBoundingClientRect().height || batch.el.offsetHeight;
+            recycledTop.push({ html: batch.el.outerHTML, height });
+            batch.el.remove();
+            topSpacerHeight += height;
+            document.getElementById('top-spacer').style.height = topSpacerHeight + 'px';
+        }
+
+        function restoreTopBatch() {
+            if (!recycledTop.length) return;
+            const { html, height } = recycledTop.pop();
+            topSpacerHeight -= height;
+            document.getElementById('top-spacer').style.height = topSpacerHeight + 'px';
+            const grid = document.getElementById('scenes-grid');
+            const tmp = document.createElement('div');
+            tmp.innerHTML = html;
+            const el = tmp.firstElementChild;
+            grid.insertBefore(el, grid.firstChild);
+            loadedBatches.unshift({ el, height });
+            applyTagFilter();
+        }
+
+        async function loadNextBatch() {
+            if (isLoading || !hasMore) return;
+            isLoading = true;
+            document.getElementById('loading-indicator').style.display = 'block';
+
+            try {
+                const params = new URLSearchParams({ filter: currentFilter, page: nextPage, limit: BATCH_SIZE });
+                if (currentVideoFilter) params.set('video', currentVideoFilter);
+                const resp = await fetch('/api/scenes?' + params);
+                if (!resp.ok) throw new Error('fetch failed');
+                const data = await resp.json();
+
+                if (data.scenes.length === 0 && nextPage === 1) {
+                    const emptyEl = document.getElementById('empty-state');
+                    const msg = document.getElementById('empty-state-msg');
+                    emptyEl.style.display = '';
+                    msg.textContent = currentFilter === 'captioned' ? 'No captioned scenes yet'
+                        : currentFilter === 'uncaptioned' ? 'All scenes are captioned!'
+                        : 'No scenes in database';
+                }
+
+                const grid = document.getElementById('scenes-grid');
+                const batchEl = document.createElement('div');
+                batchEl.className = 'scene-batch';
+                batchEl.innerHTML = data.scenes.map(renderSceneCard).join('');
+                grid.appendChild(batchEl);
+                loadedBatches.push({ el: batchEl });
+
+                applyTagFilter();
+
+                if (loadedBatches.length > MAX_BATCHES) recycleTopBatch();
+
+                hasMore = data.has_more;
+                nextPage++;
+            } catch(e) {
+                console.error('Failed to load scenes', e);
+            }
+
+            isLoading = false;
+            document.getElementById('loading-indicator').style.display = 'none';
+        }
+
+        // Bottom sentinel — load more when visible
+        const bottomObserver = new IntersectionObserver(entries => {
+            if (entries[0].isIntersecting) loadNextBatch();
+        }, { rootMargin: '400px' });
+        bottomObserver.observe(document.getElementById('bottom-sentinel'));
+
+        // Top spacer — restore a recycled batch when user scrolls back up
+        const topObserver = new IntersectionObserver(entries => {
+            if (entries[0].isIntersecting && recycledTop.length) restoreTopBatch();
+        }, { rootMargin: '400px' });
+        topObserver.observe(document.getElementById('top-spacer'));
+
+        // Initial load
+        loadNextBatch();
+        // ---- End infinite scroll ----
+
         // Load suggestions on page load
         loadTagSuggestions();
 
@@ -2204,92 +2275,22 @@ def find_preview_for_scene(video_name: str, scene_idx: int, start_frame: int = N
 
 @app.route('/')
 def index():
-    """Main page showing scenes and captions."""
+    """Main page shell — scenes loaded via /api/scenes."""
     filter_type = request.args.get('filter', 'captioned')
     video_filter = request.args.get('video', '')
-    page = max(1, int(request.args.get('page', 1) or 1))
-    limit = 100
 
     conn = get_db_connection()
 
-    # Get stats
     stats = conn.execute("""
         SELECT
             COUNT(*) as total,
             SUM(CASE WHEN caption IS NOT NULL AND caption != '' THEN 1 ELSE 0 END) as captioned
         FROM scenes
     """).fetchone()
-
     stats = dict(stats)
 
-    # Build query based on filter
-    conditions = []
-    params = []
-
-    if filter_type == 'captioned':
-        conditions.append("s.caption IS NOT NULL AND s.caption != ''")
-    elif filter_type == 'uncaptioned':
-        conditions.append("(s.caption IS NULL OR s.caption = '')")
-
     if video_filter:
-        conditions.append("(v.path LIKE ? OR v.path LIKE ?)")
-        params.extend([f'%/{video_filter}.%', f'{video_filter}.%'])
-
-    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-
-    # Get total count for this filter
-    count_row = conn.execute(
-        f"SELECT COUNT(*) FROM scenes s JOIN videos v ON s.video_id = v.id {where_clause}",
-        params
-    ).fetchone()
-    total_scenes = count_row[0]
-    total_pages = max(1, (total_scenes + limit - 1) // limit)
-    page = min(page, total_pages)
-    offset = (page - 1) * limit
-    page_start = offset + 1
-    page_end = min(page * limit, total_scenes)
-
-    query = f"""
-        SELECT s.*, v.path as video_path, v.fps, v.frame_offset,
-            (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
-            GROUP_CONCAT(st.tag, '|') as tags_concat
-        FROM scenes s
-        JOIN videos v ON s.video_id = v.id
-        LEFT JOIN scene_tags st ON st.scene_id = s.id
-        {where_clause}
-        GROUP BY s.id
-        ORDER BY s.video_id, s.id
-        LIMIT {limit} OFFSET {offset}
-    """
-
-    rows = conn.execute(query, params).fetchall()
-    conn.close()
-    
-    # Process scenes
-    scenes = []
-
-    for row in rows:
-        row_dict = dict(row)
-        video_path = Path(row_dict['video_path'])
-        video_name = video_path.stem
-        scene_idx = row_dict['scene_idx']
-
-        row_dict['video_name'] = video_name
-        row_dict['duration'] = row_dict['end_time'] - row_dict['start_time']
-        t = int(row_dict['start_time'])
-        row_dict['start_time_hms'] = f"{t//3600:02d}:{(t%3600)//60:02d}:{t%60:02d}"
-        row_dict['preview_path'] = find_preview_for_scene(
-            video_name,
-            scene_idx,
-            row_dict.get('start_frame')
-        )
-        tags_raw = row_dict.get('tags_concat') or ''
-        row_dict['tags'] = [t for t in tags_raw.split('|') if t]
-        scenes.append(row_dict)
-    
-    conn2 = get_db_connection()
-    if video_filter:
-        all_tags = [r["tag"] for r in conn2.execute(
+        all_tags = [r["tag"] for r in conn.execute(
             """SELECT DISTINCT st.tag FROM scene_tags st
                JOIN scenes s ON st.scene_id = s.id
                JOIN videos v ON s.video_id = v.id
@@ -2298,29 +2299,24 @@ def index():
             [f'%/{video_filter}.%', f'{video_filter}.%']
         ).fetchall()]
     else:
-        all_tags = [r["tag"] for r in conn2.execute(
+        all_tags = [r["tag"] for r in conn.execute(
             "SELECT DISTINCT tag FROM scene_tags ORDER BY tag"
         ).fetchall()]
+
     all_videos = [
-        Path(r["path"]).stem for r in conn2.execute(
+        Path(r["path"]).stem for r in conn.execute(
             "SELECT DISTINCT path FROM videos ORDER BY path"
         ).fetchall()
     ]
-    conn2.close()
+    conn.close()
 
     return render_template_string(
         HTML_TEMPLATE,
-        scenes=scenes,
         stats=stats,
         filter=filter_type,
         video_filter=video_filter,
         all_tags=all_tags,
         all_videos=all_videos,
-        page=page,
-        total_pages=total_pages,
-        total_scenes=total_scenes,
-        page_start=page_start,
-        page_end=page_end,
     )
 
 
@@ -2467,6 +2463,87 @@ def serve_clip(scene_id: int):
             'Cache-Control': 'no-cache'
         }
     )
+
+
+@app.route('/api/scenes')
+def get_scenes():
+    """Return paginated scene data as JSON for infinite scroll."""
+    filter_type = request.args.get('filter', 'captioned')
+    video_filter = request.args.get('video', '')
+    page = max(1, int(request.args.get('page', 1) or 1))
+    limit = 50
+
+    conn = get_db_connection()
+
+    conditions = []
+    params = []
+
+    if filter_type == 'captioned':
+        conditions.append("s.caption IS NOT NULL AND s.caption != ''")
+    elif filter_type == 'uncaptioned':
+        conditions.append("(s.caption IS NULL OR s.caption = '')")
+
+    if video_filter:
+        conditions.append("(v.path LIKE ? OR v.path LIKE ?)")
+        params.extend([f'%/{video_filter}.%', f'{video_filter}.%'])
+
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM scenes s JOIN videos v ON s.video_id = v.id {where_clause}",
+        params
+    ).fetchone()[0]
+
+    offset = (page - 1) * limit
+    rows = conn.execute(f"""
+        SELECT s.*, v.path as video_path, v.fps, v.frame_offset,
+            (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
+            GROUP_CONCAT(st.tag, '|') as tags_concat
+        FROM scenes s
+        JOIN videos v ON s.video_id = v.id
+        LEFT JOIN scene_tags st ON st.scene_id = s.id
+        {where_clause}
+        GROUP BY s.id
+        ORDER BY s.video_id, s.id
+        LIMIT {limit} OFFSET {offset}
+    """, params).fetchall()
+    conn.close()
+
+    scenes = []
+    for row in rows:
+        d = dict(row)
+        video_path = Path(d['video_path'])
+        video_name = video_path.stem
+        scene_idx = d['scene_idx']
+        duration = d['end_time'] - d['start_time']
+        t = int(d['start_time'])
+        caption = d.get('caption') or ''
+        tags_raw = d.get('tags_concat') or ''
+        preview_path = find_preview_for_scene(video_name, scene_idx, d.get('start_frame'))
+        scenes.append({
+            'id': d['id'],
+            'video_name': video_name,
+            'video_path': d['video_path'],
+            'start_frame': d.get('start_frame') or 0,
+            'end_frame': d.get('end_frame') or 0,
+            'start_time': d['start_time'],
+            'end_time': d['end_time'],
+            'fps': d.get('fps') or 24.0,
+            'frame_offset': d.get('frame_offset') or 0,
+            'caption': caption,
+            'tags': [t for t in tags_raw.split('|') if t],
+            'start_time_hms': f"{t//3600:02d}:{(t%3600)//60:02d}:{t%60:02d}",
+            'duration': duration,
+            'frame_count': (d.get('end_frame') or 0) - (d.get('start_frame') or 0),
+            'preview_path': preview_path,
+        })
+
+    return jsonify({
+        'scenes': scenes,
+        'page': page,
+        'has_more': offset + limit < total,
+        'total': total,
+    })
 
 
 @app.route('/api/stats')
