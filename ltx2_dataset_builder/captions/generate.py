@@ -180,15 +180,11 @@ def caption_scene_with_qwen(
             "setting, and what is being said or heard."
         )
 
-        # Append tag description suffix for tags that have defined descriptions
-        described_tags = {
-            tag: desc
-            for tag, desc in (tag_definitions or {}).items()
-            if desc and desc.strip()
-        }
-        if described_tags:
+        # Append tag context for all known subjects (display_name as key, description optional)
+        if tag_definitions:
             lines = "\n".join(
-                f"- {tag}: {desc}" for tag, desc in described_tags.items()
+                f"- {name}: {desc}" if desc and desc.strip() else f"- {name}"
+                for name, desc in tag_definitions.items()
             )
             caption_prompt += (
                 "\n\nIf any of the following subjects are identifiable in this scene, "
