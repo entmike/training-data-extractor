@@ -753,22 +753,28 @@ HTML_TEMPLATE = """
             margin-bottom: 16px;
         }
         .manage-tags-header h2 { font-size: 16px; color: #f0f6fc; font-weight: 600; }
-        .manage-tags-row {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            padding: 10px 0;
-            border-bottom: 1px solid #21262d;
-        }
-        .manage-tags-row:last-child { border-bottom: none; }
-        .manage-tags-name-line,
-        .manage-tags-desc-line {
-            display: flex;
-            gap: 8px;
+        #manage-tags-list {
+            display: grid;
+            grid-template-columns: minmax(100px, 1fr) minmax(130px, 1.2fr) minmax(180px, 2fr) auto auto;
+            gap: 5px 8px;
             align-items: center;
         }
+        .mtg-header {
+            font-size: 11px;
+            color: #6e7681;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #30363d;
+        }
+        .mtg-sep {
+            grid-column: 1 / -1;
+            height: 1px;
+            background: #21262d;
+        }
         .manage-tags-input {
-            flex: 1;
+            width: 100%;
+            box-sizing: border-box;
             background: #0d1117;
             border: 1px solid #30363d;
             border-radius: 5px;
@@ -779,7 +785,8 @@ HTML_TEMPLATE = """
         }
         .manage-tags-input:focus { border-color: #388bfd; }
         .manage-tags-desc-input {
-            flex: 1;
+            width: 100%;
+            box-sizing: border-box;
             background: #0d1117;
             border: 1px solid #30363d;
             border-radius: 5px;
@@ -792,7 +799,7 @@ HTML_TEMPLATE = """
         .manage-tags-desc-input::placeholder { color: #484f58; }
         .manage-tags-desc-input:focus { border-color: #388bfd; color: #c9d1d9; font-style: normal; }
         .manage-tags-save {
-            padding: 4px 12px;
+            padding: 4px 10px;
             border: 1px solid #238636;
             background: transparent;
             color: #238636;
@@ -804,7 +811,7 @@ HTML_TEMPLATE = """
         }
         .manage-tags-save:hover { background: #238636; color: #fff; }
         .manage-tags-save:disabled { opacity: 0.4; cursor: default; }
-        .manage-tags-status { font-size: 11px; min-width: 50px; text-align: right; }
+        .manage-tags-status { font-size: 11px; color: #8b949e; white-space: nowrap; }
         .manage-tags-empty { color: #6e7681; font-size: 14px; text-align: center; padding: 20px 0; }
 
         /* Manage Videos modal */
@@ -1710,40 +1717,34 @@ HTML_TEMPLATE = """
                 return;
             }
 
-            list.innerHTML = tags.map(({tag, description, display_name}) => {
-                const safe = tag.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-                const safeDesc = (description || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-                const safeDN = (display_name || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-                return `<div class="manage-tags-row" id="manage-row-${safe}">
-                    <div class="manage-tags-name-line">
-                        <input class="manage-tags-input" type="text" value="${safe}" data-original="${safe}"
-                               oninput="onManageTagInput(this)" onkeydown="onManageTagKeydown(event, this)">
-                        <button class="manage-tags-save" disabled onclick="doRenameTag(this)">Rename</button>
-                        <span class="manage-tags-status" id="manage-status-${safe}"></span>
-                    </div>
-                    <div class="manage-tags-desc-line">
-                        <input class="manage-tags-desc-input" type="text"
-                               value="${safeDN}" data-tag="${safe}"
-                               placeholder="Display name (e.g. Jules, Patrick Bateman)…"
-                               data-original-desc="${safeDN}"
-                               data-field="display_name"
-                               oninput="onDescInput(this)"
-                               onblur="onDescBlur(this)"
-                               onkeydown="onDescKeydown(event, this)">
-                        <button class="manage-tags-save" id="desc-save-${safe}" disabled onclick="doSaveDescription(this)">Save</button>
-                        <span class="manage-tags-status" id="desc-status-${safe}"></span>
-                    </div>
-                    <div class="manage-tags-desc-line">
-                        <input class="manage-tags-desc-input" type="text"
-                               value="${safeDesc}" data-tag="${safe}"
-                               placeholder="Description for captioner prompt…"
-                               data-original-desc="${safeDesc}"
-                               data-field="description"
-                               oninput="onDescInput(this)"
-                               onblur="onDescBlur(this)"
-                               onkeydown="onDescKeydown(event, this)">
-                    </div>
-                </div>`;
+            const e = s => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+            list.innerHTML =
+                `<div class="mtg-header">Tag key</div>
+                 <div class="mtg-header">Display name</div>
+                 <div class="mtg-header">Captioner description</div>
+                 <div class="mtg-header"></div>
+                 <div class="mtg-header"></div>`
+                + tags.map(({tag, description, display_name}) => {
+                const safe = e(tag);
+                const safeDesc = e(description || '');
+                const safeDN = e(display_name || '');
+                return `<div class="mtg-sep"></div>
+                    <input class="manage-tags-input" id="manage-tag-input-${safe}" type="text"
+                           value="${safe}" data-original="${safe}"
+                           oninput="onManageTagInput(this)" onkeydown="onManageTagKeydown(event, this)">
+                    <input class="manage-tags-desc-input" type="text"
+                           value="${safeDN}" data-tag="${safe}"
+                           placeholder="e.g. Jules, Patrick Bateman…"
+                           data-original-desc="${safeDN}" data-field="display_name"
+                           oninput="onDescInput(this)" onblur="onDescBlur(this)" onkeydown="onDescKeydown(event, this)">
+                    <input class="manage-tags-desc-input" type="text"
+                           value="${safeDesc}" data-tag="${safe}"
+                           placeholder="Visual description for captioner…"
+                           data-original-desc="${safeDesc}" data-field="description"
+                           oninput="onDescInput(this)" onblur="onDescBlur(this)" onkeydown="onDescKeydown(event, this)">
+                    <button class="manage-tags-save" id="manage-rename-btn-${safe}" data-tag="${safe}"
+                            disabled onclick="doRenameTag(this)">Rename</button>
+                    <span class="manage-tags-status" id="manage-rename-status-${safe}"></span>`;
             }).join('');
         }
 
@@ -1757,25 +1758,24 @@ HTML_TEMPLATE = """
         }
 
         function onManageTagInput(input) {
-            const btn = input.parentElement.querySelector('.manage-tags-save');
-            btn.disabled = input.value.trim() === '' || input.value.trim() === input.dataset.original;
+            const btn = document.getElementById('manage-rename-btn-' + input.dataset.original);
+            if (btn) btn.disabled = input.value.trim() === '' || input.value.trim() === input.dataset.original;
         }
 
         function onManageTagKeydown(event, input) {
             if (event.key === 'Enter') {
-                const btn = input.parentElement.querySelector('.manage-tags-save');
-                if (!btn.disabled) doRenameTag(btn);
+                const btn = document.getElementById('manage-rename-btn-' + input.dataset.original);
+                if (btn && !btn.disabled) doRenameTag(btn);
             } else if (event.key === 'Escape') {
                 closeManageTags();
             }
         }
 
         async function doRenameTag(btn) {
-            const row = btn.parentElement;
-            const input = row.querySelector('.manage-tags-input');
-            const oldTag = input.dataset.original;
+            const oldTag = btn.dataset.tag;
+            const input = document.getElementById('manage-tag-input-' + oldTag);
             const newTag = input.value.trim().toLowerCase();
-            const statusEl = row.querySelector('.manage-tags-status');
+            const statusEl = document.getElementById('manage-rename-status-' + oldTag);
 
             if (!newTag || newTag === oldTag) return;
 
@@ -1808,13 +1808,15 @@ HTML_TEMPLATE = """
                     pill.childNodes[0].textContent = newTag;
                 });
 
-                // Update desc input data-tag so save still works
-                const descInput = row.querySelector('.manage-tags-desc-input');
-                if (descInput) descInput.dataset.tag = newTag;
-                const descSaveBtn = row.querySelector('#desc-save-' + CSS.escape(oldTag));
-                if (descSaveBtn) descSaveBtn.id = 'desc-save-' + newTag;
-                const descStatus = row.querySelector('#desc-status-' + CSS.escape(oldTag));
-                if (descStatus) descStatus.id = 'desc-status-' + newTag;
+                // Update grid cell IDs and data attrs to reflect new tag key
+                const updateId = (id, newId) => { const el = document.getElementById(id); if (el) el.id = newId; };
+                updateId('manage-tag-input-' + oldTag, 'manage-tag-input-' + newTag);
+                updateId('manage-rename-btn-' + oldTag, 'manage-rename-btn-' + newTag);
+                updateId('manage-rename-status-' + oldTag, 'manage-rename-status-' + newTag);
+                btn.dataset.tag = newTag;
+                document.querySelectorAll(`.manage-tags-desc-input[data-tag="${CSS.escape(oldTag)}"]`).forEach(el => {
+                    el.dataset.tag = newTag;
+                });
 
                 refreshFilterBar();
                 setTimeout(() => { statusEl.textContent = ''; }, 3000);
@@ -1825,45 +1827,28 @@ HTML_TEMPLATE = """
             }
         }
 
-        function onDescInput(input) {
-            const tag = input.dataset.tag;
-            const btn = document.getElementById('desc-save-' + tag);
-            if (btn) btn.disabled = input.value === input.dataset.originalDesc;
-        }
+        function onDescInput(input) { /* auto-saves on blur — nothing needed here */ }
 
         function onDescBlur(input) {
-            // auto-save on blur if changed
-            const tag = input.dataset.tag;
-            const btn = document.getElementById('desc-save-' + tag);
-            if (btn && !btn.disabled) doSaveDescription(btn);
+            if (input.value.trim() !== input.dataset.originalDesc) saveDescFields(input.dataset.tag);
         }
 
         function onDescKeydown(event, input) {
-            if (event.key === 'Enter') {
-                const tag = input.dataset.tag;
-                const btn = document.getElementById('desc-save-' + tag);
-                if (btn && !btn.disabled) doSaveDescription(btn);
-            } else if (event.key === 'Escape') {
-                closeManageTags();
-            }
+            if (event.key === 'Enter') { input.blur(); }
+            else if (event.key === 'Escape') { closeManageTags(); }
         }
 
-        async function doSaveDescription(btn) {
-            const row = btn.closest('.manage-tags-row');
-            const inputs = row.querySelectorAll('.manage-tags-desc-input');
-            const tag = inputs[0].dataset.tag;
-            const statusEl = document.getElementById('desc-status-' + tag);
+        async function saveDescFields(tag) {
+            const inputs = document.querySelectorAll(`.manage-tags-desc-input[data-tag="${CSS.escape(tag)}"]`);
+            const statusEl = document.getElementById('manage-rename-status-' + tag);
 
-            // Collect display_name and description from their respective inputs
             let display_name = '', description = '';
             inputs.forEach(inp => {
                 if (inp.dataset.field === 'display_name') display_name = inp.value.trim();
                 else if (inp.dataset.field === 'description') description = inp.value.trim();
             });
 
-            btn.disabled = true;
-            statusEl.textContent = 'Saving…';
-            statusEl.style.color = '#58a6ff';
+            if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = '#58a6ff'; }
 
             try {
                 const resp = await fetch('/api/tags/description', {
@@ -1873,13 +1858,13 @@ HTML_TEMPLATE = """
                 });
                 if (!resp.ok) throw new Error('Failed');
                 inputs.forEach(inp => { inp.dataset.originalDesc = inp.value.trim(); });
-                statusEl.textContent = '✓ Saved';
-                statusEl.style.color = '#238636';
-                setTimeout(() => { statusEl.textContent = ''; }, 3000);
+                if (statusEl) {
+                    statusEl.textContent = '✓ Saved';
+                    statusEl.style.color = '#238636';
+                    setTimeout(() => { statusEl.textContent = ''; }, 3000);
+                }
             } catch(e) {
-                statusEl.textContent = 'Error';
-                statusEl.style.color = '#f85149';
-                btn.disabled = false;
+                if (statusEl) { statusEl.textContent = 'Error'; statusEl.style.color = '#f85149'; }
             }
         }
         // ---- End Manage Tags ----
