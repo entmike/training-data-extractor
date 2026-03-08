@@ -40,6 +40,7 @@ else:
 DB_PATH = Path(config.get("db_path", ".cache/index.db"))
 OUTPUT_DIR = Path(config.get("output_dir", "./dataset"))
 DEBUG_SCENES_DIR = OUTPUT_DIR / "debug" / "scenes"
+WAVEFORMS_DIR = Path(".cache/waveforms")
 
 
 def get_db_connection():
@@ -105,6 +106,24 @@ def ensure_videos_prompt_column():
 
 try:
     ensure_videos_prompt_column()
+except Exception:
+    pass
+
+
+def ensure_rating_column():
+    """Add rating column to scenes table if it doesn't exist."""
+    conn = get_db_connection()
+    try:
+        conn.execute("ALTER TABLE scenes ADD COLUMN rating INTEGER")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    finally:
+        conn.close()
+
+
+try:
+    ensure_rating_column()
 except Exception:
     pass
 
@@ -383,6 +402,167 @@ def serve_clip(scene_id: int):
     )
 
 
+def _generate_rms_waveform_png(video_file: Path, start_time: float, duration: float,
+                               width: int = 800, height: int = 80) -> Optional[bytes]:
+    """
+    Extract per-window RMS levels via FFmpeg astats, render as a bar chart PNG.
+    Returns PNG bytes, or None on failure.
+    """
+    if not HAS_PIL:
+        return None
+
+    sample_rate = 44100
+    n_bars = width // 4  # 4px per bar → 200 bars for 800px
+
+    # Downmix to stereo; capture per-channel RMS via astats
+    cmd = [
+        'ffmpeg',
+        '-ss', f'{start_time:.6f}',
+        '-i', str(video_file),
+        '-t', f'{duration:.6f}',
+        '-filter_complex',
+        f'aformat=channel_layouts=stereo:sample_rates={sample_rate},'
+        f'astats=metadata=1:reset=1,'
+        f'ametadata=print:key=lavfi.astats.1.RMS_level,'
+        f'ametadata=print:key=lavfi.astats.2.RMS_level',
+        '-vn', '-f', 'null', '-',
+    ]
+
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    output = result.stderr.decode('utf-8', errors='replace')
+
+    def parse_channel(key):
+        raw = []
+        for m in re.finditer(rf'{re.escape(key)}=(.+)', output):
+            val = m.group(1).strip()
+            if val in ('-inf', 'inf'):
+                raw.append(None)
+            else:
+                try:
+                    raw.append(float(val))
+                except ValueError:
+                    raw.append(None)
+        return raw
+
+    raw_l = parse_channel('lavfi.astats.1.RMS_level')
+    raw_r = parse_channel('lavfi.astats.2.RMS_level')
+
+    if not raw_l and not raw_r:
+        return None
+    # Fall back to the available channel if one is missing
+    if not raw_l:
+        raw_l = raw_r
+    if not raw_r:
+        raw_r = raw_l
+
+    def aggregate(raw):
+        group_size = max(1, len(raw) // n_bars)
+        grouped = []
+        for i in range(0, len(raw), group_size):
+            chunk = [v for v in raw[i:i + group_size] if v is not None]
+            grouped.append(max(chunk) if chunk else None)
+        return grouped[:n_bars]
+
+    grouped_l = aggregate(raw_l)
+    grouped_r = aggregate(raw_r)
+
+    # Fixed reference range calibrated to home-video movie audio (RMS levels):
+    #   -50 dB → 0   (silence / room tone floor)
+    #   -35 dB → 50% (moderate speech / score)
+    #   -20 dB → 100% (loud dialogue / action)
+    DB_FLOOR = -50.0
+    DB_CEIL  = -20.0
+    DB_RANGE = DB_CEIL - DB_FLOOR  # 30 dB
+
+    def to_level(v):
+        if v is None:
+            return 0.0
+        return max(0.0, min(1.0, (v - DB_FLOOR) / DB_RANGE))
+
+    levels_l = [to_level(v) for v in grouped_l]
+    levels_r = [to_level(v) for v in grouped_r]
+
+    if not levels_l:
+        return None
+
+    from PIL import ImageDraw
+    bg     = (28,  33,  40)   # #1c2128
+    fg     = (88, 166, 255)   # #58a6ff
+    center_color = (48, 54, 61)  # subtle center line
+    img    = Image.new('RGB', (width, height), color=bg)
+    draw   = ImageDraw.Draw(img)
+    center = height // 2
+
+    # Subtle center divider line
+    draw.line([(0, center), (width, center)], fill=center_color)
+
+    bar_w = width / max(len(levels_l), 1)
+    for i, (lvl_l, lvl_r) in enumerate(zip(levels_l, levels_r)):
+        x0 = int(i * bar_w)
+        x1 = max(x0 + 1, int((i + 1) * bar_w) - 1)
+        # Left channel: grows upward from center
+        h_l = max(1, int(lvl_l * center))
+        draw.rectangle([x0, center - h_l, x1, center], fill=fg)
+        # Right channel: grows downward from center
+        h_r = max(1, int(lvl_r * center))
+        draw.rectangle([x0, center, x1, center + h_r], fill=fg)
+
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    return buf.getvalue()
+
+
+@app.route('/waveform/<int:scene_id>')
+def serve_waveform(scene_id: int):
+    """Generate and serve an RMS energy bar chart PNG for a scene clip (cached on disk)."""
+    WAVEFORMS_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = WAVEFORMS_DIR / f"{scene_id}.png"
+
+    if cache_path.exists():
+        return send_file(cache_path, mimetype='image/png', max_age=86400)
+
+    conn = get_db_connection()
+    row = conn.execute("""
+        SELECT s.start_time, s.end_time, s.start_frame, s.end_frame,
+               v.path as video_path, v.fps, v.frame_offset
+        FROM scenes s
+        JOIN videos v ON s.video_id = v.id
+        WHERE s.id = ?
+    """, (scene_id,)).fetchone()
+    conn.close()
+
+    if not row:
+        return jsonify({"error": "Scene not found"}), 404
+
+    video_file = Path(row["video_path"])
+    if not video_file.exists():
+        return jsonify({"error": "Video file not found"}), 404
+
+    fps = row["fps"] or 24.0
+    frame_offset = row["frame_offset"] or 0
+
+    if row["start_frame"] is not None and row["end_frame"] is not None:
+        start_time = (row["start_frame"] + frame_offset + 1) / fps
+        end_time   = (row["end_frame"]   + frame_offset)     / fps
+    else:
+        time_offset = frame_offset / fps
+        start_time  = max(0.0, row["start_time"] + time_offset + 1.0 / fps)
+        end_time    = row["end_time"] + time_offset
+
+    start_time = max(0.0, start_time)
+    duration   = end_time - start_time
+    if duration <= 0:
+        return jsonify({"error": "Invalid time range"}), 400
+
+    png_bytes = _generate_rms_waveform_png(video_file, start_time, duration)
+    if png_bytes is None:
+        return jsonify({"error": "Waveform generation failed"}), 500
+
+    cache_path.write_bytes(png_bytes)
+    return send_file(cache_path, mimetype='image/png', max_age=86400)
+
+
 @app.route('/api/scenes')
 def get_scenes():
     """Return paginated scene data as JSON for infinite scroll."""
@@ -396,7 +576,7 @@ def get_scenes():
     conditions = []
     params = []
 
-    if filter_type == 'captioned':
+    if filter_type in ('captioned', 'recent'):
         conditions.append("s.caption IS NOT NULL AND s.caption != '' AND substr(s.caption, 1, 2) != '__'")
     elif filter_type == 'uncaptioned':
         conditions.append("(s.caption IS NULL OR s.caption = '' OR substr(s.caption, 1, 2) = '__')")
@@ -422,7 +602,7 @@ def get_scenes():
         LEFT JOIN scene_tags st ON st.scene_id = s.id
         {where_clause}
         GROUP BY s.id
-        ORDER BY s.video_id, s.id
+        ORDER BY {("s.caption_finished_at DESC NULLS LAST, s.id DESC" if filter_type == "recent" else "s.video_id, s.id")}
         LIMIT {limit} OFFSET {offset}
     """, params).fetchall()
     conn.close()
@@ -454,6 +634,8 @@ def get_scenes():
             'duration': duration,
             'frame_count': (d.get('end_frame') or 0) - (d.get('start_frame') or 0),
             'preview_path': preview_path,
+            'caption_finished_at': (d['caption_finished_at'].replace(' ', 'T') + 'Z') if d.get('caption_finished_at') else None,
+            'rating': d.get('rating'),
         })
 
     return jsonify({
@@ -658,6 +840,25 @@ def remove_tag(scene_id: int, tag: str):
     ).fetchall()
     conn.close()
     return jsonify({"scene_id": scene_id, "tags": [r["tag"] for r in rows]})
+
+
+@app.route('/api/rating/<int:scene_id>', methods=['PUT'])
+def set_rating(scene_id: int):
+    """Set or clear the star rating (1-3) for a scene."""
+    data = request.get_json()
+    if data is None or 'rating' not in data:
+        return jsonify({"error": "Missing rating field"}), 400
+    rating = data['rating']
+    if rating is not None and rating not in (1, 2, 3):
+        return jsonify({"error": "Rating must be 1, 2, 3, or null"}), 400
+    conn = get_db_connection()
+    if conn.execute("SELECT id FROM scenes WHERE id = ?", (scene_id,)).fetchone() is None:
+        conn.close()
+        return jsonify({"error": "Scene not found"}), 404
+    conn.execute("UPDATE scenes SET rating = ? WHERE id = ?", (rating, scene_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"scene_id": scene_id, "rating": rating})
 
 
 @app.route('/api/videos', methods=['GET'])

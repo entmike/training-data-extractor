@@ -9,6 +9,7 @@ export default defineConfig({
       '/preview': 'http://localhost:5000',
       '/scene_preview': 'http://localhost:5000',
       '/clip': 'http://localhost:5000',
+      '/waveform': 'http://localhost:5000',
     },
   },
   build: {
