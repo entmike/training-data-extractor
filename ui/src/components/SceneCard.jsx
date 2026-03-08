@@ -3,6 +3,17 @@ import { createPortal } from 'react-dom'
 import { AppContext } from '../context'
 import TagDropdown from './TagDropdown'
 
+function formatRelativeTime(ts) {
+  const d = new Date(ts)
+  if (isNaN(d)) return ts
+  const diff = (Date.now() - d) / 1000
+  if (diff < 60) return 'just now'
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  if (diff < 7 * 86400) return `${Math.floor(diff / 86400)}d ago`
+  return d.toLocaleDateString()
+}
+
 export default function SceneCard({ scene: initialScene, tagMap, visible }) {
   const { openPlayer, refreshTags } = useContext(AppContext)
 
@@ -12,6 +23,7 @@ export default function SceneCard({ scene: initialScene, tagMap, visible }) {
   const [savedCaption, setSavedCaption] = useState(rawCaption)
   const [saveStatus, setSaveStatus] = useState('') // '' | 'saving' | 'saved' | 'error'
   const [tags, setTags] = useState(initialScene.tags || [])
+  const [rating, setRatingState] = useState(initialScene.rating || 0)
   const [dropdownPos, setDropdownPos] = useState(null)
   const saveTimer = useRef(null)
   const addBtnRef = useRef(null)
@@ -83,6 +95,16 @@ export default function SceneCard({ scene: initialScene, tagMap, visible }) {
     setDropdownPos({ top: rect.bottom + window.scrollY + 4, left: rect.left + window.scrollX })
   }
 
+  async function setRating(n) {
+    const next = n === rating ? 0 : n
+    setRatingState(next)
+    await fetch(`/api/rating/${initialScene.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating: next || null }),
+    })
+  }
+
   function playVideo() {
     openPlayer({
       sceneId: initialScene.id,
@@ -115,6 +137,17 @@ export default function SceneCard({ scene: initialScene, tagMap, visible }) {
         </div>
       </div>
 
+      <div className="star-rating">
+        {[1, 2, 3].map(n => (
+          <button
+            key={n}
+            className={`star-btn${rating >= n ? ' star-btn--active' : ''}`}
+            onClick={() => setRating(n)}
+            title={`${n} star${n > 1 ? 's' : ''}`}
+          >★</button>
+        ))}
+      </div>
+
       <div className="scene-info">
         <div className="scene-meta">
           <div>
@@ -135,7 +168,14 @@ export default function SceneCard({ scene: initialScene, tagMap, visible }) {
             onBlur={handleBlur}
           />
           <div className="caption-footer">
-            <span className="caption-length">{caption.length} chars</span>
+            <span className="caption-length">
+              {caption.length} chars
+              {initialScene.caption_finished_at && (
+                <span className="caption-timestamp" title={initialScene.caption_finished_at}>
+                  {' · '}{formatRelativeTime(initialScene.caption_finished_at)}
+                </span>
+              )}
+            </span>
             <div className="caption-actions">
               {saveStatus === 'saving' && <span className="save-status save-status--saving">Saving…</span>}
               {saveStatus === 'saved'  && <span className="save-status save-status--saved">✓ Saved</span>}

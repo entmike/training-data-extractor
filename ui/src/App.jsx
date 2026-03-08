@@ -20,7 +20,9 @@ export default function App() {
   const [activeExcludeTags, setActiveExcludeTags] = useState(new Set())
   const [includeMode, setIncludeMode] = useState('and') // 'and' | 'or'
   const [minFrames, setMinFrames] = useState(0)
+  const [ratingFilter, setRatingFilter] = useState(new Set()) // empty = any; values: 1|2|3|'unranked'
   const [autoRefresh, setAutoRefresh] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
   const [player, setPlayer] = useState(null)
   const [showManageTags, setShowManageTags] = useState(false)
   const [showManageVideos, setShowManageVideos] = useState(false)
@@ -90,7 +92,9 @@ export default function App() {
         activeExcludeTags={activeExcludeTags} setActiveExcludeTags={setActiveExcludeTags}
         includeMode={includeMode} setIncludeMode={setIncludeMode}
         minFrames={minFrames} setMinFrames={setMinFrames}
+        ratingFilter={ratingFilter} setRatingFilter={setRatingFilter}
         autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh}
+        isLoading={isLoading}
         onManageTags={() => setShowManageTags(true)}
         onManageVideos={() => setShowManageVideos(true)}
       />
@@ -102,7 +106,9 @@ export default function App() {
           activeExcludeTags={activeExcludeTags}
           includeMode={includeMode}
           minFrames={minFrames}
+          ratingFilter={ratingFilter}
           tagMap={tagMap}
+          onLoadingChange={setIsLoading}
         />
       </main>
 

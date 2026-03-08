@@ -3,29 +3,30 @@ import SceneCard from './SceneCard'
 
 const BATCH_SIZE = 50
 
-export default function SceneGrid({ filter, videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, tagMap }) {
+export default function SceneGrid({ filter, videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, tagMap, onLoadingChange }) {
   const [scenes, setScenes] = useState([])
   const [isLoading, setIsLoading] = useState(false)
-  const [hasMore, setHasMore] = useState(true)
   const [isEmpty, setIsEmpty] = useState(false)
   const sentinelRef = useRef(null)
   const loadingRef = useRef(false)
+  const hasMoreRef = useRef(true)
   const pageRef = useRef(1)
   const filterKey = `${filter}|${videoFilter}`
 
   // Reset when filter/video changes
   useEffect(() => {
     setScenes([])
-    setHasMore(true)
+    hasMoreRef.current = true
     setIsEmpty(false)
     pageRef.current = 1
     loadingRef.current = false
   }, [filterKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadNext = useCallback(async () => {
-    if (loadingRef.current || !hasMore) return
+    if (loadingRef.current || !hasMoreRef.current) return
     loadingRef.current = true
     setIsLoading(true)
+    onLoadingChange?.(true)
     try {
       const params = new URLSearchParams({ filter, page: pageRef.current, limit: BATCH_SIZE })
       if (videoFilter) params.set('video', videoFilter)
@@ -34,15 +35,16 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
       const data = await r.json()
       if (data.scenes.length === 0 && pageRef.current === 1) setIsEmpty(true)
       setScenes(prev => [...prev, ...data.scenes])
-      setHasMore(data.has_more)
+      hasMoreRef.current = data.has_more
       pageRef.current += 1
     } catch (e) {
       console.error('Failed to load scenes', e)
     } finally {
       loadingRef.current = false
       setIsLoading(false)
+      onLoadingChange?.(false)
     }
-  }, [filter, videoFilter, hasMore])
+  }, [filter, videoFilter])
 
   // Observe bottom sentinel
   useEffect(() => {
@@ -66,8 +68,13 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
     }
     if (activeExcludeTags.size > 0 && [...activeExcludeTags].some(t => tags.has(t))) return false
     if (minFrames > 0 && (scene.frame_count || 0) < minFrames) return false
+    if (ratingFilter.size > 0) {
+      const r = scene.rating || 0
+      const match = (ratingFilter.has('unranked') && !r) || ratingFilter.has(r)
+      if (!match) return false
+    }
     return true
-  }, [activeIncludeTags, activeExcludeTags, includeMode, minFrames])
+  }, [activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter])
 
   const visibilityMap = useMemo(() => {
     const m = {}

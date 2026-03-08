@@ -230,17 +230,22 @@ class Database:
         with self._connection() as conn:
             for scene in scenes:
                 try:
+                    start_frame = scene.get("start_frame")
+                    end_frame = scene.get("end_frame")
+                    frame_count = (end_frame - start_frame) if (start_frame is not None and end_frame is not None) else None
+                    default_rating = 1 if (frame_count is not None and frame_count < 24) else 2
                     conn.execute("""
-                        INSERT OR IGNORE INTO scenes 
-                        (video_id, start_time, end_time, duration, start_frame, end_frame)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        INSERT OR IGNORE INTO scenes
+                        (video_id, start_time, end_time, duration, start_frame, end_frame, rating)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (
                         video_id,
                         scene["start_time"],
                         scene["end_time"],
                         scene["duration"],
-                        scene.get("start_frame"),
-                        scene.get("end_frame"),
+                        start_frame,
+                        end_frame,
+                        default_rating,
                     ))
                 except sqlite3.IntegrityError:
                     pass  # Scene already exists

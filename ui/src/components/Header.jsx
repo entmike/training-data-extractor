@@ -9,7 +9,9 @@ export default function Header({
   activeExcludeTags, setActiveExcludeTags,
   includeMode, setIncludeMode,
   minFrames, setMinFrames,
+  ratingFilter, setRatingFilter,
   autoRefresh, setAutoRefresh,
+  isLoading,
   onManageTags, onManageVideos,
 }) {
   const [dropdown, setDropdown] = useState(null) // { mode: 'include'|'exclude', pos }
@@ -56,11 +58,12 @@ export default function Header({
 
         {/* Filter buttons */}
         <div className="filter-buttons">
-          {['all', 'captioned', 'uncaptioned'].map(f => (
+          {['all', 'captioned', 'uncaptioned', 'recent'].map(f => (
             <button
               key={f}
               className={`filter-btn${filter === f ? ' active' : ''}`}
               onClick={() => setFilter(f)}
+              disabled={isLoading}
             >
               {f.charAt(0).toUpperCase() + f.slice(1)}
             </button>
@@ -72,6 +75,7 @@ export default function Header({
           className="video-select"
           value={videoFilter}
           onChange={e => setVideoFilter(e.target.value)}
+          disabled={isLoading}
         >
           <option value="">All videos</option>
           {videoNames.map(name => (
@@ -87,13 +91,14 @@ export default function Header({
             type="checkbox"
             checked={autoRefresh}
             onChange={e => setAutoRefresh(e.target.checked)}
+            disabled={isLoading}
           />
           Auto-refresh
         </label>
 
         {/* Action buttons */}
-        <button className="action-btn" onClick={onManageTags}>Manage Tags</button>
-        <button className="action-btn" onClick={onManageVideos}>Videos</button>
+        <button className="action-btn" onClick={onManageTags} disabled={isLoading}>Manage Tags</button>
+        <button className="action-btn" onClick={onManageVideos} disabled={isLoading}>Videos</button>
       </div>
 
       {/* Tag filter bar */}
@@ -104,6 +109,7 @@ export default function Header({
             <button
               className={`mode-toggle mode-toggle--${includeMode}`}
               onClick={() => setIncludeMode(m => m === 'and' ? 'or' : 'and')}
+              disabled={isLoading}
             >
               {includeMode.toUpperCase()}
             </button>
@@ -114,7 +120,7 @@ export default function Header({
               <span className="remove-x" onClick={() => setActiveIncludeTags(prev => { const s = new Set(prev); s.delete(tag); return s })}>✕</span>
             </span>
           ))}
-          <button ref={includeAddRef} className="tag-filter-add" onClick={() => openDropdown('include', includeAddRef)}>+ tag</button>
+          <button ref={includeAddRef} className="tag-filter-add" onClick={() => openDropdown('include', includeAddRef)} disabled={isLoading}>+ tag</button>
         </div>
 
         <div className="tag-filter-row">
@@ -125,7 +131,7 @@ export default function Header({
               <span className="remove-x" onClick={() => setActiveExcludeTags(prev => { const s = new Set(prev); s.delete(tag); return s })}>✕</span>
             </span>
           ))}
-          <button ref={excludeAddRef} className="tag-filter-add" onClick={() => openDropdown('exclude', excludeAddRef)}>+ tag</button>
+          <button ref={excludeAddRef} className="tag-filter-add" onClick={() => openDropdown('exclude', excludeAddRef)} disabled={isLoading}>+ tag</button>
 
           <div className="header-spacer" />
 
@@ -137,7 +143,34 @@ export default function Header({
               min="0"
               value={minFrames}
               onChange={e => setMinFrames(Math.max(0, parseInt(e.target.value) || 0))}
+              disabled={isLoading}
             />
+          </div>
+
+          <div className="rating-filter-wrap">
+            <span className="rating-filter-label">Rating:</span>
+            <button
+              className={`rating-filter-btn${ratingFilter.size === 0 ? ' active' : ''}`}
+              onClick={() => setRatingFilter(new Set())}
+              disabled={isLoading}
+            >Any</button>
+            {[
+              { value: 1,          label: '★' },
+              { value: 2,          label: '★★' },
+              { value: 3,          label: '★★★' },
+              { value: 'unranked', label: 'Unranked' },
+            ].map(opt => (
+              <button
+                key={String(opt.value)}
+                className={`rating-filter-btn${ratingFilter.has(opt.value) ? ' active' : ''}`}
+                onClick={() => setRatingFilter(prev => {
+                  const next = new Set(prev)
+                  next.has(opt.value) ? next.delete(opt.value) : next.add(opt.value)
+                  return next
+                })}
+                disabled={isLoading}
+              >{opt.label}</button>
+            ))}
           </div>
         </div>
       </div>
