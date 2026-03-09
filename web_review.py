@@ -41,6 +41,7 @@ DB_PATH = Path(config.get("db_path", ".cache/index.db"))
 OUTPUT_DIR = Path(config.get("output_dir", "./dataset"))
 DEBUG_SCENES_DIR = OUTPUT_DIR / "debug" / "scenes"
 WAVEFORMS_DIR = Path(".cache/waveforms")
+CLIPS_DIR     = Path(".cache/clips")
 
 
 def get_db_connection():
@@ -319,8 +320,8 @@ def scene_preview(scene_id: int):
 
 @app.route('/clip/<int:scene_id>')
 def serve_clip(scene_id: int):
-    """Extract and serve a video clip using ffmpeg, with frame_offset applied as time_offset."""
-    import subprocess
+    """Extract and serve a video clip (cached to disk for range-request / seek support)."""
+    CLIPS_DIR.mkdir(parents=True, exist_ok=True)
 
     # Look up scene + video info from DB
     conn = get_db_connection()
@@ -339,6 +340,12 @@ def serve_clip(scene_id: int):
     video_file = Path(row["video_path"])
     if not video_file.exists():
         return jsonify({"error": "Video file not found"}), 404
+
+    video_stem = video_file.stem
+    cache_path = CLIPS_DIR / f"{video_stem}_{scene_id}.mp4"
+
+    if cache_path.exists():
+        return send_file(cache_path, mimetype='video/mp4', conditional=True)
 
     fps = row["fps"] or 24.0
     frame_offset = row["frame_offset"] or 0
@@ -359,7 +366,6 @@ def serve_clip(scene_id: int):
     if duration <= 0:
         return jsonify({"error": "Invalid time range"}), 400
 
-    # Single accurate seek: -ss before -i for speed, -to for precise end
     cmd = [
         'ffmpeg',
         '-ss', f'{start_time:.6f}',
@@ -369,37 +375,17 @@ def serve_clip(scene_id: int):
         '-preset', 'ultrafast',
         '-crf', '23',
         '-c:a', 'aac',
-        '-movflags', 'frag_keyframe+empty_moov+faststart',
+        '-movflags', '+faststart',
         '-f', 'mp4',
         '-y',
-        'pipe:1'
+        str(cache_path),
     ]
-    
-    def generate():
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            bufsize=8192
-        )
-        try:
-            while True:
-                chunk = process.stdout.read(8192)
-                if not chunk:
-                    break
-                yield chunk
-        finally:
-            process.stdout.close()
-            process.wait()
-    
-    return Response(
-        generate(),
-        mimetype='video/mp4',
-        headers={
-            'Content-Type': 'video/mp4',
-            'Cache-Control': 'no-cache'
-        }
-    )
+
+    result = subprocess.run(cmd, stderr=subprocess.DEVNULL)
+    if result.returncode != 0 or not cache_path.exists():
+        return jsonify({"error": "Clip generation failed"}), 500
+
+    return send_file(cache_path, mimetype='video/mp4', conditional=True)
 
 
 def _generate_rms_waveform_png(video_file: Path, start_time: float, duration: float,
@@ -517,10 +503,6 @@ def _generate_rms_waveform_png(video_file: Path, start_time: float, duration: fl
 def serve_waveform(scene_id: int):
     """Generate and serve an RMS energy bar chart PNG for a scene clip (cached on disk)."""
     WAVEFORMS_DIR.mkdir(parents=True, exist_ok=True)
-    cache_path = WAVEFORMS_DIR / f"{scene_id}.png"
-
-    if cache_path.exists():
-        return send_file(cache_path, mimetype='image/png', max_age=86400)
 
     conn = get_db_connection()
     row = conn.execute("""
@@ -538,6 +520,12 @@ def serve_waveform(scene_id: int):
     video_file = Path(row["video_path"])
     if not video_file.exists():
         return jsonify({"error": "Video file not found"}), 404
+
+    video_stem = video_file.stem
+    cache_path = WAVEFORMS_DIR / f"{video_stem}_{scene_id}.png"
+
+    if cache_path.exists():
+        return send_file(cache_path, mimetype='image/png', max_age=86400)
 
     fps = row["fps"] or 24.0
     frame_offset = row["frame_offset"] or 0
@@ -571,6 +559,15 @@ def get_scenes():
     page = max(1, int(request.args.get('page', 1) or 1))
     limit = 50
 
+    include_tags = [t for t in request.args.get('include_tags', '').split(',') if t]
+    exclude_tags = [t for t in request.args.get('exclude_tags', '').split(',') if t]
+    include_mode = request.args.get('include_mode', 'and')  # 'and' | 'or'
+    try:
+        min_frames = int(request.args.get('min_frames', 0) or 0)
+    except (ValueError, TypeError):
+        min_frames = 0
+    rating_values = [v for v in request.args.get('rating', '').split(',') if v]
+
     conn = get_db_connection()
 
     conditions = []
@@ -584,6 +581,40 @@ def get_scenes():
     if video_filter:
         conditions.append("(v.path LIKE ? OR v.path LIKE ?)")
         params.extend([f'%/{video_filter}.%', f'{video_filter}.%'])
+
+    # Tag include filter
+    if include_tags:
+        if include_mode == 'or':
+            ph = ','.join(['?'] * len(include_tags))
+            conditions.append(f"EXISTS (SELECT 1 FROM scene_tags st2 WHERE st2.scene_id = s.id AND st2.tag IN ({ph}))")
+            params.extend(include_tags)
+        else:  # AND — each tag must be present
+            for tag in include_tags:
+                conditions.append("EXISTS (SELECT 1 FROM scene_tags st2 WHERE st2.scene_id = s.id AND st2.tag = ?)")
+                params.append(tag)
+
+    # Tag exclude filter
+    for tag in exclude_tags:
+        conditions.append("NOT EXISTS (SELECT 1 FROM scene_tags st2 WHERE st2.scene_id = s.id AND st2.tag = ?)")
+        params.append(tag)
+
+    # Min frames
+    if min_frames > 0:
+        conditions.append("(COALESCE(s.end_frame, 0) - COALESCE(s.start_frame, 0)) >= ?")
+        params.append(min_frames)
+
+    # Rating filter
+    if rating_values:
+        rating_parts = []
+        numeric = [v for v in rating_values if v != 'unranked']
+        if 'unranked' in rating_values:
+            rating_parts.append("s.rating IS NULL")
+        if numeric:
+            ph = ','.join(['?'] * len(numeric))
+            rating_parts.append(f"s.rating IN ({ph})")
+            params.extend([int(v) for v in numeric])
+        if rating_parts:
+            conditions.append(f"({' OR '.join(rating_parts)})")
 
     where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -636,6 +667,7 @@ def get_scenes():
             'preview_path': preview_path,
             'caption_finished_at': (d['caption_finished_at'].replace(' ', 'T') + 'Z') if d.get('caption_finished_at') else None,
             'rating': d.get('rating'),
+            'blurhash': d.get('blurhash'),
         })
 
     return jsonify({

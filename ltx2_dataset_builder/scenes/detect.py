@@ -4,6 +4,7 @@ Scene detection using PySceneDetect.
 Detects scene boundaries in videos and caches results.
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import logging
@@ -13,6 +14,7 @@ from tqdm import tqdm
 
 from ..config import PipelineConfig, SceneConfig
 from ..utils.io import Database
+from .blurhash import _compute_blurhash
 
 logger = logging.getLogger(__name__)
 
@@ -133,35 +135,67 @@ def detect_and_cache_scenes(
 ) -> List[Dict[str, float]]:
     """
     Detect scenes and cache results in database.
-    
+
     Args:
         video_id: Video ID in database
         video_path: Path to the video file
         config: Pipeline configuration
         show_progress: Whether to show progress bar
-        
+
     Returns:
         List of scene dicts
     """
     db = Database(config.db_path)
-    
+
     # Check cache
     existing_scenes = db.get_scenes(video_id)
     if existing_scenes:
         logger.debug(f"Using cached scenes for video {video_id}")
         return existing_scenes
-    
-    # Detect scenes, flushing confirmed scenes to DB after each chunk
-    def _flush(scenes):
-        db.add_scenes(video_id, scenes)
 
-    scenes = detect_scenes_in_video(
-        video_path, config.scene,
-        show_progress=show_progress,
-        flush_callback=_flush,
-    )
+    video_info = db.get_video_by_id(video_id)
+    fps          = (video_info.get('fps') or 24.0) if video_info else 24.0
+    frame_offset = (video_info.get('frame_offset') or 0) if video_info else 0
+    workers = max(1, config.num_workers)
+    bh_futures = []
 
-    return scenes
+    def _mid_time(scene: Dict) -> float:
+        if scene.get('start_frame') is not None and scene.get('end_frame') is not None:
+            start = (scene['start_frame'] + frame_offset + 1) / fps
+            end   = (scene['end_frame']   + frame_offset)     / fps
+        else:
+            t_off = frame_offset / fps
+            start = max(0.0, scene['start_time'] + t_off + 1.0 / fps)
+            end   = scene['end_time'] + t_off
+        return (start + end) / 2
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        def _flush(scenes):
+            scene_ids = db.add_scenes(video_id, scenes)
+            for scene_id, scene in zip(scene_ids, scenes):
+                fut = pool.submit(_compute_blurhash, scene_id, video_path, _mid_time(scene))
+                bh_futures.append(fut)
+
+        detect_scenes_in_video(
+            video_path, config.scene,
+            show_progress=show_progress,
+            flush_callback=_flush,
+        )
+
+        done = errors = 0
+        for fut in as_completed(bh_futures):
+            scene_id, bh = fut.result()
+            if bh:
+                with db._connection() as conn:
+                    conn.execute("UPDATE scenes SET blurhash = ? WHERE id = ?", (bh, scene_id))
+                    conn.commit()
+                done += 1
+            else:
+                errors += 1
+        if bh_futures:
+            logger.info(f"Blurhash: {done} computed, {errors} errors")
+
+    return db.get_scenes(video_id)
 
 
 def detect_all_scenes(config: PipelineConfig) -> Dict[int, List[Dict[str, float]]]:

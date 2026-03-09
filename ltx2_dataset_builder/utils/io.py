@@ -82,6 +82,12 @@ class Database:
             except:
                 pass
             
+            # Add blurhash of the first frame for each scene
+            try:
+                conn.execute("ALTER TABLE scenes ADD COLUMN blurhash TEXT")
+            except:
+                pass
+
             # Add frame_offset column to videos (codec timing compensation, default 0)
             try:
                 conn.execute("ALTER TABLE videos ADD COLUMN frame_offset INTEGER DEFAULT 0")
@@ -225,8 +231,9 @@ class Database:
             conn.commit()
     
     # Scene operations
-    def add_scenes(self, video_id: int, scenes: List[Dict[str, Any]]) -> None:
-        """Add scenes for a video."""
+    def add_scenes(self, video_id: int, scenes: List[Dict[str, Any]]) -> List[int]:
+        """Add scenes for a video. Returns list of scene IDs (inserted or existing)."""
+        ids = []
         with self._connection() as conn:
             for scene in scenes:
                 try:
@@ -249,7 +256,14 @@ class Database:
                     ))
                 except sqlite3.IntegrityError:
                     pass  # Scene already exists
+                row = conn.execute(
+                    "SELECT id FROM scenes WHERE video_id = ? AND start_frame = ?",
+                    (video_id, scene.get("start_frame")),
+                ).fetchone()
+                if row:
+                    ids.append(row["id"])
             conn.commit()
+        return ids
     
     def get_scenes(self, video_id: int) -> List[Dict[str, Any]]:
         """Get all scenes for a video."""

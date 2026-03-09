@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import SceneCard from './SceneCard'
 
 const BATCH_SIZE = 50
@@ -11,10 +11,21 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
   const loadingRef = useRef(false)
   const hasMoreRef = useRef(true)
   const pageRef = useRef(1)
-  const filterKey = `${filter}|${videoFilter}`
+  const fetchGenRef = useRef(0)
 
-  // Reset when filter/video changes
+  // filterKey drives scene-list reset: any server-side filter param change resets the list
+  const filterKey = [
+    filter,
+    videoFilter,
+    [...activeIncludeTags].sort().join(','),
+    [...activeExcludeTags].sort().join(','),
+    activeIncludeTags.size > 1 ? includeMode : '',
+    minFrames,
+    [...ratingFilter].map(String).sort().join(','),
+  ].join('|')
+
   useEffect(() => {
+    fetchGenRef.current += 1
     setScenes([])
     hasMoreRef.current = true
     setIsEmpty(false)
@@ -22,17 +33,30 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
     loadingRef.current = false
   }, [filterKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Callback so SceneCard can report tag changes back (keeps card state in sync; no longer
+  // used for filtering since filtering is server-side, but still needed for SceneCard display)
+  const handleTagsChange = useCallback((id, tags) => {
+    setScenes(prev => prev.map(s => s.id === id ? { ...s, tags } : s))
+  }, [])
+
   const loadNext = useCallback(async () => {
     if (loadingRef.current || !hasMoreRef.current) return
     loadingRef.current = true
+    const gen = fetchGenRef.current
     setIsLoading(true)
     onLoadingChange?.(true)
     try {
       const params = new URLSearchParams({ filter, page: pageRef.current, limit: BATCH_SIZE })
       if (videoFilter) params.set('video', videoFilter)
+      if (activeIncludeTags.size > 0) params.set('include_tags', [...activeIncludeTags].join(','))
+      if (activeExcludeTags.size > 0) params.set('exclude_tags', [...activeExcludeTags].join(','))
+      if (activeIncludeTags.size > 1) params.set('include_mode', includeMode)
+      if (minFrames > 0) params.set('min_frames', minFrames)
+      if (ratingFilter.size > 0) params.set('rating', [...ratingFilter].join(','))
       const r = await fetch('/api/scenes?' + params)
       if (!r.ok) throw new Error('fetch failed')
       const data = await r.json()
+      if (fetchGenRef.current !== gen) return
       if (data.scenes.length === 0 && pageRef.current === 1) setIsEmpty(true)
       setScenes(prev => [...prev, ...data.scenes])
       hasMoreRef.current = data.has_more
@@ -40,13 +64,23 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
     } catch (e) {
       console.error('Failed to load scenes', e)
     } finally {
-      loadingRef.current = false
-      setIsLoading(false)
-      onLoadingChange?.(false)
+      if (fetchGenRef.current === gen) {
+        loadingRef.current = false
+        setIsLoading(false)
+        onLoadingChange?.(false)
+      }
     }
-  }, [filter, videoFilter])
+  }, [filter, videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter])
 
-  // Observe bottom sentinel
+  // Explicitly trigger initial load when loadNext changes (filter params changed).
+  // The IntersectionObserver alone is unreliable here: if the sentinel is already
+  // at the bottom (old scenes still in DOM when the new observer is created), the
+  // observer fires with isIntersecting:false and may not re-fire once scenes reset.
+  useEffect(() => {
+    loadNext()
+  }, [loadNext]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Observe bottom sentinel for infinite scroll (subsequent pages)
   useEffect(() => {
     const el = sentinelRef.current
     if (!el) return
@@ -56,31 +90,6 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
     obs.observe(el)
     return () => obs.disconnect()
   }, [loadNext])
-
-  // Client-side visibility filter
-  const isVisible = useCallback((scene) => {
-    const tags = new Set(scene.tags || [])
-    if (activeIncludeTags.size > 0) {
-      const match = includeMode === 'or'
-        ? [...activeIncludeTags].some(t => tags.has(t))
-        : [...activeIncludeTags].every(t => tags.has(t))
-      if (!match) return false
-    }
-    if (activeExcludeTags.size > 0 && [...activeExcludeTags].some(t => tags.has(t))) return false
-    if (minFrames > 0 && (scene.frame_count || 0) < minFrames) return false
-    if (ratingFilter.size > 0) {
-      const r = scene.rating || 0
-      const match = (ratingFilter.has('unranked') && !r) || ratingFilter.has(r)
-      if (!match) return false
-    }
-    return true
-  }, [activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter])
-
-  const visibilityMap = useMemo(() => {
-    const m = {}
-    for (const s of scenes) m[s.id] = isVisible(s)
-    return m
-  }, [scenes, isVisible])
 
   return (
     <>
@@ -95,7 +104,8 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
             key={scene.id}
             scene={scene}
             tagMap={tagMap}
-            visible={visibilityMap[scene.id]}
+            visible={true}
+            onTagsChange={handleTagsChange}
           />
         ))}
       </div>

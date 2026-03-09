@@ -287,12 +287,22 @@ html, body {
   overflow: hidden;
 }
 
+.blurhash-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: auto;
+}
+
 .scene-preview {
+  position: relative;
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
-  transition: opacity 0.2s;
+  transition: opacity 0.3s ease;
 }
 
 .play-overlay {
@@ -711,11 +721,14 @@ html, body {
 .save-btn:disabled { opacity: .4; cursor: default; }
 
 /* ── Custom video controls ───────────────────────────── */
+.modal-video-wrap {
+  background: #000;
+  border-radius: 8px 8px 0 0;
+  line-height: 0;
+}
 .modal-video {
   width: 100%;
   max-height: 60vh;
-  background: #000;
-  border-radius: 8px 8px 0 0;
   display: block;
 }
 
@@ -846,6 +859,14 @@ html, body {
   border: none;
   border-radius: 50%;
 }
+
+.vc-frame-info {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 8px 4px;
+  letter-spacing: 0.02em;
+}
+.vc-frame-info strong { color: var(--text-secondary); font-weight: 600; }
 
 /* ── Scrollbar ───────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }

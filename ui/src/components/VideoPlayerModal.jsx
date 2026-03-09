@@ -14,16 +14,18 @@ export default function VideoPlayerModal({ player, onClose }) {
   const analyserRef = useRef(null)
   const sourceRef   = useRef(null)
   const rafRef      = useRef(null)
+  const timeRafRef  = useRef(null)
   const seekingRef  = useRef(false)
 
   const { tagMap, refreshTags } = useContext(AppContext)
-  const { sceneId, videoPath, startTime, endTime } = player
+  const { sceneId, videoPath, startTime, endTime, fps = 24, frameOffset = 0, startFrame } = player
 
   const rawCaption = (player.caption && !player.caption.startsWith('__')) ? player.caption : ''
   const [caption, setCaption] = useState(rawCaption)
   const [savedCaption, setSavedCaption] = useState(rawCaption)
   const [saveStatus, setSaveStatus] = useState('')
   const [tags, setTags] = useState(player.tags || [])
+  const [rating, setRatingState] = useState(player.rating || 0)
   const [dropdownPos, setDropdownPos] = useState(null)
 
   // Custom player state
@@ -52,9 +54,10 @@ export default function VideoPlayerModal({ player, onClose }) {
     return () => document.removeEventListener('keydown', handleKey)
   }, [onClose, dropdownPos])
 
-  // Cleanup audio context on unmount
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
+      stopTimeRaf()
       stopVuMeter()
       if (audioCtxRef.current) {
         audioCtxRef.current.close()
@@ -115,15 +118,27 @@ export default function VideoPlayerModal({ player, onClose }) {
     if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height)
   }
 
+  // ── Time tracking rAF (60fps, independent of audio) ───
+
+  function startTimeRaf() {
+    function tick() {
+      if (!seekingRef.current && videoRef.current)
+        setCurrentTime(videoRef.current.currentTime)
+      timeRafRef.current = requestAnimationFrame(tick)
+    }
+    timeRafRef.current = requestAnimationFrame(tick)
+  }
+
+  function stopTimeRaf() {
+    if (timeRafRef.current) { cancelAnimationFrame(timeRafRef.current); timeRafRef.current = null }
+  }
+
   // ── Video event handlers ───────────────────────────────
 
-  function handlePlay()       { setPlaying(true);  startVuMeter() }
-  function handlePause()      { setPlaying(false); stopVuMeter() }
-  function handleEnded()      { setPlaying(false); stopVuMeter() }
+  function handlePlay() { setPlaying(true); startTimeRaf(); startVuMeter() }
+  function handlePause()      { setPlaying(false); stopTimeRaf() }
+  function handleEnded()      { setPlaying(false); stopTimeRaf() }
   function handleLoadedMeta() { setVideoDur(videoRef.current.duration) }
-  function handleTimeUpdate() {
-    if (!seekingRef.current) setCurrentTime(videoRef.current.currentTime)
-  }
 
   async function togglePlay() {
     const vid = videoRef.current
@@ -139,8 +154,15 @@ export default function VideoPlayerModal({ player, onClose }) {
 
   // ── Seek ───────────────────────────────────────────────
 
-  function handleSeekStart() { seekingRef.current = true }
-  function handleSeekInput(e) { setCurrentTime(Number(e.target.value)) }
+  function handleSeekStart() {
+    seekingRef.current = true
+    if (videoRef.current && !videoRef.current.paused) videoRef.current.pause()
+  }
+  function handleSeekInput(e) {
+    const t = Number(e.target.value)
+    setCurrentTime(t)
+    if (videoRef.current) videoRef.current.currentTime = t
+  }
   function handleSeekCommit(e) {
     seekingRef.current = false
     const t = Number(e.target.value)
@@ -182,6 +204,7 @@ export default function VideoPlayerModal({ player, onClose }) {
       if (!r.ok) throw new Error()
       setSavedCaption(val)
       setSaveStatus('saved')
+      player.onCaptionChange?.(val)
       setTimeout(() => setSaveStatus(s => s === 'saved' ? '' : s), 2000)
     } catch {
       setSaveStatus('error')
@@ -202,6 +225,7 @@ export default function VideoPlayerModal({ player, onClose }) {
     setCaption('')
     setSavedCaption('')
     setSaveStatus('')
+    player.onCaptionChange?.('')
   }
 
   async function addTag(tag) {
@@ -211,14 +235,25 @@ export default function VideoPlayerModal({ player, onClose }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tag }),
     })
-    if (r.ok) { const d = await r.json(); setTags(d.tags) }
+    if (r.ok) { const d = await r.json(); setTags(d.tags); player.onTagsChange?.(d.tags) }
     if (isNew) refreshTags()
     setDropdownPos(null)
   }
 
   async function removeTag(tag) {
     const r = await fetch(`/api/tags/${sceneId}/${encodeURIComponent(tag)}`, { method: 'DELETE' })
-    if (r.ok) { const d = await r.json(); setTags(d.tags) }
+    if (r.ok) { const d = await r.json(); setTags(d.tags); player.onTagsChange?.(d.tags) }
+  }
+
+  async function setRating(n) {
+    const next = n === rating ? 0 : n
+    setRatingState(next)
+    player.onRatingChange?.(next)
+    await fetch(`/api/rating/${sceneId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating: next || null }),
+    })
   }
 
   function openDropdown() {
@@ -237,19 +272,21 @@ export default function VideoPlayerModal({ player, onClose }) {
         </div>
 
         {/* Video — no native controls */}
-        <video
-          ref={videoRef}
-          src={`/clip/${sceneId}`}
-          autoPlay
-          loop
-          muted={muted}
-          onPlay={handlePlay}
-          onPause={handlePause}
-          onEnded={handleEnded}
-          onLoadedMetadata={handleLoadedMeta}
-          onTimeUpdate={handleTimeUpdate}
-          className="modal-video"
-        />
+        <div className="modal-video-wrap">
+          <video
+            ref={videoRef}
+            src={`/clip/${sceneId}`}
+            autoPlay
+            loop
+            muted={muted}
+            onPlay={handlePlay}
+            onPause={handlePause}
+            onEnded={handleEnded}
+            onLoadedMetadata={handleLoadedMeta}
+            onClick={togglePlay}
+            className="modal-video"
+          />
+        </div>
 
         {/* Custom controls */}
         <div className="video-controls">
@@ -308,7 +345,33 @@ export default function VideoPlayerModal({ player, onClose }) {
           />
         </div>
 
+        {/* Frame info */}
+        {(() => {
+          const clipFrame = Math.round(currentTime * fps)
+          const totalFrames = Math.round(videoDur * fps)
+          const sceneStart = startFrame != null ? startFrame : Math.round(startTime * fps) - frameOffset - 1
+          const absFrame = sceneStart + frameOffset + 1 + clipFrame
+          return (
+            <div className="vc-frame-info">
+              frame <strong>{clipFrame}</strong> / {totalFrames}
+              &nbsp;&nbsp;·&nbsp;&nbsp;
+              source frame <strong>{absFrame}</strong>
+            </div>
+          )
+        })()}
+
         <div className="video-modal-meta">
+          <div className="star-rating">
+            {[1, 2, 3].map(n => (
+              <button
+                key={n}
+                className={`star-btn${rating >= n ? ' star-btn--active' : ''}`}
+                onClick={() => setRating(n)}
+                title={`${n} star${n > 1 ? 's' : ''}`}
+              >★</button>
+            ))}
+          </div>
+
           <div className="tag-section">
             {tags.map(tag => (
               <span key={tag} className="tag-pill">

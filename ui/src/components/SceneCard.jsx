@@ -2,6 +2,7 @@ import { useState, useRef, useContext } from 'react'
 import { createPortal } from 'react-dom'
 import { AppContext } from '../context'
 import TagDropdown from './TagDropdown'
+import BlurhashCanvas from './BlurhashCanvas'
 
 function formatRelativeTime(ts) {
   const d = new Date(ts)
@@ -14,7 +15,7 @@ function formatRelativeTime(ts) {
   return d.toLocaleDateString()
 }
 
-export default function SceneCard({ scene: initialScene, tagMap, visible }) {
+export default function SceneCard({ scene: initialScene, tagMap, visible, onTagsChange }) {
   const { openPlayer, refreshTags } = useContext(AppContext)
 
   const rawCaption = (initialScene.caption && !initialScene.caption.startsWith('__'))
@@ -28,6 +29,7 @@ export default function SceneCard({ scene: initialScene, tagMap, visible }) {
   const saveTimer = useRef(null)
   const addBtnRef = useRef(null)
 
+  const [imgLoaded, setImgLoaded] = useState(false)
   const isDirty = caption !== savedCaption
   const imgSrc = initialScene.preview_path
     ? `/preview/${initialScene.preview_path}`
@@ -80,14 +82,14 @@ export default function SceneCard({ scene: initialScene, tagMap, visible }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tag }),
     })
-    if (r.ok) { const d = await r.json(); setTags(d.tags) }
+    if (r.ok) { const d = await r.json(); setTags(d.tags); onTagsChange?.(initialScene.id, d.tags) }
     if (isNew) refreshTags()
     setDropdownPos(null)
   }
 
   async function removeTag(tag) {
     const r = await fetch(`/api/tags/${initialScene.id}/${encodeURIComponent(tag)}`, { method: 'DELETE' })
-    if (r.ok) { const d = await r.json(); setTags(d.tags) }
+    if (r.ok) { const d = await r.json(); setTags(d.tags); onTagsChange?.(initialScene.id, d.tags) }
   }
 
   function openDropdown() {
@@ -115,8 +117,13 @@ export default function SceneCard({ scene: initialScene, tagMap, visible }) {
       endTime: initialScene.end_time,
       fps: initialScene.fps,
       frameOffset: initialScene.frame_offset,
+      blurhash: initialScene.blurhash,
       caption,
       tags,
+      rating,
+      onCaptionChange: (newCaption) => { setCaption(newCaption); setSavedCaption(newCaption) },
+      onTagsChange: (newTags) => { setTags(newTags); onTagsChange?.(initialScene.id, newTags) },
+      onRatingChange: (newRating) => setRatingState(newRating),
     })
   }
 
@@ -129,7 +136,15 @@ export default function SceneCard({ scene: initialScene, tagMap, visible }) {
   return (
     <div className="scene-card">
       <div className="preview-container" onClick={playVideo}>
-        <img className="scene-preview" src={imgSrc} alt={`Scene ${initialScene.id}`} loading="lazy" />
+        <BlurhashCanvas hash={initialScene.blurhash} className="blurhash-bg" />
+        <img
+          className="scene-preview"
+          src={imgSrc}
+          alt={`Scene ${initialScene.id}`}
+          loading="lazy"
+          onLoad={() => setImgLoaded(true)}
+          style={{ opacity: imgLoaded ? 1 : 0 }}
+        />
         <div className="play-overlay">
           <div className="play-icon">
             <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
