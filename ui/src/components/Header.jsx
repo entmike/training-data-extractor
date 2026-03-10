@@ -10,11 +10,11 @@ export default function Header({
   includeMode, setIncludeMode,
   minFrames, setMinFrames,
   ratingFilter, setRatingFilter,
-  autoRefresh, setAutoRefresh,
   isLoading,
   onManageTags, onManageVideos,
 }) {
   const [dropdown, setDropdown] = useState(null) // { mode: 'include'|'exclude', pos }
+  const [minFramesDraft, setMinFramesDraft] = useState(String(minFrames))
   const includeAddRef = useRef(null)
   const excludeAddRef = useRef(null)
 
@@ -85,17 +85,6 @@ export default function Header({
 
         <div className="header-spacer" />
 
-        {/* Auto-refresh */}
-        <label className="autorefresh-label">
-          <input
-            type="checkbox"
-            checked={autoRefresh}
-            onChange={e => setAutoRefresh(e.target.checked)}
-            disabled={isLoading}
-          />
-          Auto-refresh
-        </label>
-
         {/* Action buttons */}
         <button className="action-btn" onClick={onManageTags} disabled={isLoading}>Manage Tags</button>
         <button className="action-btn" onClick={onManageVideos} disabled={isLoading}>Videos</button>
@@ -141,8 +130,14 @@ export default function Header({
               type="number"
               className="min-frames-input"
               min="0"
-              value={minFrames}
-              onChange={e => setMinFrames(Math.max(0, parseInt(e.target.value) || 0))}
+              value={minFramesDraft}
+              onChange={e => setMinFramesDraft(e.target.value)}
+              onBlur={e => {
+                const v = Math.max(0, parseInt(e.target.value) || 0)
+                setMinFramesDraft(String(v))
+                setMinFrames(v)
+              }}
+              onKeyDown={e => e.key === 'Enter' && e.target.blur()}
               disabled={isLoading}
             />
           </div>

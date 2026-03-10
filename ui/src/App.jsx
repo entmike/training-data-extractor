@@ -21,7 +21,6 @@ export default function App() {
   const [includeMode, setIncludeMode] = useState('and') // 'and' | 'or'
   const [minFrames, setMinFrames] = useState(0)
   const [ratingFilter, setRatingFilter] = useState(new Set()) // empty = any; values: 1|2|3|'unranked'
-  const [autoRefresh, setAutoRefresh] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [player, setPlayer] = useState(null)
   const [showManageTags, setShowManageTags] = useState(false)
@@ -71,12 +70,6 @@ export default function App() {
     fetchVideos()
   }, [fetchStats, fetchTags, fetchVideos])
 
-  useEffect(() => {
-    if (!autoRefresh) return
-    const id = setInterval(fetchStats, 5000)
-    return () => clearInterval(id)
-  }, [autoRefresh, fetchStats])
-
   const openPlayer = useCallback(p => setPlayer(p), [])
   const closePlayer = useCallback(() => setPlayer(null), [])
 
@@ -93,7 +86,6 @@ export default function App() {
         includeMode={includeMode} setIncludeMode={setIncludeMode}
         minFrames={minFrames} setMinFrames={setMinFrames}
         ratingFilter={ratingFilter} setRatingFilter={setRatingFilter}
-        autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh}
         isLoading={isLoading}
         onManageTags={() => setShowManageTags(true)}
         onManageVideos={() => setShowManageVideos(true)}

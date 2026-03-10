@@ -4,7 +4,7 @@ Scene detection using PySceneDetect.
 Detects scene boundaries in videos and caches results.
 """
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import logging
@@ -157,7 +157,6 @@ def detect_and_cache_scenes(
     fps          = (video_info.get('fps') or 24.0) if video_info else 24.0
     frame_offset = (video_info.get('frame_offset') or 0) if video_info else 0
     workers = max(1, config.num_workers)
-    bh_futures = []
 
     def _mid_time(scene: Dict) -> float:
         if scene.get('start_frame') is not None and scene.get('end_frame') is not None:
@@ -169,31 +168,26 @@ def detect_and_cache_scenes(
             end   = scene['end_time'] + t_off
         return (start + end) / 2
 
+    def _save_blurhash(fut):
+        scene_id, bh = fut.result()
+        if bh:
+            with db._connection() as conn:
+                conn.execute("UPDATE scenes SET blurhash = ? WHERE id = ?", (bh, scene_id))
+                conn.commit()
+
     with ThreadPoolExecutor(max_workers=workers) as pool:
         def _flush(scenes):
             scene_ids = db.add_scenes(video_id, scenes)
             for scene_id, scene in zip(scene_ids, scenes):
                 fut = pool.submit(_compute_blurhash, scene_id, video_path, _mid_time(scene))
-                bh_futures.append(fut)
+                fut.add_done_callback(_save_blurhash)
 
         detect_scenes_in_video(
             video_path, config.scene,
             show_progress=show_progress,
             flush_callback=_flush,
         )
-
-        done = errors = 0
-        for fut in as_completed(bh_futures):
-            scene_id, bh = fut.result()
-            if bh:
-                with db._connection() as conn:
-                    conn.execute("UPDATE scenes SET blurhash = ? WHERE id = ?", (bh, scene_id))
-                    conn.commit()
-                done += 1
-            else:
-                errors += 1
-        if bh_futures:
-            logger.info(f"Blurhash: {done} computed, {errors} errors")
+        # pool.__exit__ waits for all submitted futures to complete
 
     return db.get_scenes(video_id)
 

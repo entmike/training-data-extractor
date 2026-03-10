@@ -257,8 +257,8 @@ class Database:
                 except sqlite3.IntegrityError:
                     pass  # Scene already exists
                 row = conn.execute(
-                    "SELECT id FROM scenes WHERE video_id = ? AND start_frame = ?",
-                    (video_id, scene.get("start_frame")),
+                    "SELECT id FROM scenes WHERE video_id = ? AND start_time = ? AND end_time = ?",
+                    (video_id, scene["start_time"], scene["end_time"]),
                 ).fetchone()
                 if row:
                     ids.append(row["id"])
