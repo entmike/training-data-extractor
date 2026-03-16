@@ -492,21 +492,23 @@ export default function VideoPlayerModal({ player, onClose }) {
                 src={`/bucket_clip/${sceneId}`}
                 autoPlay
                 loop
-                muted={muted}
-                onPlay={handleBucketPlay}
-                onPause={handleBucketPause}
-                 onEnded={handleBucketEnded}
-                 onLoadedMetadata={handleBucketLoadedMeta}
-                 onError={(e) => {
-                   const err = e as React.SyntheticEvent<HTMLVideoElement, Event>
-                   console.error('Bucket video error:', err)
-                   if (err.currentTarget) {
-                     console.error('Video src:', err.currentTarget.src)
-                     console.error('Video error details:', err.currentTarget.error)
-                   }
-                 }}
-                 onClick={(e) => { console.log('Video clicked'); toggleBucketPlay() }}
-                 className="modal-video"
+                  muted={muted}
+                  onPlay={handleBucketPlay}
+                  onPause={handleBucketPause}
+                  onEnded={handleBucketEnded}
+                  onLoadedMetadata={handleBucketLoadedMeta}
+                  onError={(e) => {
+                    console.error('Bucket video error:', e)
+                    const target = e.currentTarget
+                    if (target && target.src) {
+                      console.error('Video src:', target.src)
+                    }
+                    if (target && target.error) {
+                      console.error('Video error details:', target.error)
+                    }
+                  }}
+                  onClick={(e) => { console.log('Video clicked'); toggleBucketPlay() }}
+                  className="modal-video"
               />
             </div>
 
