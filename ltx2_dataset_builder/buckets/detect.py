@@ -176,7 +176,7 @@ def find_optimal_bucket(
     
     # Check if scene is long enough (in frames)
     scene_frame_count = scene_end_frame - scene_start_frame
-    min_frames = int(config.bucket.min_duration * base_fps)
+    min_frames = config.bucket.min_frames
     min_frames = (min_frames // 24) * 24
     
     if scene_frame_count < min_frames:
@@ -213,13 +213,17 @@ def find_optimal_bucket(
     best_speech_start_frame = None
     best_speech_end_frame = None
     
-    # Slide window across scene (step by 1 frame for precision)
-    step_size = int(video_fps)  # 1 second step in frames
+    # Calculate max offset to ensure we can fit max_frames
+    max_frames = config.bucket.max_frames
+    max_frames = (max_frames // 24) * 24
+    
+    # Slide window across scene (step by base_fps frames = 1 second steps)
+    step_size = base_fps
     current_offset = 0
     
-    while current_offset + target_frames <= scene_frame_count:
+    while current_offset + max_frames <= scene_frame_count:
         window_start_frame = scene_start_frame + current_offset
-        window_end_frame = window_start_frame + target_frames
+        window_end_frame = window_start_frame + max_frames
         
         # Get speech scores for this window
         mask = (frame_numbers >= window_start_frame) & (frame_numbers < window_end_frame)
@@ -227,6 +231,7 @@ def find_optimal_bucket(
         
         if len(window_scores) == 0:
             current_offset += step_size
+            continue
             continue
         
         # Calculate weighted score (prioritize speech)
@@ -248,10 +253,14 @@ def find_optimal_bucket(
         
         current_offset += step_size
     
+    # Calculate max_frames to use for the final bucket
+    max_frames_final = config.bucket.max_frames
+    max_frames_final = (max_frames_final // 24) * 24
+    
     if best_bucket is None and best_score > 0:
-        # Calculate final bucket
+        # Calculate final bucket using max_frames
         bucket_start_frame = scene_start_frame + (current_offset - step_size)
-        bucket_end_frame = min(bucket_start_frame + target_frames, scene_end_frame)
+        bucket_end_frame = min(bucket_start_frame + max_frames_final, scene_end_frame)
         bucket_frame_count = bucket_end_frame - bucket_start_frame
         
         # Round down to largest multiple of 24 that fits
@@ -319,11 +328,11 @@ def detect_buckets_for_video(
     
     for scene in iterator:
         try:
-            start_frame = scene.get("start_frame")
-            end_frame = scene.get("end_frame")
+            start_frame = int(scene.get("start_frame") or 0)
+            end_frame = int(scene.get("end_frame") or 0)
             
-            if start_frame is None or end_frame is None:
-                logger.warning(f"Scene {scene.get('id')} missing frame numbers, skipping")
+            if start_frame == 0 and end_frame == 0:
+                logger.warning(f"Scene {scene.get('id')} has zero frame numbers, skipping")
                 continue
             
             # Detect speech activity in scene (using frames)
@@ -367,7 +376,8 @@ def detect_buckets_for_video(
                     flushed_count = len(buckets)
                     iterator.set_postfix(buckets=len(buckets), flushed=flushed_count)
             else:
-                scene_id = scene.get("id")
+                scene_id_raw = scene.get("id")
+                scene_id = int(scene_id_raw) if scene_id_raw is not None else 0
                 if scene_id:
                     db.mark_scene_bucket_ineligible(scene_id)
                     logger.debug(f"Scene {scene_id} marked bucket_ineligible (too short or no valid window)")

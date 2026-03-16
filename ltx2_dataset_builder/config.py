@@ -59,15 +59,19 @@ class CaptionConfig:
 
 @dataclass
 class BucketConfig:
-    """Auto-detected bucket configuration."""
+    """Auto-detected bucket configuration.
+    
+    All duration/frame values are in FRAMES, not seconds.
+    Values are converted from seconds to frames using base_fps if needed.
+    """
     target_frame_count: int = 121  # Target frame count (multiple of 24)
     base_fps: int = 24  # Base FPS for frame count calculation
     min_speech_score: float = 0.3  # Minimum speech activity score
     speech_weight: float = 0.7  # Weight for speech in optimization
     visual_weight: float = 0.3  # Weight for visual quality in optimization
-    min_duration: float = 4.0  # Minimum bucket duration in seconds
-    max_duration: float = 6.0  # Maximum bucket duration in seconds (144 frames at 24fps)
-    speech_margin: float = 0.5  # Seconds to include before/after speech
+    min_frames: int = 24  # Minimum bucket frame count (24 frames = 1s at 24fps)
+    max_frames: int = 144  # Maximum bucket frame count (144 frames = 6s at 24fps)
+    speech_margin_frames: int = 12  # Frames to include before/after speech
 
 
 @dataclass
@@ -147,6 +151,18 @@ class PipelineConfig:
                 setattr(config.caption, k, v)
 
         if 'bucket' in data:
+            # Convert seconds to frames if using old field names
+            min_dur = data['bucket'].get('min_duration', data['bucket'].get('min_frames', 100))
+            max_dur = data['bucket'].get('max_duration', data['bucket'].get('max_frames', 144))
+            speech_marg = data['bucket'].get('speech_margin', data['bucket'].get('speech_margin_frames', 12))
+            # If values are floats (seconds), convert to frames
+            if isinstance(min_dur, float):
+                min_dur = int(min_dur * data['bucket'].get('base_fps', 24))
+            if isinstance(max_dur, float):
+                max_dur = int(max_dur * data['bucket'].get('base_fps', 24))
+            data['bucket']['min_frames'] = min_dur
+            data['bucket']['max_frames'] = max_dur
+            data['bucket']['speech_margin_frames'] = int(speech_marg * data['bucket'].get('base_fps', 24))
             for k, v in data['bucket'].items():
                 setattr(config.bucket, k, v)
 
@@ -203,9 +219,9 @@ class PipelineConfig:
                 'min_speech_score': self.bucket.min_speech_score,
                 'speech_weight': self.bucket.speech_weight,
                 'visual_weight': self.bucket.visual_weight,
-                'min_duration': self.bucket.min_duration,
-                'max_duration': self.bucket.max_duration,
-                'speech_margin': self.bucket.speech_margin,
+                'min_frames': self.bucket.min_frames,
+                'max_frames': self.bucket.max_frames,
+                'speech_margin_frames': self.bucket.speech_margin_frames,
             },
         }
 

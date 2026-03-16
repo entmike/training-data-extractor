@@ -60,6 +60,7 @@ export default function VideoPlayerModal({ player, onClose }) {
   const bucketRafRef = useRef(null)
   const bucketTimeRafRef = useRef(null)
   const bucketSeekingRef = useRef(false)
+  const bucketAudioInitialized = useRef(false)
 
   const isDirty = caption !== savedCaption
   const duration = endTime - startTime
@@ -76,6 +77,14 @@ export default function VideoPlayerModal({ player, onClose }) {
       setBucketWaveformUrl(`/bucket_waveform/${sceneId}`)
     }
   }, [sceneId, bucketData])
+
+  // Reset bucket video state when switching tabs
+  useEffect(() => {
+    console.log('Tab changed to:', activeTab, 'bucketVideoRef:', bucketVideoRef.current ? 'mounted' : 'null')
+    if (activeTab === 'bucket' && bucketVideoRef.current) {
+      bucketVideoRef.current.load()
+    }
+  }, [activeTab])
 
   // Keyboard handler
   useEffect(() => {
@@ -101,13 +110,13 @@ export default function VideoPlayerModal({ player, onClose }) {
 
   // ── Web Audio ──────────────────────────────────────────
 
-  function ensureAudioContext() {
+  function ensureAudioContext(videoElement = videoRef.current) {
     if (audioCtxRef.current) return
     const ctx = new (window.AudioContext || window.webkitAudioContext)()
     const analyser = ctx.createAnalyser()
     analyser.fftSize = 256
     analyser.smoothingTimeConstant = 0.7
-    const source = ctx.createMediaElementSource(videoRef.current)
+    const source = ctx.createMediaElementSource(videoElement)
     source.connect(analyser)
     analyser.connect(ctx.destination)
     audioCtxRef.current = ctx
@@ -241,14 +250,20 @@ export default function VideoPlayerModal({ player, onClose }) {
   function handleBucketPlay() { setBucketPlaying(true); startBucketTimeRaf() }
   function handleBucketPause()      { setBucketPlaying(false); stopBucketTimeRaf() }
   function handleBucketEnded()      { setBucketPlaying(false); stopBucketTimeRaf() }
-  function handleBucketLoadedMeta() { setBucketDur(bucketVideoRef.current.duration) }
+  function handleBucketLoadedMeta() {
+    const vid = bucketVideoRef.current
+    if (vid) {
+      setBucketDur(vid.duration)
+      vid.play().catch(() => {}) // Auto-play on metadata load
+    }
+  }
 
   async function toggleBucketPlay() {
     const vid = bucketVideoRef.current
     if (!vid) return
     if (vid.paused) {
-      ensureAudioContext()
-      if (audioCtxRef.current.state === 'suspended') await audioCtxRef.current.resume()
+      ensureAudioContext(vid)
+      if (audioCtxRef.current?.state === 'suspended') await audioCtxRef.current.resume()
       vid.play()
     } else {
       vid.pause()
@@ -367,9 +382,9 @@ export default function VideoPlayerModal({ player, onClose }) {
           {bucketData && (
             <button
               className={`video-tab${activeTab === 'bucket' ? ' video-tab--active' : ''}`}
-              onClick={() => setActiveTab('bucket')}
+              onClick={() => { console.log('Bucket tab clicked'); setActiveTab('bucket') }}
             >
-              Optimal Bucket ({bucketDuration.toFixed(1)}s)
+              Optimal Bucket ({bucketDuration.toFixed(1)}s / {Math.round(bucketDuration * fps)}f)
             </button>
           )}
         </div>
@@ -471,6 +486,7 @@ export default function VideoPlayerModal({ player, onClose }) {
         {activeTab === 'bucket' && bucketData && (
           <>
             <div className="modal-video-wrap">
+              {console.log('Rendering bucket video, src:', `/bucket_clip/${sceneId}`)}
               <video
                 ref={bucketVideoRef}
                 src={`/bucket_clip/${sceneId}`}
@@ -481,6 +497,13 @@ export default function VideoPlayerModal({ player, onClose }) {
                 onPause={handleBucketPause}
                 onEnded={handleBucketEnded}
                 onLoadedMetadata={handleBucketLoadedMeta}
+                onError={(e) => {
+                  console.error('Bucket video error:', e.currentTarget.error)
+                  const vid = e.currentTarget
+                  console.error('Video src:', vid.src)
+                  console.error('Video error code:', vid.error?.code)
+                  console.error('Video error message:', vid.error?.message)
+                }}
                 onClick={toggleBucketPlay}
                 className="modal-video"
               />
@@ -496,8 +519,8 @@ export default function VideoPlayerModal({ player, onClose }) {
                 }
               </button>
 
-              {/* Time */}
-              <span className="vc-time">{fmtSecs(bucketCurrentTime)} / {fmtSecs(bucketDur)}</span>
+               {/* Time */}
+               <span className="vc-time">{fmtSecs(bucketCurrentTime)} / {fmtSecs(bucketDur)} ({Math.round(bucketCurrentTime * fps)}/{Math.round(bucketDur * fps)}f)</span>
 
               {/* Seek bar with waveform background */}
               <div className="vc-seek-wrap">
