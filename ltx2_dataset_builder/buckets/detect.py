@@ -212,6 +212,7 @@ def find_optimal_bucket(
     best_bucket = None
     best_speech_start_frame = None
     best_speech_end_frame = None
+    best_offset = None
     
     # Slide window across scene (step by 1 frame for precision)
     step_size = int(video_fps)  # 1 second step in frames
@@ -238,6 +239,7 @@ def find_optimal_bucket(
         
         if window_score > best_score:
             best_score = window_score
+            best_offset = current_offset
             
             # Find speech boundaries within window
             speech_mask = window_scores >= config.bucket.min_speech_score
@@ -248,9 +250,9 @@ def find_optimal_bucket(
         
         current_offset += step_size
     
-    if best_bucket is None and best_score > 0:
-        # Calculate final bucket
-        bucket_start_frame = scene_start_frame + (current_offset - step_size)
+    if best_bucket is None and best_score > 0 and best_offset is not None:
+        # Calculate final bucket using best offset
+        bucket_start_frame = scene_start_frame + best_offset
         bucket_end_frame = min(bucket_start_frame + target_frames, scene_end_frame)
         bucket_frame_count = bucket_end_frame - bucket_start_frame
         
@@ -275,9 +277,70 @@ def find_optimal_bucket(
             "speech_score": float(best_score),
             "speech_start_frame": int(best_speech_start_frame) if best_speech_start_frame else None,
             "speech_end_frame": int(best_speech_end_frame) if best_speech_end_frame else None,
-            "optimal_offset_frames": int(current_offset - step_size),
+            "optimal_offset_frames": int(best_offset) if best_offset is not None else 0,
             "optimal_duration": bucket_duration
         }
+    
+    # If still no bucket detected (e.g., no speech in scene), default to middle section
+    if best_bucket is None:
+        bucket_frame_count = target_frames
+        
+        scene_frame_count_int = int(scene_frame_count)
+        if scene_frame_count_int < bucket_frame_count:
+            bucket_frame_count = (scene_frame_count_int // 24) * 24
+        
+        if bucket_frame_count < 24:
+            return None
+        
+        middle_offset = (scene_frame_count_int - bucket_frame_count) // 2
+        bucket_start_frame = scene_start_frame + middle_offset
+        bucket_end_frame = bucket_start_frame + bucket_frame_count
+        bucket_duration = bucket_frame_count / video_fps
+        
+        best_bucket = {
+            "start_time": bucket_start_frame / video_fps,
+            "end_time": bucket_end_frame / video_fps,
+            "duration": bucket_duration,
+            "start_frame": int(bucket_start_frame),
+            "end_frame": int(bucket_end_frame),
+            "frame_count": bucket_frame_count,
+            "speech_score": 0.0,
+            "speech_start_frame": None,
+            "speech_end_frame": None,
+            "optimal_offset_frames": middle_offset,
+            "optimal_duration": bucket_duration
+        }
+    
+    # If best_score is only from visual weight (no speech content), default to middle
+    elif best_score <= config.bucket.visual_weight * 0.5:
+        # No meaningful speech detected, use middle section instead
+        scene_frame_count_int = int(scene_frame_count)
+        bucket_frame_count = target_frames
+        if scene_frame_count_int < bucket_frame_count:
+            bucket_frame_count = (scene_frame_count_int // 24) * 24
+        
+        if bucket_frame_count < 24:
+            # Fallback already handled above, this shouldn't happen
+            pass
+        else:
+            middle_offset = (scene_frame_count_int - bucket_frame_count) // 2
+            bucket_start_frame = scene_start_frame + middle_offset
+            bucket_end_frame = bucket_start_frame + bucket_frame_count
+            bucket_duration = bucket_frame_count / video_fps
+            
+            best_bucket = {
+                "start_time": bucket_start_frame / video_fps,
+                "end_time": bucket_end_frame / video_fps,
+                "duration": bucket_duration,
+                "start_frame": int(bucket_start_frame),
+                "end_frame": int(bucket_end_frame),
+                "frame_count": bucket_frame_count,
+                "speech_score": 0.0,
+                "speech_start_frame": None,
+                "speech_end_frame": None,
+                "optimal_offset_frames": middle_offset,
+                "optimal_duration": bucket_duration
+            }
     
     return best_bucket
 
@@ -319,18 +382,18 @@ def detect_buckets_for_video(
     
     for scene in iterator:
         try:
-            start_frame = scene.get("start_frame")
-            end_frame = scene.get("end_frame")
+            start_frame = int(scene.get("start_frame") or 0)
+            end_frame = int(scene.get("end_frame") or 0)
             
-            if start_frame is None or end_frame is None:
+            if start_frame == 0 or end_frame == 0:
                 logger.warning(f"Scene {scene.get('id')} missing frame numbers, skipping")
                 continue
             
             # Detect speech activity in scene (using frames)
             frame_numbers, speech_scores = detect_speech_activity(
                 video_path,
-                start_frame,
-                end_frame,
+                int(start_frame),
+                int(end_frame),
                 video_fps=video_fps,
                 target_fps=config.bucket.base_fps
             )
@@ -367,7 +430,8 @@ def detect_buckets_for_video(
                     flushed_count = len(buckets)
                     iterator.set_postfix(buckets=len(buckets), flushed=flushed_count)
             else:
-                scene_id = scene.get("id")
+                scene_id_raw = scene.get("id")
+                scene_id = int(scene_id_raw) if scene_id_raw is not None else 0
                 if scene_id:
                     db.mark_scene_bucket_ineligible(scene_id)
                     logger.debug(f"Scene {scene_id} marked bucket_ineligible (too short or no valid window)")
