@@ -866,6 +866,119 @@ def set_tag_description():
     return jsonify({"tag": tag, "description": description, "display_name": display_name})
 
 
+@app.route('/api/tags/suggestions/<int:scene_id>', methods=['GET'])
+def get_tag_suggestions(scene_id: int):
+    """Get auto-suggested tags for a scene based on various contexts."""
+    conn = get_db_connection()
+    
+    try:
+        scene = conn.execute("SELECT video_id FROM scenes WHERE id = ?", (scene_id,)).fetchone()
+        if not scene:
+            conn.close()
+            return jsonify({"error": "Scene not found"}), 404
+        
+        video_id = scene["video_id"]
+        tag_scores = {}
+        
+        existing_tags = [row["tag"] for row in conn.execute(
+            "SELECT tag FROM scene_tags WHERE scene_id = ?", (scene_id,)
+        ).fetchall()]
+        
+        scene_recent = conn.execute("""
+            SELECT tag, created_at
+            FROM scene_tags
+            WHERE scene_id = ?
+            ORDER BY created_at DESC
+            LIMIT 50
+        """, (scene_id,)).fetchall()
+        
+        for row in scene_recent:
+            tag = row["tag"]
+            if tag not in tag_scores:
+                tag_scores[tag] = {"score": 0.0, "sources": set()}
+            tag_scores[tag]["score"] += 3.0
+            tag_scores[tag]["sources"].add("scene_recent")
+        
+        video_co_occur = conn.execute("""
+            SELECT st2.tag, COUNT(*) as co_occurrence
+            FROM scene_tags st1
+            JOIN scene_tags st2 ON st1.scene_id = st2.scene_id
+            WHERE st1.scene_id = ?
+              AND st2.tag != st1.tag
+              AND st2.scene_id != ?
+            GROUP BY st2.tag
+            ORDER BY co_occurrence DESC
+            LIMIT 20
+        """, (scene_id, scene_id)).fetchall()
+        
+        for row in video_co_occur:
+            tag = row["tag"]
+            if tag not in tag_scores:
+                tag_scores[tag] = {"score": 0.0, "sources": set()}
+            tag_scores[tag]["score"] += 2.5 + (row["co_occurrence"] * 0.5)
+            tag_scores[tag]["sources"].add("video_co_occur")
+        
+        global_popular = conn.execute("""
+            SELECT tag, COUNT(*) as freq
+            FROM scene_tags
+            GROUP BY tag
+            ORDER BY freq DESC
+            LIMIT 50
+        """).fetchall()
+        
+        for row in global_popular:
+            tag = row["tag"]
+            if tag not in tag_scores:
+                tag_scores[tag] = {"score": 0.0, "sources": set()}
+            tag_scores[tag]["score"] += 2.0 + (row["freq"] * 0.1)
+            tag_scores[tag]["sources"].add("global_popular")
+        
+        global_recent = conn.execute("""
+            SELECT tag, MAX(created_at) as last_used
+            FROM scene_tags
+            GROUP BY tag
+            ORDER BY last_used DESC
+            LIMIT 50
+        """).fetchall()
+        
+        from datetime import datetime
+        for row in global_recent:
+            tag = row["tag"]
+            if tag not in tag_scores:
+                tag_scores[tag] = {"score": 0.0, "sources": set()}
+            last_used_str = row["last_used"]
+            if last_used_str:
+                last_used = datetime.fromisoformat(last_used_str.replace('Z', '+00:00'))
+                days_ago = (datetime.now() - last_used).total_seconds() / 86400
+                weight = 1.5 - (days_ago * 0.01)
+                tag_scores[tag]["score"] += max(0, weight)
+            else:
+                tag_scores[tag]["score"] += 1.5
+            tag_scores[tag]["sources"].add("global_recent")
+        
+        tag_list = []
+        for tag, data in tag_scores.items():
+            desc_row = conn.execute(
+                "SELECT description, display_name FROM tag_definitions WHERE tag = ?",
+                (tag,)
+            ).fetchone()
+            tag_list.append({
+                "tag": tag,
+                "score": round(data["score"], 2),
+                "display_name": desc_row["display_name"] if desc_row and desc_row["display_name"] else tag,
+                "description": desc_row["description"] if desc_row else ""
+            })
+        
+        tag_list.sort(key=lambda x: x["score"], reverse=True)
+        
+        conn.close()
+        return jsonify({"suggestions": tag_list})
+    
+    except Exception as e:
+        conn.close()
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/tags/<int:scene_id>/<path:tag>', methods=['DELETE'])
 def remove_tag(scene_id: int, tag: str):
     """Remove a tag from a scene."""

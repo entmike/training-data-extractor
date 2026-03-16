@@ -224,6 +224,7 @@ export default function SceneCard({ scene: initialScene, tagMap, visible, onTags
           suggestions={tagSuggestions}
           onSelect={addTag}
           onClose={() => setDropdownPos(null)}
+          sceneId={initialScene.id}
         />,
         document.body
       )}
