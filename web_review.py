@@ -565,7 +565,7 @@ def get_scenes():
     filter_type = request.args.get('filter', 'captioned')
     video_filter = request.args.get('video', '')
     page = max(1, int(request.args.get('page', 1) or 1))
-    limit = 50
+    limit = min(50, int(request.args.get('limit', 50) or 50))
 
     include_tags = [t for t in request.args.get('include_tags', '').split(',') if t]
     exclude_tags = [t for t in request.args.get('exclude_tags', '').split(',') if t]
@@ -585,6 +585,8 @@ def get_scenes():
         conditions.append("s.caption IS NOT NULL AND s.caption != '' AND substr(s.caption, 1, 2) != '__'")
     elif filter_type == 'uncaptioned':
         conditions.append("(s.caption IS NULL OR s.caption = '' OR substr(s.caption, 1, 2) = '__')")
+    elif filter_type == 'recent-buckets':
+        conditions.append("EXISTS (SELECT 1 FROM buckets WHERE scene_id = s.id)")
 
     if video_filter:
         conditions.append("(v.path LIKE ? OR v.path LIKE ?)")
@@ -626,24 +628,56 @@ def get_scenes():
 
     where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-    total = conn.execute(
-        f"SELECT COUNT(*) FROM scenes s JOIN videos v ON s.video_id = v.id {where_clause}",
-        params
-    ).fetchone()[0]
+    # Need joins for recent-buckets filter
+    if filter_type == "recent-buckets":
+        scenes_from = "FROM scenes s JOIN videos v ON s.video_id = v.id JOIN buckets b ON b.scene_id = s.id"
+    else:
+        scenes_from = "FROM scenes s JOIN videos v ON s.video_id = v.id"
+
+    # For recent-buckets filter, total is count of scenes with buckets
+    if filter_type == "recent-buckets":
+        total = conn.execute(
+            "SELECT COUNT(DISTINCT s.id) FROM scenes s JOIN buckets b ON b.scene_id = s.id"
+        ).fetchone()[0]
+    else:
+        total = conn.execute(
+            f"SELECT COUNT(*) {scenes_from} {where_clause}",
+            params
+        ).fetchone()[0]
 
     offset = (page - 1) * limit
-    rows = conn.execute(f"""
-        SELECT s.*, v.path as video_path, v.fps, v.frame_offset,
-            (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
-            GROUP_CONCAT(st.tag, '|') as tags_concat
-        FROM scenes s
-        JOIN videos v ON s.video_id = v.id
-        LEFT JOIN scene_tags st ON st.scene_id = s.id
-        {where_clause}
-        GROUP BY s.id
-        ORDER BY {("s.caption_finished_at DESC NULLS LAST, s.id DESC" if filter_type == "recent" else "s.video_id, s.id")}
-        LIMIT {limit} OFFSET {offset}
-    """, params).fetchall()
+    
+    # Subquery to properly order and paginate bucket scenes
+    if filter_type == "recent-buckets":
+        base_query = f"""
+            SELECT s.id, s.video_id, s.start_time, s.end_time, s.duration, s.start_frame, s.end_frame,
+                   s.caption, s.caption_finished_at, s.rating, s.blurhash, s.bucket_ineligible,
+                   v.path as video_path, v.fps, v.frame_offset,
+                   (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
+                   (s.end_frame - s.start_frame) as frame_count,
+                   GROUP_CONCAT(st.tag, '|') as tags_concat
+            FROM scenes s
+            JOIN videos v ON s.video_id = v.id
+            JOIN buckets b ON b.scene_id = s.id
+            LEFT JOIN scene_tags st ON st.scene_id = s.id
+            GROUP BY s.id
+            ORDER BY b.bucket_timestamp DESC, s.start_time DESC
+            LIMIT {limit} OFFSET {offset}
+        """
+    else:
+        base_query = f"""
+            SELECT s.*, v.path as video_path, v.fps, v.frame_offset,
+                (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
+                GROUP_CONCAT(st.tag, '|') as tags_concat
+            {scenes_from}
+            LEFT JOIN scene_tags st ON st.scene_id = s.id
+            {where_clause}
+            GROUP BY s.id
+            ORDER BY {("s.caption_finished_at DESC NULLS LAST, s.id DESC" if filter_type == "recent" else "s.video_id, s.id")}
+            LIMIT {limit} OFFSET {offset}
+        """
+    
+    rows = conn.execute(base_query, params).fetchall()
     conn.close()
 
     scenes = []

@@ -419,8 +419,8 @@ def save_buckets_to_db(
                     INSERT OR IGNORE INTO buckets
                     (video_id, scene_id, start_time, end_time, duration, 
                      start_frame, end_frame, frame_count, speech_score,
-                     speech_start_frame, speech_end_frame, optimal_offset_frames, optimal_duration)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     speech_start_frame, speech_end_frame, optimal_offset_frames, optimal_duration, bucket_timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """, (
                     video_id,
                     bucket.get("scene_id"),

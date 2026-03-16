@@ -65,14 +65,14 @@ export default function Header({
 
         {/* Filter buttons */}
         <div className="filter-buttons">
-          {['all', 'captioned', 'uncaptioned', 'recent'].map(f => (
+          {['all', 'captioned', 'uncaptioned', 'recent', 'recent-buckets'].map(f => (
             <button
               key={f}
               className={`filter-btn${filter === f ? ' active' : ''}`}
               onClick={() => setFilter(f)}
               disabled={isLoading}
             >
-              {f.charAt(0).toUpperCase() + f.slice(1)}
+              {f === 'recent-buckets' ? 'Recent Buckets' : f.charAt(0).toUpperCase() + f.slice(1)}
             </button>
           ))}
         </div>

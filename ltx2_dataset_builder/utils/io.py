@@ -123,6 +123,7 @@ class Database:
                     speech_end_frame INTEGER,
                     optimal_offset_frames INTEGER,
                     optimal_duration REAL,
+                    bucket_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (video_id) REFERENCES videos(id),
                     FOREIGN KEY (scene_id) REFERENCES scenes(id),
                     UNIQUE(video_id, start_frame, end_frame)
@@ -148,6 +149,10 @@ class Database:
                 pass
             try:
                 conn.execute("ALTER TABLE buckets ADD COLUMN optimal_duration REAL")
+            except:
+                pass
+            try:
+                conn.execute("ALTER TABLE buckets ADD COLUMN bucket_timestamp DATETIME")
             except:
                 pass
             
