@@ -65,9 +65,8 @@ export default function VideoPlayerModal({ player, onClose }) {
   const title = `${videoPath?.split('/').pop()?.replace(/\.[^.]+$/, '') ?? ''} — ${formatTime(startTime)} (${duration.toFixed(1)}s)`
   
   // Bucket duration
-  const bucketDuration = bucketData?.optimal_duration || 0
   const bucketStartTime = bucketData ? (startTime + bucketData.optimal_offset_frames / fps) : 0
-  const [bucketDur, setBucketDur] = useState(bucketDuration)
+  const [bucketDur, setBucketDur] = useState(0)
 
   // Load waveform for this scene
   useEffect(() => {
@@ -370,7 +369,7 @@ export default function VideoPlayerModal({ player, onClose }) {
               className={`video-tab${activeTab === 'bucket' ? ' video-tab--active' : ''}`}
               onClick={() => setActiveTab('bucket')}
             >
-              Optimal Bucket ({bucketDuration.toFixed(1)}s)
+              Optimal Bucket ({bucketDur.toFixed(1)}s)
             </button>
           )}
         </div>

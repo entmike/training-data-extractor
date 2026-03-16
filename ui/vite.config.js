@@ -3,8 +3,9 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  server: {
+   server: {
     host: '0.0.0.0',
+    allowedHosts: ['trainer'],
     proxy: {
       '/api': 'http://localhost:5000',
       '/preview': 'http://localhost:5000',
