@@ -13,7 +13,7 @@ function getUrlParam(key, fallback = '') {
 export default function App() {
   const [filter, setFilter] = useState(() => getUrlParam('filter', 'captioned'))
   const [videoFilter, setVideoFilter] = useState(() => getUrlParam('video', ''))
-  const [stats, setStats] = useState({ total: 0, captioned: 0 })
+  const [stats, setStats] = useState({ total: 0, captioned: 0, bucketed: 0 })
   const [allTags, setAllTags] = useState([])
   const [allVideos, setAllVideos] = useState([])
   const [activeIncludeTags, setActiveIncludeTags] = useState(new Set())

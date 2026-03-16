@@ -58,6 +58,19 @@ class CaptionConfig:
 
 
 @dataclass
+class BucketConfig:
+    """Auto-detected bucket configuration."""
+    target_frame_count: int = 121  # Target frame count (multiple of 24)
+    base_fps: int = 24  # Base FPS for frame count calculation
+    min_speech_score: float = 0.3  # Minimum speech activity score
+    speech_weight: float = 0.7  # Weight for speech in optimization
+    visual_weight: float = 0.3  # Weight for visual quality in optimization
+    min_duration: float = 4.0  # Minimum bucket duration in seconds
+    max_duration: float = 6.0  # Maximum bucket duration in seconds (144 frames at 24fps)
+    speech_margin: float = 0.5  # Seconds to include before/after speech
+
+
+@dataclass
 class PipelineConfig:
     """Main pipeline configuration."""
     # Input/output paths
@@ -80,6 +93,7 @@ class PipelineConfig:
     crop: CropConfig = field(default_factory=CropConfig)
     render: RenderConfig = field(default_factory=RenderConfig)
     caption: CaptionConfig = field(default_factory=CaptionConfig)
+    bucket: BucketConfig = field(default_factory=BucketConfig)
 
     # Processing options
     num_workers: int = 4  # Number of parallel workers for CPU tasks
@@ -132,6 +146,10 @@ class PipelineConfig:
             for k, v in data['caption'].items():
                 setattr(config.caption, k, v)
 
+        if 'bucket' in data:
+            for k, v in data['bucket'].items():
+                setattr(config.bucket, k, v)
+
         return config
 
     def to_yaml(self, path: Path) -> None:
@@ -178,6 +196,16 @@ class PipelineConfig:
                 'template': self.caption.template,
                 'auto_caption': self.caption.auto_caption,
                 'vlm_model': self.caption.vlm_model,
+            },
+            'bucket': {
+                'target_frame_count': self.bucket.target_frame_count,
+                'base_fps': self.bucket.base_fps,
+                'min_speech_score': self.bucket.min_speech_score,
+                'speech_weight': self.bucket.speech_weight,
+                'visual_weight': self.bucket.visual_weight,
+                'min_duration': self.bucket.min_duration,
+                'max_duration': self.bucket.max_duration,
+                'speech_margin': self.bucket.speech_margin,
             },
         }
 

@@ -25,6 +25,7 @@ except ImportError:
 app = Flask(__name__)
 
 UI_DIST = Path(__file__).parent / 'ui' / 'dist'
+UI_SRC = Path(__file__).parent / 'ui' / 'src'  # For development without rebuild
 
 # Load config
 CONFIG_PATH = Path("config.yaml")
@@ -39,7 +40,7 @@ else:
 
 DB_PATH = Path(config.get("db_path", ".cache/index.db"))
 OUTPUT_DIR = Path(config.get("output_dir", "./dataset"))
-DEBUG_SCENES_DIR = OUTPUT_DIR / "debug" / "scenes"
+DEBUG_SCENES_DIR = Path(".cache/previews")
 WAVEFORMS_DIR = Path(".cache/waveforms")
 CLIPS_DIR     = Path(".cache/clips")
 
@@ -135,7 +136,7 @@ def generate_scene_preview(
     end_frame: int,
     fps: float = 24.0,
     frame_offset: int = 0,
-    frame_width: int = 426
+    frame_width: int = None
 ) -> Optional[bytes]:
     """
     Generate a 3-frame preview image (start, middle, end) for a scene.
@@ -183,11 +184,10 @@ def generate_scene_preview(
             ret, frame = cap.read()
             
             if ret:
-                # Resize to target width
-                h, w = frame.shape[:2]
-                new_w = frame_width
-                new_h = int(h * new_w / w)
-                frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+                if frame_width is not None:
+                    h, w = frame.shape[:2]
+                    new_h = int(h * frame_width / w)
+                    frame = cv2.resize(frame, (frame_width, new_h), interpolation=cv2.INTER_LANCZOS4)
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 extracted_frames.append(Image.fromarray(frame))
             else:
@@ -217,9 +217,9 @@ def generate_scene_preview(
         combined.paste(f, (x_offset, 0))
         x_offset += f.width
     
-    # Convert to PNG bytes
+    # Convert to JPEG bytes
     buffer = io.BytesIO()
-    combined.save(buffer, format='PNG')
+    combined.save(buffer, format='JPEG', quality=85)
     buffer.seek(0)
     return buffer.getvalue()
 
@@ -298,6 +298,11 @@ def scene_preview(scene_id: int):
         start_frame = int(row["start_time"] * fps)
         end_frame = int(row["end_time"] * fps)
     
+    # Serve from cache if available
+    cache_path = DEBUG_SCENES_DIR / f"scene_{scene_id}.jpg"
+    if cache_path.exists():
+        return send_file(cache_path, mimetype='image/jpeg')
+
     # Generate preview
     preview_bytes = generate_scene_preview(
         video_path=video_path,
@@ -305,16 +310,19 @@ def scene_preview(scene_id: int):
         end_frame=end_frame,
         fps=fps,
         frame_offset=frame_offset,
-        frame_width=426
     )
-    
+
     if preview_bytes is None:
         return jsonify({"error": "Failed to generate preview"}), 500
-    
+
+    # Cache to disk
+    DEBUG_SCENES_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path.write_bytes(preview_bytes)
+
     return Response(
         preview_bytes,
-        mimetype='image/png',
-        headers={'Cache-Control': 'max-age=3600'}  # Cache for 1 hour
+        mimetype='image/jpeg',
+        headers={'Cache-Control': 'max-age=3600'}
     )
 
 
@@ -685,7 +693,8 @@ def api_stats():
     stats = conn.execute("""
         SELECT
             COUNT(*) as total,
-            SUM(CASE WHEN caption IS NOT NULL AND caption != '' AND substr(caption, 1, 2) != '__' THEN 1 ELSE 0 END) as captioned
+            SUM(CASE WHEN caption IS NOT NULL AND caption != '' AND substr(caption, 1, 2) != '__' THEN 1 ELSE 0 END) as captioned,
+            SUM(CASE WHEN bucket_ineligible = 1 OR EXISTS (SELECT 1 FROM buckets b WHERE b.scene_id = scenes.id) THEN 1 ELSE 0 END) as bucketed
         FROM scenes
     """).fetchone()
     conn.close()
@@ -954,6 +963,148 @@ def set_prompt(video_id: int):
     conn.commit()
     conn.close()
     return jsonify({"video_id": video_id, "prompt": prompt or ""})
+
+
+@app.route('/api/bucket/<int:scene_id>')
+def get_bucket_data(scene_id: int):
+    """Get bucket data for a scene."""
+    conn = get_db_connection()
+    
+    # Get bucket for this scene
+    bucket = conn.execute("""
+        SELECT * FROM buckets WHERE scene_id = ?
+    """, (scene_id,)).fetchone()
+    
+    if not bucket:
+        conn.close()
+        return jsonify({"bucket": None})
+    
+    result = dict(bucket)
+    conn.close()
+    
+    return jsonify({"bucket": result})
+
+
+@app.route('/bucket_clip/<int:scene_id>')
+def serve_bucket_clip(scene_id: int):
+    """Extract and serve an optimal bucket clip."""
+    CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Look up bucket + video info from DB
+    conn = get_db_connection()
+    bucket_row = conn.execute("""
+        SELECT * FROM buckets WHERE scene_id = ?
+    """, (scene_id,)).fetchone()
+    
+    if not bucket_row:
+        conn.close()
+        return jsonify({"error": "Bucket not found"}), 404
+    
+    bucket = dict(bucket_row)
+    
+    # Get video info
+    video_row = conn.execute("""
+        SELECT v.path as video_path, v.fps, v.frame_offset
+        FROM videos v
+        JOIN buckets b ON b.video_id = v.id
+        WHERE b.scene_id = ?
+    """, (scene_id,)).fetchone()
+    
+    if not video_row:
+        conn.close()
+        return jsonify({"error": "Video not found"}), 404
+    
+    conn.close()
+
+    video_file = Path(video_row["video_path"])
+    if not video_file.exists():
+        return jsonify({"error": "Video file not found"}), 404
+
+    video_stem = video_file.stem
+    cache_path = CLIPS_DIR / f"{video_stem}_bucket_{scene_id}.mp4"
+
+    if cache_path.exists():
+        return send_file(cache_path, mimetype='video/mp4', conditional=True)
+
+    fps = video_row["fps"] or 24.0
+    frame_offset = video_row["frame_offset"] or 0
+
+    # Use bucket frame numbers directly
+    start_frame = bucket["start_frame"]
+    end_frame = bucket["end_frame"]
+    
+    # Calculate timestamps from frames
+    start_time = (start_frame + frame_offset + 1) / fps
+    duration = (end_frame - start_frame) / fps
+
+    start_time = max(0.0, start_time)
+    
+    if duration <= 0:
+        return jsonify({"error": "Invalid bucket duration"}), 400
+
+    cmd = [
+        'ffmpeg',
+        '-ss', f'{start_time:.6f}',
+        '-i', str(video_file),
+        '-t', f'{duration:.6f}',
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-crf', '23',
+        '-c:a', 'aac',
+        '-movflags', '+faststart',
+        '-f', 'mp4',
+        '-y',
+        str(cache_path),
+    ]
+
+    result = subprocess.run(cmd, stderr=subprocess.DEVNULL)
+    if result.returncode != 0 or not cache_path.exists():
+        return jsonify({"error": "Bucket clip generation failed"}), 500
+
+    return send_file(cache_path, mimetype='video/mp4', conditional=True)
+
+
+@app.route('/bucket_waveform/<int:scene_id>')
+def serve_bucket_waveform(scene_id: int):
+    """Serve waveform for bucket segment."""
+    # Get bucket data
+    conn = get_db_connection()
+    bucket = conn.execute("""
+        SELECT * FROM buckets WHERE scene_id = ?
+    """, (scene_id,)).fetchone()
+    
+    if not bucket:
+        conn.close()
+        return jsonify({"error": "Bucket not found"}), 404
+    
+    # Get video info
+    video_row = conn.execute("""
+        SELECT v.path as video_path, v.fps, v.frame_offset
+        FROM videos v
+        JOIN buckets b ON b.video_id = v.id
+        WHERE b.scene_id = ?
+    """, (scene_id,)).fetchone()
+    
+    if not video_row:
+        conn.close()
+        return jsonify({"error": "Video not found"}), 404
+    
+    conn.close()
+    
+    video_file = Path(video_row["video_path"])
+    fps = video_row["fps"] or 24.0
+    frame_offset = video_row["frame_offset"] or 0
+    
+    # Calculate bucket start time
+    start_time = (bucket["start_frame"] + frame_offset + 1) / fps
+    duration = bucket["frame_count"] / fps
+    
+    # Generate waveform
+    waveform_bytes = _generate_rms_waveform_png(video_file, start_time, duration)
+    if waveform_bytes:
+        return Response(waveform_bytes, mimetype='image/png')
+    
+    return jsonify({"error": "Waveform generation failed"}), 500
 
 
 if __name__ == '__main__':

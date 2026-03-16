@@ -21,6 +21,7 @@ from .faces.detect import filter_candidates_by_face
 from .crops.generate import generate_all_crops
 from .render.bucket import render_all_crops
 from .manifest.writer import write_manifest, write_captions, print_statistics
+from .buckets.detect import detect_all_buckets
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -75,6 +76,12 @@ def run_pipeline(config: PipelineConfig) -> None:
     logger.info("Step 3: Captioning scenes with Qwen3")
     logger.info("=" * 50)
     caption_all_scenes(config)
+    
+    # Step 3.5: Detect optimal buckets
+    logger.info("=" * 50)
+    logger.info("Step 3.5: Detecting optimal buckets")
+    logger.info("=" * 50)
+    buckets = detect_all_buckets(config)
     
     # Step 4: Generate candidates
     logger.info("=" * 50)
@@ -155,6 +162,10 @@ def run_step(config: PipelineConfig, step: str) -> None:
         logger.info("Running: Caption scenes with Qwen3")
         caption_all_scenes(config)
         
+    elif step == "buckets":
+        logger.info("Running: Detect optimal buckets")
+        detect_all_buckets(config)
+        
     elif step == "candidates":
         logger.info("Running: Generate candidates")
         generate_all_candidates(config)
@@ -201,7 +212,7 @@ def run_step(config: PipelineConfig, step: str) -> None:
         
     else:
         logger.error(f"Unknown step: {step}")
-        logger.info("Available steps: index, scenes, captions, blurhash, candidates, quality, faces, crops, render, manifest, stats, debug-scenes, debug-candidates")
+        logger.info("Available steps: index, scenes, captions, buckets, candidates, quality, faces, crops, render, manifest, stats, debug-scenes, debug-candidates")
 
 
 def main() -> int:
@@ -260,7 +271,7 @@ Examples:
     parser.add_argument(
         "--step",
         type=str,
-        choices=["index", "scenes", "captions", "blurhash", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "debug-scenes", "debug-candidates"],
+        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "debug-scenes", "debug-candidates"],
         help="Run a specific pipeline step"
     )
     

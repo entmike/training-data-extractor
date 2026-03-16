@@ -19,6 +19,7 @@ export default function Header({
   const excludeAddRef = useRef(null)
 
   const pct = stats.total > 0 ? Math.round((stats.captioned / stats.total) * 100) : 0
+  const bucketedPct = stats.total > 0 ? Math.round(((stats.bucketed ?? 0) / stats.total) * 100) : 0
   const videoNames = allVideos.map(v => v.name ? v.name.replace(/\.[^.]+$/, '') : v)
 
   function openDropdown(mode, ref) {
@@ -47,12 +48,18 @@ export default function Header({
       <div className="header-main">
         {/* Stats */}
         <div className="stats-group">
-          <div className="progress-bar-wrap">
-            <div className="progress-bar" style={{ width: `${pct}%` }} />
+          <div className="stats-bars">
+            <div className="progress-bar-wrap">
+              <div className="progress-bar" style={{ width: `${pct}%` }} />
+            </div>
+            <div className="progress-bar-wrap">
+              <div className="progress-bar progress-bar--bucketed" style={{ width: `${bucketedPct}%` }} />
+            </div>
           </div>
           <div className="stats-numbers">
             <span className="stats-total">{stats.total.toLocaleString()} scenes</span>
             <span className="stats-captioned">{stats.captioned.toLocaleString()} captioned ({pct}%)</span>
+            <span className="stats-bucketed">{(stats.bucketed ?? 0).toLocaleString()} bucketed ({bucketedPct}%)</span>
           </div>
         </div>
 

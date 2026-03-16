@@ -30,8 +30,7 @@ ltx2-build --config config.yaml --set-frame-offset 2 --video deadpool-and-wolver
 |------|---------|-------------|
 | index | `--step index` | Scan `./vids`, hash files, store metadata in DB |
 | scenes | `--step scenes` | Detect scene cuts, write to DB incrementally per chunk |
-| captions | `--step captions` | Caption scenes with Qwen3 VLM |
-| candidates | `--step candidates` | Split scenes into fixed-length clips |
+| captions | `--step captions` | Caption scenes with Qwen3 VLM || buckets | `--step buckets` | Auto-detect optimal 24-frame-multiple crops prioritizing speech || candidates | `--step candidates` | Split scenes into fixed-length clips |
 | quality | `--step quality` | Filter clips by quality score |
 | faces | `--step faces` | Filter clips by InsightFace detection |
 | crops | `--step crops` | Generate face / half-body / full-frame crop specs |
@@ -55,6 +54,7 @@ ltx2-build --config config.yaml --set-frame-offset 2 --video deadpool-and-wolver
 - `ltx2_dataset_builder/utils/io.py` — `Database` class (all DB operations)
 - `ltx2_dataset_builder/scenes/detect.py` — scene detection; writes to DB incrementally
 - `ltx2_dataset_builder/captions/generate.py` — Qwen3 captioning
+- `ltx2_dataset_builder/buckets/detect.py` — speech-based optimal bucket detection
 - `ltx2_dataset_builder/faces/detect.py` — InsightFace filtering
 - `ltx2_dataset_builder/render/bucket.py` — FFmpeg bucket rendering
 
@@ -64,3 +64,4 @@ ltx2-build --config config.yaml --set-frame-offset 2 --video deadpool-and-wolver
 - Scene detection flushes confirmed scenes to DB after every ~10s chunk, so a kill won't lose all progress
 - The `frame_offset` on a video compensates for codec timing drift (use `--list-videos` to inspect)
 - Face embeddings use `buffalo_l`; downloaded automatically on first run to `~/.insightface/`
+- **Buckets**: Auto-detected optimal crops prioritize speech content using audio energy and zero-crossing rate analysis. Buckets are always rounded down to multiples of 24 frames (at 24fps = 121 frames → 96 frames). The `speech_weight` config controls how much speech activity influences the optimal window selection.

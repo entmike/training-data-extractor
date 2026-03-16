@@ -59,6 +59,11 @@ html, body {
   gap: 10px;
   flex-shrink: 0;
 }
+.stats-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 
 .stats-numbers {
   display: flex;
@@ -68,6 +73,7 @@ html, body {
 
 .stats-total { font-size: 13px; color: var(--text-muted); }
 .stats-captioned { font-size: 13px; color: var(--text-heading); font-weight: 600; }
+.stats-bucketed { font-size: 13px; color: var(--text-muted); }
 
 .progress-bar-wrap {
   width: 80px;
@@ -77,6 +83,7 @@ html, body {
   overflow: hidden;
 }
 .progress-bar { height: 100%; background: var(--green); border-radius: 3px; transition: width 0.3s; }
+.progress-bar--bucketed { background: var(--accent, #4a9eff); }
 
 .filter-buttons { display: flex; gap: 4px; }
 
@@ -537,6 +544,40 @@ html, body {
   margin-bottom: 12px;
 }
 .video-modal-title { font-size: 15px; font-weight: 500; color: var(--text); }
+
+/* Tabs */
+.video-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+
+.video-tab {
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s;
+}
+
+.video-tab:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.video-tab--active {
+  color: var(--text);
+  background: var(--bg-card);
+  border-color: var(--border);
+  border-bottom: 1px solid var(--bg-card);
+  margin-bottom: -1px;
+}
 
 .modal-close-btn {
   background: none;

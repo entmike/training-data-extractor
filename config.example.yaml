@@ -59,3 +59,14 @@ caption:
   template: "{token}, cinematic, high quality"
   auto_caption: false
   vlm_model: null
+
+# Bucket detection settings (auto-detected optimal crops)
+bucket:
+  target_frame_count: 121      # Target frame count (will be rounded to multiple of 24)
+  base_fps: 24                 # Base FPS for frame count calculation
+  min_speech_score: 0.3        # Minimum speech activity score threshold
+  speech_weight: 0.7           # Weight for speech in optimization (0-1)
+  visual_weight: 0.3           # Weight for visual quality in optimization (0-1)
+  min_duration: 4.0            # Minimum bucket duration in seconds
+  max_duration: 6.0            # Maximum bucket duration in seconds
+  speech_margin: 0.5           # Seconds to include before/after speech

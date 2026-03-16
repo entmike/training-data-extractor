@@ -88,6 +88,12 @@ class Database:
             except:
                 pass
 
+            # Mark scenes ineligible for bucket detection (too short, no valid window)
+            try:
+                conn.execute("ALTER TABLE scenes ADD COLUMN bucket_ineligible INTEGER DEFAULT 0")
+            except:
+                pass
+
             # Add frame_offset column to videos (codec timing compensation, default 0)
             try:
                 conn.execute("ALTER TABLE videos ADD COLUMN frame_offset INTEGER DEFAULT 0")
@@ -97,6 +103,51 @@ class Database:
             # Add per-video captioning prompt
             try:
                 conn.execute("ALTER TABLE videos ADD COLUMN prompt TEXT")
+            except:
+                pass
+            
+            # Buckets table for auto-detected optimal crops
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS buckets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id INTEGER NOT NULL,
+                    scene_id INTEGER,
+                    start_time REAL NOT NULL,
+                    end_time REAL NOT NULL,
+                    duration REAL NOT NULL,
+                    start_frame INTEGER NOT NULL,
+                    end_frame INTEGER NOT NULL,
+                    frame_count INTEGER,
+                    speech_score REAL,
+                    speech_start_frame INTEGER,
+                    speech_end_frame INTEGER,
+                    optimal_offset_frames INTEGER,
+                    optimal_duration REAL,
+                    FOREIGN KEY (video_id) REFERENCES videos(id),
+                    FOREIGN KEY (scene_id) REFERENCES scenes(id),
+                    UNIQUE(video_id, start_frame, end_frame)
+                )
+            """)
+            
+            # Add speech detection columns to buckets if they don't exist
+            try:
+                conn.execute("ALTER TABLE buckets ADD COLUMN speech_score REAL")
+            except:
+                pass
+            try:
+                conn.execute("ALTER TABLE buckets ADD COLUMN speech_start_frame INTEGER")
+            except:
+                pass
+            try:
+                conn.execute("ALTER TABLE buckets ADD COLUMN speech_end_frame INTEGER")
+            except:
+                pass
+            try:
+                conn.execute("ALTER TABLE buckets ADD COLUMN optimal_offset_frames INTEGER")
+            except:
+                pass
+            try:
+                conn.execute("ALTER TABLE buckets ADD COLUMN optimal_duration REAL")
             except:
                 pass
             
@@ -274,6 +325,29 @@ class Database:
             ).fetchall()
             return [dict(row) for row in rows]
     
+    def get_scenes_for_buckets(self, video_id: int) -> List[Dict[str, Any]]:
+        """Get scenes that need bucket detection: not ineligible and no bucket yet."""
+        with self._connection() as conn:
+            rows = conn.execute(
+                """SELECT s.* FROM scenes s
+                   LEFT JOIN buckets b ON b.scene_id = s.id
+                   WHERE s.video_id = ?
+                     AND (s.bucket_ineligible IS NULL OR s.bucket_ineligible = 0)
+                     AND b.id IS NULL
+                   ORDER BY s.start_time""",
+                (video_id,)
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def mark_scene_bucket_ineligible(self, scene_id: int) -> None:
+        """Mark a scene as ineligible for bucket detection."""
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE scenes SET bucket_ineligible = 1 WHERE id = ?",
+                (scene_id,)
+            )
+            conn.commit()
+
     def get_scenes_without_caption(self, video_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Get scenes that don't have captions yet."""
         with self._connection() as conn:
@@ -464,6 +538,84 @@ class Database:
         with self._connection() as conn:
             rows = conn.execute(query, params).fetchall()
             return [dict(row) for row in rows]
+    
+    # Bucket operations
+    def add_buckets(
+        self,
+        video_id: int,
+        buckets: List[Dict[str, Any]]
+    ) -> List[int]:
+        """Add buckets for a video. Returns list of bucket IDs."""
+        ids = []
+        with self._connection() as conn:
+            for bucket in buckets:
+                try:
+                    cursor = conn.execute("""
+                        INSERT OR IGNORE INTO buckets
+                        (video_id, scene_id, start_time, end_time, duration,
+                         start_frame, end_frame, frame_count, speech_score,
+                         speech_start_frame, speech_end_frame, optimal_offset_frames, optimal_duration)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        video_id,
+                        bucket.get("scene_id"),
+                        bucket["start_time"],
+                        bucket["end_time"],
+                        bucket["duration"],
+                        bucket["start_frame"],
+                        bucket["end_frame"],
+                        bucket.get("frame_count"),
+                        bucket.get("speech_score"),
+                        bucket.get("speech_start_frame"),
+                        bucket.get("speech_end_frame"),
+                        bucket.get("optimal_offset_frames"),
+                        bucket.get("optimal_duration"),
+                    ))
+                    conn.commit()
+                    
+                    # Get the ID (inserted or existing)
+                    row = conn.execute(
+                        "SELECT id FROM buckets WHERE video_id = ? AND start_frame = ? AND end_frame = ?",
+                        (video_id, bucket["start_frame"], bucket["end_frame"])
+                    ).fetchone()
+                    
+                    if row:
+                        ids.append(row["id"])
+                        
+                except Exception as e:
+                    logger.error(f"Failed to add bucket: {e}")
+                    continue
+        return ids
+    
+    def get_buckets(
+        self,
+        video_id: Optional[int] = None,
+        scene_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Get buckets with optional filters."""
+        query = "SELECT * FROM buckets WHERE 1=1"
+        params = []
+        
+        if video_id is not None:
+            query += " AND video_id = ?"
+            params.append(video_id)
+        if scene_id is not None:
+            query += " AND scene_id = ?"
+            params.append(scene_id)
+        
+        query += " ORDER BY video_id, start_time"
+        
+        with self._connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [dict(row) for row in rows]
+    
+    def get_buckets_without_rendering(
+        self,
+        video_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Get buckets that haven't been rendered yet."""
+        # For now, return all buckets - we can add a rendered flag later
+        return self.get_buckets(video_id=video_id)
 
 
 def write_jsonl(path: Path, entries: Iterator[Dict[str, Any]]) -> int:
