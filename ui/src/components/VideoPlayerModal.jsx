@@ -55,7 +55,6 @@ export default function VideoPlayerModal({ player, onClose }) {
   const bucketVideoRef = useRef(null)
   const [bucketPlaying, setBucketPlaying] = useState(false)
   const [bucketCurrentTime, setBucketCurrentTime] = useState(0)
-  const [bucketDur, setBucketDur] = useState(0)
   const [bucketWaveformUrl, setBucketWaveformUrl] = useState(null)
   const bucketRafRef = useRef(null)
   const bucketTimeRafRef = useRef(null)
@@ -68,12 +67,14 @@ export default function VideoPlayerModal({ player, onClose }) {
   // Bucket duration
   const bucketDuration = bucketData?.optimal_duration || 0
   const bucketStartTime = bucketData ? (startTime + bucketData.optimal_offset_frames / fps) : 0
+  const [bucketDur, setBucketDur] = useState(bucketDuration)
 
   // Load waveform for this scene
   useEffect(() => {
     setWaveformUrl(`/waveform/${sceneId}`)
     if (bucketData) {
       setBucketWaveformUrl(`/bucket_waveform/${sceneId}`)
+      setBucketDur(bucketData.optimal_duration)
     }
   }, [sceneId, bucketData])
 
