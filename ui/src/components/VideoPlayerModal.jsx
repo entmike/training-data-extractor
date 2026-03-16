@@ -22,6 +22,7 @@ export default function VideoPlayerModal({ player, onClose }) {
 
   // Fetch bucket data for this scene
   const [bucketData, setBucketData] = useState(null)
+  const [bucketError, setBucketError] = useState(null)
   const [activeTab, setActiveTab] = useState('scene') // 'scene' | 'bucket'
 
   useEffect(() => {
@@ -29,9 +30,17 @@ export default function VideoPlayerModal({ player, onClose }) {
       fetch(`/api/bucket/${sceneId}`)
         .then(r => r.json())
         .then(d => {
-          if (d.bucket) setBucketData(d.bucket)
+          console.log('Bucket data fetched:', d)
+          if (d.bucket) { setBucketData(d.bucket); setBucketError(null); }
+          else setBucketError('No bucket data found')
         })
-        .catch(() => {})
+        .catch(err => {
+          setBucketError(err?.message || 'Failed to load bucket data')
+          console.error('Bucket fetch error:', err)
+        })
+    } else {
+      setBucketData(null)
+      setBucketError(null)
     }
   }, [sceneId])
 
@@ -66,7 +75,14 @@ export default function VideoPlayerModal({ player, onClose }) {
   
   // Bucket duration
   const bucketStartTime = bucketData ? (startTime + bucketData.optimal_offset_frames / fps) : 0
-  const [bucketDur, setBucketDur] = useState(0)
+  const [bucketDur, setBucketDur] = useState(bucketData?.optimal_duration || 0)
+
+  // Update bucket duration when bucket data changes
+  useEffect(() => {
+    if (bucketData?.optimal_duration !== undefined) {
+      setBucketDur(bucketData.optimal_duration)
+    }
+  }, [bucketData?.optimal_duration])
 
   // Load waveform for this scene
   useEffect(() => {
@@ -479,10 +495,18 @@ export default function VideoPlayerModal({ player, onClose }) {
                 muted={muted}
                 onPlay={handleBucketPlay}
                 onPause={handleBucketPause}
-                onEnded={handleBucketEnded}
-                onLoadedMetadata={handleBucketLoadedMeta}
-                onClick={toggleBucketPlay}
-                className="modal-video"
+                 onEnded={handleBucketEnded}
+                 onLoadedMetadata={handleBucketLoadedMeta}
+                 onError={(e) => {
+                   const err = e as React.SyntheticEvent<HTMLVideoElement, Event>
+                   console.error('Bucket video error:', err)
+                   if (err.currentTarget) {
+                     console.error('Video src:', err.currentTarget.src)
+                     console.error('Video error details:', err.currentTarget.error)
+                   }
+                 }}
+                 onClick={(e) => { console.log('Video clicked'); toggleBucketPlay() }}
+                 className="modal-video"
               />
             </div>
 

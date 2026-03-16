@@ -1023,7 +1023,14 @@ def serve_bucket_clip(scene_id: int):
     video_stem = video_file.stem
     cache_path = CLIPS_DIR / f"{video_stem}_bucket_{scene_id}.mp4"
 
-    if cache_path.exists():
+    # Check if we need to regenerate the cache
+    need_regenerate = False
+    if not cache_path.exists():
+        need_regenerate = True
+    elif video_file.stat().st_mtime > cache_path.stat().st_mtime:
+        need_regenerate = True
+    
+    if not need_regenerate:
         return send_file(cache_path, mimetype='video/mp4', conditional=True)
 
     fps = video_row["fps"] or 24.0
