@@ -1,13 +1,20 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 export default function ManageVideosModal({ onClose }) {
   const [videos, setVideos] = useState([])
   const [loading, setLoading] = useState(true)
+  const [selectedId, setSelectedId] = useState(null)
+  const mouseDownOnOverlay = useRef(false)
 
   useEffect(() => {
     fetch('/api/videos')
       .then(r => r.json())
-      .then(d => { setVideos(d.videos || []); setLoading(false) })
+      .then(d => {
+        const vids = d.videos || []
+        setVideos(vids)
+        if (vids.length > 0) setSelectedId(vids[0].id)
+        setLoading(false)
+      })
   }, [])
 
   useEffect(() => {
@@ -16,8 +23,10 @@ export default function ManageVideosModal({ onClose }) {
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  const selected = videos.find(v => v.id === selectedId) ?? null
+
   return (
-    <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+    <div className="modal-overlay" onMouseDown={e => { mouseDownOnOverlay.current = e.target === e.currentTarget }} onClick={e => { if (mouseDownOnOverlay.current && e.target === e.currentTarget) onClose() }}>
       <div className="modal-box videos-modal-box">
         <div className="modal-header">
           <h2>Videos</h2>
@@ -29,9 +38,21 @@ export default function ManageVideosModal({ onClose }) {
         ) : videos.length === 0 ? (
           <div className="modal-empty">No videos in database</div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {videos.map(v => <VideoRow key={v.id} video={v} />)}
-          </div>
+          <>
+            <select
+              className="video-select video-select--modal"
+              value={selectedId ?? ''}
+              onChange={e => setSelectedId(Number(e.target.value))}
+            >
+              {videos.map(v => (
+                <option key={v.id} value={v.id}>
+                  {v.name?.replace(/\.[^.]+$/, '') ?? v.name}
+                </option>
+              ))}
+            </select>
+
+            {selected && <VideoRow key={selected.id} video={selected} />}
+          </>
         )}
       </div>
     </div>
@@ -43,9 +64,15 @@ function VideoRow({ video }) {
   const [saved, setSaved] = useState(video.prompt || '')
   const [status, setStatus] = useState('')
 
+  // Reset when video changes
+  useEffect(() => {
+    setPrompt(video.prompt || '')
+    setSaved(video.prompt || '')
+    setStatus('')
+  }, [video.id])
+
   const isDirty = prompt !== saved
   const pct = video.scene_count > 0 ? Math.round((video.captioned / video.scene_count) * 100) : 0
-  const name = video.name?.replace(/\.[^.]+$/, '') ?? video.name
   const meta = [
     video.width && video.height ? `${video.width}×${video.height}` : null,
     video.fps ? `${video.fps.toFixed(2)}fps` : null,
@@ -72,13 +99,8 @@ function VideoRow({ video }) {
   return (
     <div className="video-row">
       <div className="video-row-header">
-        <div>
-          <div className="video-row-name">{name}</div>
-          <div className="video-row-meta">{meta}</div>
-        </div>
-        <span className="video-row-stats">
-          {video.captioned}/{video.scene_count} scenes ({pct}%)
-        </span>
+        <div className="video-row-meta">{meta}</div>
+        <span className="video-row-stats">{video.captioned}/{video.scene_count} scenes ({pct}%)</span>
       </div>
 
       <div className="video-prompt-label">Captioning prompt</div>

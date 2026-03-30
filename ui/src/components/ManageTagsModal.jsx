@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 export default function ManageTagsModal({ onClose }) {
   const [tags, setTags] = useState([])
   const [loading, setLoading] = useState(true)
+  const mouseDownOnOverlay = useRef(false)
 
   useEffect(() => {
     fetch('/api/tags/all')
@@ -17,7 +18,7 @@ export default function ManageTagsModal({ onClose }) {
   }, [onClose])
 
   return (
-    <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+    <div className="modal-overlay" onMouseDown={e => { mouseDownOnOverlay.current = e.target === e.currentTarget }} onClick={e => { if (mouseDownOnOverlay.current && e.target === e.currentTarget) onClose() }}>
       <div className="modal-box">
         <div className="modal-header">
           <h2>Manage Tags</h2>

@@ -8,6 +8,7 @@ import logging
 import subprocess
 import tempfile
 import os
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
@@ -23,28 +24,33 @@ _model = None
 _processor = None
 
 
-def load_qwen_model():
+def load_qwen_model(suppress_warnings: bool = True):
     """Load Qwen3 Omni model for video captioning."""
     global _model, _processor
-    
+
     if _model is not None:
         return _model, _processor
-    
+
     try:
-        from transformers import Qwen3OmniMoeForConditionalGeneration, Qwen3OmniMoeProcessor
+        import transformers
         import torch
-        
+        from transformers import Qwen3OmniMoeForConditionalGeneration, Qwen3OmniMoeProcessor
+
+        if suppress_warnings:
+            warnings.filterwarnings("ignore")
+            transformers.logging.set_verbosity_error()
+
         model_name = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
-        
+
         logger.info(f"Loading {model_name}...")
         
         _processor = Qwen3OmniMoeProcessor.from_pretrained(model_name)
-        
+
         # Try flash_attention_2, fall back to sdpa
         try:
             _model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
                 model_name,
-                torch_dtype=torch.bfloat16,
+                dtype=torch.bfloat16,
                 device_map="auto",
                 attn_implementation="flash_attention_2"
             )
@@ -53,12 +59,13 @@ def load_qwen_model():
             logger.warning(f"Flash attention not available: {e}")
             _model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
                 model_name,
-                torch_dtype=torch.bfloat16,
+                dtype=torch.bfloat16,
                 device_map="auto",
                 attn_implementation="sdpa"
             )
             logger.info("Using sdpa attention")
-        
+
+        _model.tie_weights()
         logger.info("Model loaded successfully")
         return _model, _processor
         
@@ -263,7 +270,8 @@ def caption_scene_with_qwen(
             return response, caption_prompt
 
         except Exception as e:
-            logger.error(f"Captioning error: {e}")
+            import traceback
+            logger.error(f"Captioning error: {e}\n{traceback.format_exc()}")
             raise
 
 

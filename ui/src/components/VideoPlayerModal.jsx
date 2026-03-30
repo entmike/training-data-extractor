@@ -15,6 +15,7 @@ export default function VideoPlayerModal({ player, onClose }) {
   const sourceRef   = useRef(null)
   const rafRef      = useRef(null)
   const timeRafRef  = useRef(null)
+  const mouseDownOnOverlay = useRef(false)
   const seekingRef  = useRef(false)
 
   const { tagMap, refreshTags } = useContext(AppContext)
@@ -364,7 +365,7 @@ export default function VideoPlayerModal({ player, onClose }) {
   const tagSuggestions = Object.values(tagMap).filter(def => !tags.includes(def.tag))
 
   return (
-    <div className="video-modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+    <div className="video-modal-overlay" onMouseDown={e => { mouseDownOnOverlay.current = e.target === e.currentTarget }} onClick={e => { if (mouseDownOnOverlay.current && e.target === e.currentTarget) onClose() }}>
       <div className="video-modal-content">
         <div className="video-modal-header">
           <span className="video-modal-title">{title}</span>

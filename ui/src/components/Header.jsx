@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import TagDropdown from './TagDropdown'
 
@@ -14,12 +14,23 @@ export default function Header({
   onManageTags, onManageVideos,
 }) {
   const [dropdown, setDropdown] = useState(null) // { mode: 'include'|'exclude', pos }
-  const [minFramesDraft, setMinFramesDraft] = useState(String(minFrames))
+
+  const PRESET_FRAMES = [0, 24, 48, 72, 96, 120]
+  const isPreset = PRESET_FRAMES.includes(minFrames)
+  const [framesMode, setFramesMode] = useState(isPreset ? String(minFrames) : 'custom')
+  const [customDraft, setCustomDraft] = useState(isPreset ? '' : String(minFrames))
+
+  useEffect(() => {
+    if (PRESET_FRAMES.includes(minFrames)) {
+      setFramesMode(String(minFrames))
+    }
+  }, [minFrames])
   const includeAddRef = useRef(null)
   const excludeAddRef = useRef(null)
 
-  const pct = stats.total > 0 ? Math.round((stats.captioned / stats.total) * 100) : 0
-  const bucketedPct = stats.total > 0 ? Math.round(((stats.bucketed ?? 0) / stats.total) * 100) : 0
+  const statsReady = stats !== null
+  const pct = statsReady && stats.total > 0 ? Math.round((stats.captioned / stats.total) * 100) : 0
+  const bucketedPct = statsReady && stats.total > 0 ? Math.round(((stats.bucketed ?? 0) / stats.total) * 100) : 0
   const videoNames = allVideos.map(v => v.name ? v.name.replace(/\.[^.]+$/, '') : v)
 
   function openDropdown(mode, ref) {
@@ -50,16 +61,26 @@ export default function Header({
         <div className="stats-group">
           <div className="stats-bars">
             <div className="progress-bar-wrap">
-              <div className="progress-bar" style={{ width: `${pct}%` }} />
+              {statsReady
+                ? <div className="progress-bar" style={{ width: `${pct}%` }} />
+                : <div className="skeleton skeleton--bar" />}
             </div>
             <div className="progress-bar-wrap">
-              <div className="progress-bar progress-bar--bucketed" style={{ width: `${bucketedPct}%` }} />
+              {statsReady
+                ? <div className="progress-bar progress-bar--bucketed" style={{ width: `${bucketedPct}%` }} />
+                : <div className="skeleton skeleton--bar" />}
             </div>
           </div>
           <div className="stats-numbers">
-            <span className="stats-total">{stats.total.toLocaleString()} scenes</span>
-            <span className="stats-captioned">{stats.captioned.toLocaleString()} captioned ({pct}%)</span>
-            <span className="stats-bucketed">{(stats.bucketed ?? 0).toLocaleString()} bucketed ({bucketedPct}%)</span>
+            {statsReady ? <>
+              <span className="stats-total">{stats.total.toLocaleString()} scenes</span>
+              <span className="stats-captioned">{stats.captioned.toLocaleString()} captioned ({pct}%)</span>
+              <span className="stats-bucketed">{(stats.bucketed ?? 0).toLocaleString()} bucketed ({bucketedPct}%)</span>
+            </> : <>
+              <span className="skeleton skeleton--text" style={{ width: 80 }} />
+              <span className="skeleton skeleton--text" style={{ width: 120 }} />
+              <span className="skeleton skeleton--text" style={{ width: 100 }} />
+            </>}
           </div>
         </div>
 
@@ -133,20 +154,40 @@ export default function Header({
 
           <div className="min-frames-wrap">
             <label>Min frames:</label>
-            <input
-              type="number"
+            <select
               className="min-frames-input"
-              min="0"
-              value={minFramesDraft}
-              onChange={e => setMinFramesDraft(e.target.value)}
-              onBlur={e => {
-                const v = Math.max(0, parseInt(e.target.value) || 0)
-                setMinFramesDraft(String(v))
-                setMinFrames(v)
+              value={framesMode}
+              onChange={e => {
+                const val = e.target.value
+                setFramesMode(val)
+                if (val !== 'custom') setMinFrames(Number(val))
+                else setCustomDraft('')
               }}
-              onKeyDown={e => e.key === 'Enter' && e.target.blur()}
               disabled={isLoading}
-            />
+            >
+              {PRESET_FRAMES.map(n => (
+                <option key={n} value={String(n)}>{n === 0 ? 'Any' : `${n}f`}</option>
+              ))}
+              <option value="custom">Custom…</option>
+            </select>
+            {framesMode === 'custom' && (
+              <input
+                type="number"
+                className="min-frames-input"
+                min="0"
+                placeholder="frames"
+                value={customDraft}
+                onChange={e => setCustomDraft(e.target.value)}
+                onBlur={e => {
+                  const v = Math.max(0, parseInt(e.target.value) || 0)
+                  setCustomDraft(String(v))
+                  setMinFrames(v)
+                }}
+                onKeyDown={e => e.key === 'Enter' && e.target.blur()}
+                disabled={isLoading}
+                autoFocus
+              />
+            )}
           </div>
 
           <div className="rating-filter-wrap">
