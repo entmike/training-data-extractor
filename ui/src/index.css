@@ -446,6 +446,44 @@ html, body {
 }
 .delete-caption-btn:hover { border-color: var(--red); color: var(--red); }
 
+/* ── Detect bucket ───────────────────────────────────── */
+.detect-bucket-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+}
+.detect-bucket-btn {
+  padding: 5px 14px;
+  border-radius: 5px;
+  border: 1px solid #388e3c;
+  background: transparent;
+  color: #66bb6a;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.detect-bucket-btn:hover:not(:disabled) {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: #66bb6a;
+}
+.detect-bucket-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.detect-bucket-btn--reset {
+  border-color: #b45309;
+  color: #fbbf24;
+}
+.detect-bucket-btn--reset:hover {
+  background: rgba(251, 191, 36, 0.12);
+  border-color: #fbbf24;
+}
+.detect-bucket-error {
+  font-size: 12px;
+  color: var(--red, #f85149);
+}
+
 /* ── Tag section ─────────────────────────────────────── */
 .tag-section {
   margin-top: 10px;
@@ -834,6 +872,9 @@ html, body {
 }
 .vc-btn:hover { color: #fff; }
 .vc-btn svg { width: 20px; height: 20px; }
+.vc-btn--text { font-size: 11px; font-weight: 600; padding: 2px 6px; color: var(--text-muted); }
+.vc-btn--text:hover { color: #fff; }
+.vc-btn--text.vc-btn--active { color: #66bb6a; }
 
 .vc-time {
   flex-shrink: 0;
@@ -902,6 +943,23 @@ html, body {
   border-radius: 2px;
   cursor: ew-resize;
   box-shadow: 0 0 4px rgba(0,0,0,0.6);
+}
+
+.vc-bucket-window {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(34, 197, 94, 0.25);
+  border-left: 2px solid rgba(34, 197, 94, 0.85);
+  border-right: 2px solid rgba(34, 197, 94, 0.85);
+  border-radius: 3px;
+  cursor: grab;
+  pointer-events: all;
+  z-index: 1;
+}
+.vc-bucket-window:active {
+  cursor: grabbing;
+  background: rgba(34, 197, 94, 0.35);
 }
 
 .vc-vu {

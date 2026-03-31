@@ -1112,6 +1112,143 @@ def set_prompt(video_id: int):
     return jsonify({"video_id": video_id, "prompt": prompt or ""})
 
 
+@app.route('/api/bucket/detect/<int:scene_id>', methods=['POST'])
+def detect_bucket_for_scene(scene_id: int):
+    """Run bucket detection for a single scene and save the result."""
+    try:
+        from ltx2_dataset_builder.config import PipelineConfig
+        from ltx2_dataset_builder.buckets.detect import detect_speech_activity, find_optimal_bucket, save_buckets_to_db
+    except ImportError as e:
+        return jsonify({"error": f"Import error: {e}"}), 500
+
+    if not CONFIG_PATH.exists():
+        return jsonify({"error": "config.yaml not found"}), 500
+
+    try:
+        pipeline_config = PipelineConfig.from_yaml(CONFIG_PATH)
+    except Exception as e:
+        return jsonify({"error": f"Failed to load config: {e}"}), 500
+
+    conn = get_db_connection()
+    scene_row = conn.execute("""
+        SELECT s.*, v.path as video_path, v.fps as video_fps, v.frame_offset
+        FROM scenes s JOIN videos v ON s.video_id = v.id
+        WHERE s.id = ?
+    """, (scene_id,)).fetchone()
+    conn.close()
+
+    if not scene_row:
+        return jsonify({"error": "Scene not found"}), 404
+
+    scene = dict(scene_row)
+    video_path = Path(scene["video_path"])
+    video_fps = scene.get("video_fps") or 24.0
+    start_frame = int(scene.get("start_frame") or 0)
+    end_frame = int(scene.get("end_frame") or 0)
+
+    if start_frame == 0 and end_frame == 0:
+        return jsonify({"error": "Scene has no frame data"}), 400
+
+    try:
+        frame_numbers, speech_scores = detect_speech_activity(
+            video_path, start_frame, end_frame,
+            video_fps=video_fps,
+            target_fps=pipeline_config.bucket.base_fps
+        )
+
+        if len(frame_numbers) == 0:
+            bucket = {
+                "start_time": scene["start_time"],
+                "end_time": scene["end_time"],
+                "duration": scene["duration"],
+                "start_frame": start_frame,
+                "end_frame": end_frame,
+                "frame_count": end_frame - start_frame,
+                "speech_score": 0.0,
+                "speech_start_frame": None,
+                "speech_end_frame": None,
+                "optimal_offset_frames": 0,
+                "optimal_duration": scene["duration"],
+            }
+        else:
+            bucket = find_optimal_bucket(scene, frame_numbers, speech_scores, pipeline_config, video_fps)
+
+        if not bucket:
+            return jsonify({"error": "Scene too short for a valid bucket"}), 400
+
+        bucket["video_id"] = scene["video_id"]
+        bucket["scene_id"] = scene_id
+        save_buckets_to_db(scene["video_id"], [bucket], pipeline_config)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    # Return the saved bucket row
+    conn = get_db_connection()
+    saved = conn.execute("SELECT * FROM buckets WHERE scene_id = ?", (scene_id,)).fetchone()
+    conn.close()
+
+    if saved:
+        return jsonify({"bucket": dict(saved)})
+    return jsonify({"error": "Bucket was not saved"}), 500
+
+
+@app.route('/api/bucket/<int:scene_id>', methods=['PUT'])
+def update_bucket_offset(scene_id: int):
+    """Update the bucket window offset (in frames from scene start)."""
+    data = request.get_json()
+    if data is None or 'offset_frames' not in data:
+        return jsonify({"error": "Missing offset_frames"}), 400
+
+    offset_frames = int(data['offset_frames'])
+
+    conn = get_db_connection()
+    bucket = conn.execute("SELECT * FROM buckets WHERE scene_id = ?", (scene_id,)).fetchone()
+    if not bucket:
+        conn.close()
+        return jsonify({"error": "Bucket not found"}), 404
+
+    video = conn.execute("""
+        SELECT v.fps, v.frame_offset FROM videos v
+        JOIN scenes s ON s.video_id = v.id WHERE s.id = ?
+    """, (scene_id,)).fetchone()
+    scene = conn.execute("SELECT start_frame FROM scenes WHERE id = ?", (scene_id,)).fetchone()
+    conn.close()
+
+    if not video or not scene:
+        return jsonify({"error": "Scene/video not found"}), 404
+
+    fps = video["fps"] or 24.0
+    scene_start_frame = scene["start_frame"]
+    frame_count = bucket["frame_count"]
+
+    new_start_frame = scene_start_frame + offset_frames
+    new_end_frame = new_start_frame + frame_count
+    new_start_time = new_start_frame / fps
+    new_end_time = new_end_frame / fps
+    new_duration = frame_count / fps
+
+    conn = get_db_connection()
+    conn.execute("""
+        UPDATE buckets SET
+            optimal_offset_frames = ?,
+            start_frame = ?,
+            end_frame = ?,
+            start_time = ?,
+            end_time = ?,
+            duration = ?,
+            optimal_duration = ?,
+            bucket_timestamp = CURRENT_TIMESTAMP
+        WHERE scene_id = ?
+    """, (offset_frames, new_start_frame, new_end_frame,
+          new_start_time, new_end_time, new_duration, new_duration, scene_id))
+    conn.commit()
+    saved = conn.execute("SELECT * FROM buckets WHERE scene_id = ?", (scene_id,)).fetchone()
+    conn.close()
+
+    return jsonify({"bucket": dict(saved)})
+
+
 @app.route('/api/bucket/<int:scene_id>')
 def get_bucket_data(scene_id: int):
     """Get bucket data for a scene."""

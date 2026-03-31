@@ -182,17 +182,30 @@ def find_optimal_bucket(
     if scene_frame_count < min_frames:
         return None
     
-    # If scene is shorter than target, use entire scene (rounded down to largest multiple of 24)
-    if scene_frame_count <= target_frames:
-        # Round down to largest multiple of 24 that fits in scene
+    # Calculate max_frames now so we can use it in the short-scene check
+    max_frames = config.bucket.max_frames
+    max_frames = (max_frames // 24) * 24
+
+    # If scene fits within a single max-sized window, use the full scene
+    # (covers both scene <= target AND target < scene < max, where the sliding
+    #  window would never fire because current_offset + max_frames > scene_frame_count)
+    if scene_frame_count <= max_frames:
         bucket_frame_count = (scene_frame_count // 24) * 24
-        
-        # Skip if scene is too short (less than 24 frames)
+
         if bucket_frame_count < 24:
             return None
-            
+
         bucket_duration = bucket_frame_count / video_fps
-        
+
+        # Compute speech boundaries from scores
+        speech_start = speech_end = None
+        if len(speech_scores) > 0:
+            speech_mask = speech_scores >= config.bucket.min_speech_score
+            if np.any(speech_mask):
+                idxs = np.where(speech_mask)[0]
+                speech_start = int(frame_numbers[idxs[0]]) if len(frame_numbers) > idxs[0] else None
+                speech_end   = int(frame_numbers[idxs[-1]]) if len(frame_numbers) > idxs[-1] else None
+
         return {
             "start_time": scene["start_time"],
             "end_time": scene["start_time"] + bucket_duration,
@@ -200,13 +213,13 @@ def find_optimal_bucket(
             "start_frame": scene_start_frame,
             "end_frame": scene_start_frame + bucket_frame_count,
             "frame_count": bucket_frame_count,
-            "speech_score": float(np.mean(speech_scores[:bucket_frame_count])) if bucket_frame_count > 0 and len(speech_scores) > 0 else 0.0,
-            "speech_start_frame": None,
-            "speech_end_frame": None,
+            "speech_score": float(np.mean(speech_scores)) if len(speech_scores) > 0 else 0.0,
+            "speech_start_frame": speech_start,
+            "speech_end_frame": speech_end,
             "optimal_offset_frames": 0,
-            "optimal_duration": bucket_duration
+            "optimal_duration": bucket_duration,
         }
-    
+
     # Find optimal window using sliding window approach (in frames)
     best_score = -1
     best_bucket = None
@@ -214,9 +227,6 @@ def find_optimal_bucket(
     best_speech_end_frame = None
     
     # Calculate max offset to ensure we can fit max_frames
-    max_frames = config.bucket.max_frames
-    max_frames = (max_frames // 24) * 24
-    
     # Slide window across scene (step by base_fps frames = 1 second steps)
     step_size = base_fps
     current_offset = 0
@@ -253,14 +263,10 @@ def find_optimal_bucket(
         
         current_offset += step_size
     
-    # Calculate max_frames to use for the final bucket
-    max_frames_final = config.bucket.max_frames
-    max_frames_final = (max_frames_final // 24) * 24
-    
     if best_bucket is None and best_score > 0:
         # Calculate final bucket using max_frames
         bucket_start_frame = scene_start_frame + (current_offset - step_size)
-        bucket_end_frame = min(bucket_start_frame + max_frames_final, scene_end_frame)
+        bucket_end_frame = min(bucket_start_frame + max_frames, scene_end_frame)
         bucket_frame_count = bucket_end_frame - bucket_start_frame
         
         # Round down to largest multiple of 24 that fits

@@ -22,6 +22,9 @@ ltx2-build --config config.yaml --list-videos
 
 # Set frame offset for a video (codec timing compensation)
 ltx2-build --config config.yaml --set-frame-offset 2 --video deadpool-and-wolverine.mkv
+
+# Run captions in a loop (auto-restarts on crash, exits cleanly when all scenes are done)
+./run_captions_loop.sh > /tmp/captions_loop.log 2>&1 &
 ```
 
 ## Pipeline steps (in order)
