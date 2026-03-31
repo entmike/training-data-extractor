@@ -10,17 +10,7 @@ from typing import Optional
 from flask import Flask, send_from_directory, request, jsonify, Response, send_file
 import yaml
 
-try:
-    import cv2
-    HAS_OPENCV = True
-except ImportError:
-    HAS_OPENCV = False
-
-try:
-    from PIL import Image
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
+from ltx2_dataset_builder.utils.preview import generate_scene_preview  # noqa: E402
 
 app = Flask(__name__)
 
@@ -129,99 +119,6 @@ try:
 except Exception:
     pass
 
-
-def generate_scene_preview(
-    video_path: Path,
-    start_frame: int,
-    end_frame: int,
-    fps: float = 24.0,
-    frame_offset: int = 0,
-    frame_width: int = None
-) -> Optional[bytes]:
-    """
-    Generate a 3-frame preview image (start, middle, end) for a scene.
-    
-    This is reusable preview generation logic that can be called from:
-    - Web server for on-the-fly preview generation
-    - CLI for batch preview generation
-    
-    Args:
-        video_path: Path to video file
-        start_frame: First frame of scene (inclusive)
-        end_frame: Last frame of scene (exclusive - first frame of next scene)
-        fps: Video frame rate
-        frame_offset: Frame offset compensation
-        frame_width: Width of each frame in the composite
-        
-    Returns:
-        PNG image bytes or None on failure
-    """
-    if not HAS_OPENCV or not HAS_PIL:
-        return None
-    
-    if not video_path.exists():
-        return None
-    
-    # Apply frame offset
-    start_frame = max(0, start_frame + frame_offset)
-    end_frame = end_frame + frame_offset
-    
-    # Calculate the three frames to extract
-    first_frame = start_frame + 1
-    last_frame = max(start_frame, end_frame - 1)
-    middle_frame = first_frame + (last_frame - first_frame) // 2
-    
-    frames_to_get = [first_frame, middle_frame, last_frame]
-    extracted_frames = []
-    
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        return None
-    
-    try:
-        for frame_num in frames_to_get:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
-            ret, frame = cap.read()
-            
-            if ret:
-                if frame_width is not None:
-                    h, w = frame.shape[:2]
-                    new_h = int(h * frame_width / w)
-                    frame = cv2.resize(frame, (frame_width, new_h), interpolation=cv2.INTER_LANCZOS4)
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                extracted_frames.append(Image.fromarray(frame))
-            else:
-                extracted_frames.append(None)
-    finally:
-        cap.release()
-    
-    if None in extracted_frames or len(extracted_frames) != 3:
-        return None
-    
-    # Resize all frames to same height
-    target_height = min(f.height for f in extracted_frames)
-    resized_frames = []
-    for f in extracted_frames:
-        if f.height != target_height:
-            ratio = target_height / f.height
-            new_size = (int(f.width * ratio), target_height)
-            f = f.resize(new_size, Image.LANCZOS)
-        resized_frames.append(f)
-    
-    # Combine horizontally
-    total_width = sum(f.width for f in resized_frames)
-    combined = Image.new('RGB', (total_width, target_height))
-    
-    x_offset = 0
-    for f in resized_frames:
-        combined.paste(f, (x_offset, 0))
-        x_offset += f.width
-    
-    # Convert to JPEG bytes
-    buffer = io.BytesIO()
-    combined.save(buffer, format='JPEG', quality=85)
-    buffer.seek(0)
-    return buffer.getvalue()
 
 
 def find_preview_for_scene(video_name: str, scene_idx: int, start_frame: int = None) -> str | None:

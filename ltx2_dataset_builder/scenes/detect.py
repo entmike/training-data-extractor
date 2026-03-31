@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from ..config import PipelineConfig, SceneConfig
 from ..utils.io import Database
+from ..utils.preview import write_scene_thumbnail
 from .blurhash import _compute_blurhash
 
 logger = logging.getLogger(__name__)
@@ -157,6 +158,7 @@ def detect_and_cache_scenes(
     fps          = (video_info.get('fps') or 24.0) if video_info else 24.0
     frame_offset = (video_info.get('frame_offset') or 0) if video_info else 0
     workers = max(1, config.num_workers)
+    previews_dir = config.db_path.parent / "previews"
 
     def _mid_time(scene: Dict) -> float:
         if scene.get('start_frame') is not None and scene.get('end_frame') is not None:
@@ -181,6 +183,13 @@ def detect_and_cache_scenes(
             for scene_id, scene in zip(scene_ids, scenes):
                 fut = pool.submit(_compute_blurhash, scene_id, video_path, _mid_time(scene))
                 fut.add_done_callback(_save_blurhash)
+                pool.submit(
+                    write_scene_thumbnail,
+                    scene_id, video_path,
+                    scene.get('start_frame', int(scene['start_time'] * fps)),
+                    scene.get('end_frame',   int(scene['end_time']   * fps)),
+                    fps, frame_offset, previews_dir,
+                )
 
         detect_scenes_in_video(
             video_path, config.scene,
