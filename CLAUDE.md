@@ -2,6 +2,10 @@
 
 Extracts character LoRA training data from movie files for LTX-2 video diffusion model training.
 
+## Git-specific Behavior
+
+Do NOT mention co-authored by anything.
+
 ## Environment
 
 ```bash
