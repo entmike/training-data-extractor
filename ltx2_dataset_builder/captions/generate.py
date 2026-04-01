@@ -8,6 +8,7 @@ import logging
 import subprocess
 import tempfile
 import os
+import threading
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -137,10 +138,17 @@ def _build_caption_prompt(
     tag_definitions: Optional[Dict[str, str]],
 ) -> str:
     """Build the full prompt string that will be (or was) sent to Qwen."""
-    caption_prompt = video_prompt if video_prompt else (
-        "Describe this video scene in one detailed sentence, including both the visuals "
-        "and any audio (dialogue, music, sound effects). Focus on actions, subjects, "
-        "setting, and what is being said or heard."
+    caption_prompt = (video_prompt.strip() if video_prompt else None) or (
+        """
+        # Instructions
+        
+        - Describe this video scene in 2 or 3 detailed sentences, including both the visuals and any audio (dialogue, music, sound effects). Focus on actions, subjects, setting, and what is being said or heard.
+        - Do not provide subjective commentary, only what you see.  Also caption any spoken dialogue verbatim.  If no dialogue is present, then do not mention any lack of dialogue.
+        - Identify any notable subjects by their name given in the details.  Do not include their identifying information or features when refering to them, only their name.  If no notable subjects are present, then do not mention any lack of notable subjects.
+        - If the scene is silent, just describe the visuals.
+        - If the scene is blurry or dark, do your best to describe what you can make out, but note the poor quality in your caption.
+        - If the scene contains text (e.g. a sign, menu, or caption), include that text in your description if it's legible
+        """
     )
     if tag_definitions:
         lines = "\n".join(
@@ -148,10 +156,111 @@ def _build_caption_prompt(
             for name, desc in tag_definitions.items()
         )
         caption_prompt += (
-            "\n\nIf any of the following subjects are identifiable in this scene, "
-            "refer to them by name in your description:\n" + lines
+            "\n\nNotable Subjects:\n" + lines
         )
     return caption_prompt
+
+
+def prepare_scene_inputs(
+    video_path: Path,
+    start_time: float,
+    end_time: float,
+    frame_offset: int = 0,
+    fps: float = 24.0,
+    start_frame: Optional[int] = None,
+    end_frame: Optional[int] = None,
+    prompt: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    tag_definitions: Optional[Dict[str, str]] = None,
+):
+    """
+    CPU-bound preparation: extract clip with FFmpeg, decode frames/audio,
+    tokenize. Returns (inputs_dict, tmpdir, caption_prompt) where tmpdir must
+    be kept alive until inference is done.
+
+    Runs on CPU so it can overlap with GPU inference for the previous scene.
+    """
+    import json
+    from qwen_omni_utils import process_mm_info
+
+    _, processor = load_qwen_model()
+
+    if start_frame is not None and end_frame is not None and fps > 0:
+        adjusted_start = max(0.0, (start_frame + frame_offset + 1) / fps)
+        adjusted_end = (end_frame + frame_offset) / fps
+    else:
+        time_offset = frame_offset / fps if fps > 0 else 0
+        adjusted_start = max(0, start_time + time_offset)
+        adjusted_end = end_time + time_offset
+
+    caption_prompt = _build_caption_prompt(prompt, tag_definitions)
+
+    tmpdir = tempfile.TemporaryDirectory()
+    clip_path = Path(tmpdir.name) / "clip.mp4"
+
+    if not extract_scene_clip(video_path, adjusted_start, adjusted_end, clip_path):
+        tmpdir.cleanup()
+        raise RuntimeError(f"Failed to extract clip from {video_path}")
+
+    conversation = []
+    if tags:
+        conversation.append({
+            "role": "system",
+            "content": json.dumps({"tags": tags}),
+        })
+    conversation.append({
+        "role": "user",
+        "content": [
+            {"type": "video", "video": str(clip_path)},
+            {"type": "text", "text": caption_prompt},
+        ],
+    })
+
+    text = processor.apply_chat_template(
+        conversation, add_generation_prompt=True, tokenize=False
+    )
+    audios, images, videos = process_mm_info(conversation, use_audio_in_video=True)
+    inputs = processor(
+        text=text,
+        audio=audios,
+        images=images,
+        videos=videos,
+        return_tensors="pt",
+        padding=True,
+        use_audio_in_video=True,
+    )
+
+    return inputs, tmpdir, caption_prompt
+
+
+def run_scene_inference(inputs) -> str:
+    """
+    GPU-bound inference step. Takes pre-prepared inputs, returns caption string.
+    """
+    import torch
+
+    model, processor = load_qwen_model()
+    inputs_gpu = inputs.to(model.device).to(model.dtype)
+
+    with torch.no_grad():
+        text_ids, _ = model.generate(
+            **inputs_gpu,
+            use_audio_in_video=True,
+            max_new_tokens=150,
+            do_sample=False,
+        )
+
+    response = processor.batch_decode(
+        text_ids.sequences[:, inputs_gpu["input_ids"].shape[1]:],
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )[0].strip()
+
+    del inputs_gpu
+    torch.cuda.empty_cache()
+
+    logger.info(f"[RESPONSE]\n{response}")
+    return response
 
 
 def caption_scene_with_qwen(
@@ -165,114 +274,22 @@ def caption_scene_with_qwen(
     prompt: Optional[str] = None,
     tags: Optional[List[str]] = None,
     tag_definitions: Optional[Dict[str, str]] = None,
-) -> str:
+) -> Tuple[str, str]:
     """
-    Generate a caption for a scene using Qwen3 Omni.
-
-    Args:
-        video_path: Path to video file
-        start_time: Scene start time in seconds
-        end_time: Scene end time in seconds
-        frame_offset: Frame offset for codec timing compensation
-        fps: Video frame rate
-        start_frame: Scene start frame (preferred over start_time for precision)
-        end_frame: Scene end frame (preferred over end_time for precision)
-        tags: Optional list of scene tags to include as context
-        tag_definitions: Optional mapping of tag name -> description; tags with
-            descriptions are appended to the prompt so the VLM knows to identify
-            those subjects by name.
-
-    Returns:
-        Tuple of (generated caption string, full prompt string used)
+    Convenience wrapper: prepare inputs then run inference.
+    Used when pipelining is not in effect.
     """
-    import torch
-
-    model, processor = load_qwen_model()
-
-    # Derive timestamps from frame numbers if available (matches web preview logic)
-    # +1 on start_frame compensates for ffmpeg fast-seek landing one frame early
-    if start_frame is not None and end_frame is not None and fps > 0:
-        adjusted_start = max(0.0, (start_frame + frame_offset + 1) / fps)
-        adjusted_end = (end_frame + frame_offset) / fps
-    else:
-        time_offset = frame_offset / fps if fps > 0 else 0
-        adjusted_start = max(0, start_time + time_offset)
-        adjusted_end = end_time + time_offset
-
-    caption_prompt = _build_caption_prompt(prompt, tag_definitions)
-    logger.info(f"[PROMPT]\n{caption_prompt}")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Extract clip for captioning
-        clip_path = Path(tmpdir) / "clip.mp4"
-
-        if not extract_scene_clip(video_path, adjusted_start, adjusted_end, clip_path):
-            logger.warning(f"Failed to extract clip from {video_path}")
-            return "", caption_prompt
-
-        conversation = []
-        if tags:
-            import json
-            conversation.append({
-                "role": "system",
-                "content": json.dumps({"tags": tags}),
-            })
-        conversation.append({
-            "role": "user",
-            "content": [
-                {"type": "video", "video": str(clip_path)},
-                {"type": "text", "text": caption_prompt}
-            ],
-        })
-        
-        try:
-            from qwen_omni_utils import process_mm_info
-            
-            # Process the conversation
-            text = processor.apply_chat_template(
-                conversation, 
-                add_generation_prompt=True, 
-                tokenize=False
-            )
-            
-            # Process multimodal info (include audio from video)
-            audios, images, videos = process_mm_info(conversation, use_audio_in_video=True)
-            
-            inputs = processor(
-                text=text,
-                audio=audios,
-                images=images,
-                videos=videos,
-                return_tensors="pt",
-                padding=True,
-                use_audio_in_video=True
-            )
-            inputs = inputs.to(model.device).to(model.dtype)
-            
-            # Generate caption (text only output, but use audio input)
-            with torch.no_grad():
-                text_ids, _ = model.generate(
-                    **inputs,
-                    use_audio_in_video=True,
-                    max_new_tokens=150,
-                    do_sample=False,
-                )
-            
-            # Decode response
-            response = processor.batch_decode(
-                text_ids.sequences[:, inputs["input_ids"].shape[1]:],
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False
-            )[0].strip()
-
-            logger.info(f"[RESPONSE]\n{response}")
-
-            return response, caption_prompt
-
-        except Exception as e:
-            import traceback
-            logger.error(f"Captioning error: {e}\n{traceback.format_exc()}")
-            raise
+    inputs, tmpdir, caption_prompt = prepare_scene_inputs(
+        video_path, start_time, end_time,
+        frame_offset=frame_offset, fps=fps,
+        start_frame=start_frame, end_frame=end_frame,
+        prompt=prompt, tags=tags, tag_definitions=tag_definitions,
+    )
+    try:
+        response = run_scene_inference(inputs)
+    finally:
+        tmpdir.cleanup()
+    return response, caption_prompt
 
 
 def _pick_next_scene(db: Database, video_id: Optional[int]) -> Optional[Dict[str, Any]]:
@@ -371,6 +388,44 @@ def _retrofit_caption_metadata(db: Database) -> None:
     logger.info("Retrofit complete.")
 
 
+def _get_scene_prep_args(db: Database, scene: Dict[str, Any]):
+    """Gather everything needed to call prepare_scene_inputs for a scene."""
+    video = db.get_video_by_id(scene["video_id"])
+    if not video:
+        return None
+    video_path = Path(video["path"])
+    fps = video.get("fps", 24.0)
+    frame_offset = db.get_frame_offset(scene["video_id"])
+    video_prompt = video.get("prompt") or None
+    with db._connection() as conn:
+        tag_rows = conn.execute(
+            """SELECT st.tag, COALESCE(td.description, '') as description,
+                      COALESCE(td.display_name, '') as display_name
+               FROM scene_tags st
+               LEFT JOIN tag_definitions td ON td.tag = st.tag
+               WHERE st.scene_id = ?
+               ORDER BY st.created_at, st.tag""",
+            (scene["id"],)
+        ).fetchall()
+    scene_tags = [r["display_name"] or r["tag"] for r in tag_rows] if tag_rows else None
+    scene_tag_definitions = (
+        {(r["display_name"] or r["tag"]): r["description"] for r in tag_rows if r["description"]}
+        if tag_rows else None
+    )
+    return dict(
+        video_path=video_path,
+        start_time=scene["start_time"],
+        end_time=scene["end_time"],
+        frame_offset=frame_offset,
+        fps=fps,
+        start_frame=scene.get("start_frame"),
+        end_frame=scene.get("end_frame"),
+        prompt=video_prompt,
+        tags=scene_tags,
+        tag_definitions=scene_tag_definitions,
+    )
+
+
 def caption_all_scenes(
     config: PipelineConfig,
     video_id: Optional[int] = None
@@ -383,6 +438,10 @@ def caption_all_scenes(
     Tagged scenes (ordered by tag count descending) are captioned before
     untagged ones.
 
+    Preprocessing (FFmpeg extraction, frame/audio decoding, tokenisation) runs
+    in a background thread overlapping with GPU inference for the previous scene,
+    eliminating the CPU idle gap between scenes.
+
     Args:
         config: Pipeline configuration
         video_id: Optional video ID to filter by
@@ -394,90 +453,118 @@ def caption_all_scenes(
     _retrofit_caption_metadata(db)
     count = 0
 
-    while True:
-        scene = _pick_next_scene(db, video_id)
-        if scene is None:
-            break
+    # Prefetch state: background thread preparing next scene's inputs
+    prefetch_result = {}   # keys: inputs, tmpdir, prompt, error
+    prefetch_thread = None
 
-        video = db.get_video_by_id(scene["video_id"])
-        if not video:
-            # Shouldn't happen, but skip to avoid infinite loop
-            logger.warning(f"No video found for scene {scene['id']}, skipping")
-            break
-
-        video_path = Path(video["path"])
-        fps = video.get("fps", 24.0)
-        frame_offset = db.get_frame_offset(scene["video_id"])
-        video_prompt = video.get("prompt") or None
-
-        tag_count = scene.get("tag_count", 0)
+    def _launch_prefetch(scene):
+        """Start background prep for `scene`; result lands in prefetch_result."""
+        prefetch_result.clear()
+        args = _get_scene_prep_args(db, scene)
+        if args is None:
+            prefetch_result["error"] = RuntimeError(f"No video for scene {scene['id']}")
+            return
         duration = scene["end_time"] - scene["start_time"]
+        if duration > 60:
+            prefetch_result["skip"] = True
+            return
+
+        def _run():
+            try:
+                inputs, tmpdir, prompt = prepare_scene_inputs(**args)
+                prefetch_result["inputs"] = inputs
+                prefetch_result["tmpdir"] = tmpdir
+                prefetch_result["prompt"] = prompt
+            except Exception as exc:
+                prefetch_result["error"] = exc
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        return t
+
+    # Bootstrap: pick and start prefetching the first scene
+    scene = _pick_next_scene(db, video_id)
+    if scene is None:
+        logger.info("No scenes to caption")
+        return 0
+
+    prefetch_thread = _launch_prefetch(scene)
+
+    while True:
+        duration = scene["end_time"] - scene["start_time"]
+        tag_count = scene.get("tag_count", 0)
+        video_path_stem = Path(db.get_video_by_id(scene["video_id"])["path"]).stem
         logger.info(
             f"Captioning scene {scene['id']} ({scene['start_time']:.1f}s-{scene['end_time']:.1f}s,"
-            f" tags={tag_count}) from {video_path.stem}"
+            f" tags={tag_count}) from {video_path_stem}"
         )
 
         if duration > 60:
             logger.warning(f"Scene {scene['id']} is {duration:.1f}s (>60s), skipping")
             db.update_scene_caption(scene["id"], "__skip__")
+            # Prefetch is already marked skip; pick the next one
+            scene = _pick_next_scene(db, video_id)
+            if scene is None:
+                break
+            prefetch_thread = _launch_prefetch(scene)
             continue
 
-        # Fetch scene tags and their descriptions/display names to pass as context
-        with db._connection() as conn:
-            tag_rows = conn.execute(
-                """SELECT st.tag, COALESCE(td.description, '') as description,
-                          COALESCE(td.display_name, '') as display_name
-                   FROM scene_tags st
-                   LEFT JOIN tag_definitions td ON td.tag = st.tag
-                   WHERE st.scene_id = ?
-                   ORDER BY st.created_at, st.tag""",
-                (scene["id"],)
-            ).fetchall()
-        # Use display_name everywhere the model sees tag names; fall back to tag key
-        scene_tags = [r["display_name"] or r["tag"] for r in tag_rows] if tag_rows else None
-        scene_tag_definitions = (
-            {(r["display_name"] or r["tag"]): r["description"] for r in tag_rows if r["description"]}
-            if tag_rows else None
-        )
+        # Wait for prefetch to finish (usually already done while GPU was busy)
+        if prefetch_thread is not None:
+            prefetch_thread.join()
 
-        started_at = _now_utc()
-        try:
-            caption, prompt_used = caption_scene_with_qwen(
-                video_path,
-                scene["start_time"],
-                scene["end_time"],
-                frame_offset=frame_offset,
-                fps=fps,
-                start_frame=scene.get("start_frame"),
-                end_frame=scene.get("end_frame"),
-                prompt=video_prompt,
-                tags=scene_tags,
-                tag_definitions=scene_tag_definitions,
+        if "error" in prefetch_result:
+            logger.error(f"Prefetch failed for scene {scene['id']}: {prefetch_result['error']}")
+            db.update_scene_caption(
+                scene["id"], f"__error__: {prefetch_result['error']}",
+                started_at=_now_utc(), finished_at=_now_utc()
             )
+            break
+
+        inputs    = prefetch_result["inputs"]
+        tmpdir    = prefetch_result["tmpdir"]
+        prompt_used = prefetch_result["prompt"]
+        started_at = _now_utc()
+
+        try:
+            # ── GPU inference ──────────────────────────────────────────────────
+            # Immediately after kicking off inference we write nothing to DB yet,
+            # so _pick_next_scene will still return this scene — that's fine because
+            # we don't start the next prefetch until after we write the caption below.
+            caption = run_scene_inference(inputs)
             finished_at = _now_utc()
-
-            if caption:
-                db.update_scene_caption(
-                    scene["id"], caption,
-                    started_at=started_at, finished_at=finished_at, prompt=prompt_used
-                )
-                count += 1
-                print(f"\n[Scene {scene['id']}] {scene['start_time']:.1f}s-{scene['end_time']:.1f}s")
-                print(f"  {caption}")
-            else:
-                logger.warning(f"Empty caption for scene {scene['id']}, skipping")
-                db.update_scene_caption(
-                    scene["id"], "__empty__",
-                    started_at=started_at, finished_at=_now_utc(), prompt=prompt_used
-                )
-
         except Exception as e:
             logger.error(f"Failed to caption scene {scene['id']}: {e}")
             db.update_scene_caption(
                 scene["id"], f"__error__: {e}",
                 started_at=started_at, finished_at=_now_utc()
             )
+            tmpdir.cleanup()
             break
+        finally:
+            tmpdir.cleanup()
+
+        if caption:
+            db.update_scene_caption(
+                scene["id"], caption,
+                started_at=started_at, finished_at=finished_at, prompt=prompt_used
+            )
+            count += 1
+            print(f"\n[Scene {scene['id']}] {scene['start_time']:.1f}s-{scene['end_time']:.1f}s")
+            print(f"  {caption}")
+        else:
+            logger.warning(f"Empty caption for scene {scene['id']}")
+            db.update_scene_caption(
+                scene["id"], "__empty__",
+                started_at=started_at, finished_at=_now_utc(), prompt=prompt_used
+            )
+
+        # Caption written → pick next scene and kick off prefetch immediately,
+        # so preprocessing runs while the caller does any bookkeeping.
+        scene = _pick_next_scene(db, video_id)
+        if scene is None:
+            break
+        prefetch_thread = _launch_prefetch(scene)
 
     logger.info(f"Captioned {count} scenes")
     return count
