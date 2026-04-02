@@ -88,6 +88,12 @@ class Database:
             except:
                 pass
 
+            # Add rating column for scene quality prioritization
+            try:
+                conn.execute("ALTER TABLE scenes ADD COLUMN rating INTEGER DEFAULT 2")
+            except:
+                pass
+
             # Mark scenes ineligible for bucket detection (too short, no valid window)
             try:
                 conn.execute("ALTER TABLE scenes ADD COLUMN bucket_ineligible INTEGER DEFAULT 0")
