@@ -835,6 +835,18 @@ html, body {
 .save-btn:hover { background: var(--green); color: #fff; }
 .save-btn:disabled { opacity: .4; cursor: default; }
 
+.video-name-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 8px 10px;
+  outline: none;
+}
+.video-name-input:focus { border-color: var(--blue); }
+
 /* ── Custom video controls ───────────────────────────── */
 .modal-video-wrap {
   background: #000;

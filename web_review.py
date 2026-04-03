@@ -486,8 +486,8 @@ def get_scenes():
         conditions.append("EXISTS (SELECT 1 FROM buckets WHERE scene_id = s.id)")
 
     if video_filter:
-        conditions.append("(v.path LIKE ? OR v.path LIKE ?)")
-        params.extend([f'%/{video_filter}.%', f'{video_filter}.%'])
+        conditions.append("v.id = ?")
+        params.append(int(video_filter))
 
     # Tag include filter
     if include_tags:
@@ -682,9 +682,9 @@ def get_all_tags():
                JOIN scenes s ON st.scene_id = s.id
                JOIN videos v ON s.video_id = v.id
                LEFT JOIN tag_definitions td ON td.tag = st.tag
-               WHERE (v.path LIKE ? OR v.path LIKE ?)
+               WHERE v.id = ?
                ORDER BY st.tag""",
-            [f'%/{video_filter}.%', f'{video_filter}.%']
+            [int(video_filter)]
         ).fetchall()
     else:
         rows = conn.execute(
@@ -961,9 +961,11 @@ def get_videos():
                FROM scenes WHERE video_id = ?""",
             (v["id"],)
         ).fetchone()
+        # Use custom name if set, otherwise fallback to filename
+        display_name = v.get("name") or Path(v["path"]).name
         result.append({
             "id": v["id"],
-            "name": Path(v["path"]).name,
+            "name": display_name,
             "path": v["path"],
             "hash": v["hash"],
             "duration": v.get("duration"),
@@ -1007,6 +1009,20 @@ def set_prompt(video_id: int):
     conn.commit()
     conn.close()
     return jsonify({"video_id": video_id, "prompt": prompt or ""})
+
+
+@app.route('/api/videos/<int:video_id>/name', methods=['PUT'])
+def set_video_name(video_id: int):
+    """Set the user-friendly name for a video."""
+    data = request.get_json()
+    if data is None or 'name' not in data:
+        return jsonify({"error": "Missing name field"}), 400
+    name = data["name"].strip() or None
+    conn = get_db_connection()
+    conn.execute("UPDATE videos SET name = ? WHERE id = ?", (name, video_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"video_id": video_id, "name": name or ""})
 
 
 @app.route('/api/bucket/detect/<int:scene_id>', methods=['POST'])

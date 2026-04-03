@@ -51,7 +51,13 @@ export default function ManageVideosModal({ onClose }) {
               ))}
             </select>
 
-            {selected && <VideoRow key={selected.id} video={selected} />}
+            {selected && (
+              <VideoRow
+                key={selected.id}
+                video={selected}
+                onNameSaved={name => setVideos(vs => vs.map(v => v.id === selected.id ? { ...v, name } : v))}
+              />
+            )}
           </>
         )}
       </div>
@@ -59,19 +65,29 @@ export default function ManageVideosModal({ onClose }) {
   )
 }
 
-function VideoRow({ video }) {
+function VideoRow({ video, onNameSaved }) {
+  const [videoName, setVideoName] = useState(video.name || '')
   const [prompt, setPrompt] = useState(video.prompt || '')
-  const [saved, setSaved] = useState(video.prompt || '')
+  const [saved, setSaved] = useState({
+    videoName: video.name || '',
+    prompt: video.prompt || ''
+  })
   const [status, setStatus] = useState('')
 
   // Reset when video changes
   useEffect(() => {
+    setVideoName(video.name || '')
     setPrompt(video.prompt || '')
-    setSaved(video.prompt || '')
+    setSaved({
+      videoName: video.name || '',
+      prompt: video.prompt || ''
+    })
     setStatus('')
   }, [video.id])
 
-  const isDirty = prompt !== saved
+  const isNameDirty = videoName !== saved.videoName
+  const isPromptDirty = prompt !== saved.prompt
+  const isDirty = isNameDirty || isPromptDirty
   const pct = video.scene_count > 0 ? Math.round((video.captioned / video.scene_count) * 100) : 0
   const meta = [
     video.width && video.height ? `${video.width}×${video.height}` : null,
@@ -88,7 +104,25 @@ function VideoRow({ video }) {
         body: JSON.stringify({ prompt }),
       })
       if (!r.ok) throw new Error()
-      setSaved(prompt)
+      setSaved(s => ({ ...s, prompt }))
+      setStatus('✓ Saved')
+      setTimeout(() => setStatus(''), 3000)
+    } catch {
+      setStatus('Error')
+    }
+  }
+
+  async function saveVideoName() {
+    setStatus('Saving…')
+    try {
+      const r = await fetch(`/api/videos/${video.id}/name`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: videoName }),
+      })
+      if (!r.ok) throw new Error()
+      setSaved(s => ({ ...s, videoName }))
+      onNameSaved(videoName)
       setStatus('✓ Saved')
       setTimeout(() => setStatus(''), 3000)
     } catch {
@@ -103,7 +137,22 @@ function VideoRow({ video }) {
         <span className="video-row-stats">{video.captioned}/{video.scene_count} scenes ({pct}%)</span>
       </div>
 
-      <div className="video-prompt-label">Captioning prompt</div>
+      <div className="video-prompt-label">File</div>
+      <input className="video-name-input" value={video.path} readOnly />
+
+      <div className="video-prompt-label" style={{ marginTop: '16px' }}>Video name</div>
+      <input
+        className="video-name-input"
+        value={videoName}
+        placeholder="User-friendly name for this video"
+        onChange={e => setVideoName(e.target.value)}
+      />
+      <div className="video-prompt-footer">
+        <span className="video-prompt-status">{status}</span>
+        <button className="save-btn" disabled={!isNameDirty} onClick={saveVideoName}>Save</button>
+      </div>
+
+      <div className="video-prompt-label" style={{ marginTop: '20px' }}>Captioning prompt</div>
       <textarea
         className="video-prompt-textarea"
         value={prompt}
@@ -112,7 +161,7 @@ function VideoRow({ video }) {
       />
       <div className="video-prompt-footer">
         <span className="video-prompt-status">{status}</span>
-        <button className="save-btn" disabled={!isDirty} onClick={savePrompt}>Save</button>
+        <button className="save-btn" disabled={!isPromptDirty} onClick={savePrompt}>Save</button>
       </div>
     </div>
   )

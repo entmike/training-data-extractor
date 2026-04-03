@@ -31,7 +31,7 @@ export default function Header({
   const statsReady = stats !== null
   const pct = statsReady && stats.total > 0 ? Math.round((stats.captioned / stats.total) * 100) : 0
   const bucketedPct = statsReady && stats.total > 0 ? Math.round(((stats.bucketed ?? 0) / stats.total) * 100) : 0
-  const videoNames = allVideos.map(v => v.name ? v.name.replace(/\.[^.]+$/, '') : v)
+  const videoLabel = v => (v.name || v.path).replace(/\.[^.]+$/, '').replace(/.*\//, '')
 
   function openDropdown(mode, ref) {
     const rect = ref.current.getBoundingClientRect()
@@ -106,8 +106,8 @@ export default function Header({
           disabled={isLoading}
         >
           <option value="">All videos</option>
-          {videoNames.map(name => (
-            <option key={name} value={name}>{name}</option>
+          {allVideos.map(v => (
+            <option key={v.id} value={v.id}>{videoLabel(v)}</option>
           ))}
         </select>
 
