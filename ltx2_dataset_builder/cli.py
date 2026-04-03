@@ -323,12 +323,19 @@ Examples:
     parser.add_argument(
         "--video",
         type=str,
-        help="Video filename or ID (for use with --set-frame-offset)"
+        help="Video filename or ID (for use with --set-frame-offset or --set-name)"
     )
     parser.add_argument(
         "--list-videos",
         action="store_true",
         help="List all indexed videos with their frame offsets"
+    )
+    # Video name utility
+    parser.add_argument(
+        "--set-name",
+        type=str,
+        metavar="NAME",
+        help="Set user-friendly name for a video (use with --video)"
     )
     
     args = parser.parse_args()
@@ -369,9 +376,11 @@ Examples:
                 res_str = f"{v['width']}x{v['height']}" if v.get("width") else "?"
                 fps_str = f"{v['fps']:.3f}" if v.get("fps") else "?"
                 offset = v.get("frame_offset") or 0
+                name_str = v.get("name") or Path(v["path"]).stem
                 prompt_str = (v["prompt"][:60] + "…") if v.get("prompt") and len(v["prompt"]) > 60 else (v.get("prompt") or "")
-                print(f"\n[{v['id']}] {Path(v['path']).name}")
+                print(f"\n[{v['id']}] {name_str}")
                 print(f"  path:     {v['path']}")
+                print(f"  name:     {name_str}")
                 print(f"  hash:     {v['hash']}")
                 print(f"  duration: {duration_str}  fps: {fps_str}  res: {res_str}  codec: {v.get('codec', '?')}")
                 print(f"  offset:   {offset}")
@@ -392,7 +401,7 @@ Examples:
             logger.error("No database found. Run --step index first.")
             return 1
         db = Database(db_path)
-        
+
         # Find video by ID or name
         videos = db.get_all_videos()
         video_id = None
@@ -403,13 +412,43 @@ Examples:
                 if args.video in v["path"]:
                     video_id = v["id"]
                     break
-        
+
         if video_id is None:
             logger.error(f"Video not found: {args.video}")
             return 1
-        
+
         db.set_frame_offset(video_id, args.set_frame_offset)
         logger.info(f"Set frame_offset={args.set_frame_offset} for video ID {video_id}")
+        return 0
+
+    # Set video name mode
+    if args.set_name is not None:
+        from .utils.io import Database
+        if not args.video:
+            parser.error("--set-name requires --video")
+        db_path = Path(".cache/index.db")
+        if not db_path.exists():
+            logger.error("No database found. Run --step index first.")
+            return 1
+        db = Database(db_path)
+
+        # Find video by ID or name
+        videos = db.get_all_videos()
+        video_id = None
+        try:
+            video_id = int(args.video)
+        except ValueError:
+            for v in videos:
+                if args.video in v["path"]:
+                    video_id = v["id"]
+                    break
+
+        if video_id is None:
+            logger.error(f"Video not found: {args.video}")
+            return 1
+
+        db.set_video_name(video_id, args.set_name)
+        logger.info(f"Set name='{args.set_name}' for video ID {video_id}")
         return 0
     
     # Load or create config

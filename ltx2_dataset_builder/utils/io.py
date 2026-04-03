@@ -111,6 +111,12 @@ class Database:
                 conn.execute("ALTER TABLE videos ADD COLUMN prompt TEXT")
             except:
                 pass
+
+            # Add user-friendly name column for videos
+            try:
+                conn.execute("ALTER TABLE videos ADD COLUMN name TEXT")
+            except:
+                pass
             
             # Buckets table for auto-detected optimal crops
             conn.execute("""
@@ -239,8 +245,8 @@ class Database:
         """Add or update a video in the database."""
         with self._connection() as conn:
             cursor = conn.execute("""
-                INSERT OR REPLACE INTO videos (path, hash, duration, fps, width, height, codec)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO videos (path, hash, duration, fps, width, height, codec, frame_offset, prompt, name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
             """, (
                 path,
                 hash,
@@ -289,6 +295,24 @@ class Database:
             conn.execute(
                 "UPDATE videos SET frame_offset = ? WHERE id = ?",
                 (offset, video_id)
+            )
+            conn.commit()
+
+    # Video name operations
+    def get_video_name(self, video_id: int) -> Optional[str]:
+        """Get the user-friendly name for a video."""
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT name FROM videos WHERE id = ?", (video_id,)
+            ).fetchone()
+            return row["name"] if row and row["name"] else None
+
+    def set_video_name(self, video_id: int, name: str) -> None:
+        """Set the user-friendly name for a video."""
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE videos SET name = ? WHERE id = ?",
+                (name, video_id)
             )
             conn.commit()
     
