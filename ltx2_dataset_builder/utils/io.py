@@ -347,9 +347,56 @@ class Database:
                     (video_id, scene["start_time"], scene["end_time"]),
                 ).fetchone()
                 if row:
-                    ids.append(row["id"])
+                    scene_id = row["id"]
+                    ids.append(scene_id)
+                    # Insert default full-scene bucket if none exists yet
+                    if start_frame is not None and end_frame is not None:
+                        conn.execute("""
+                            INSERT OR IGNORE INTO buckets
+                              (video_id, scene_id, start_time, end_time, duration,
+                               start_frame, end_frame, frame_count,
+                               optimal_offset_frames, optimal_duration)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                        """, (
+                            video_id, scene_id,
+                            scene["start_time"], scene["end_time"], scene["duration"],
+                            start_frame, end_frame, frame_count,
+                            scene["duration"],
+                        ))
             conn.commit()
         return ids
+
+    def backfill_default_buckets(self) -> int:
+        """Insert default full-scene buckets for any scene that has no bucket row yet."""
+        with self._connection() as conn:
+            scenes = conn.execute("""
+                SELECT s.id, s.video_id, s.start_time, s.end_time, s.duration,
+                       s.start_frame, s.end_frame
+                FROM scenes s
+                LEFT JOIN buckets b ON b.scene_id = s.id
+                WHERE b.id IS NULL
+                  AND s.start_frame IS NOT NULL
+                  AND s.end_frame IS NOT NULL
+            """).fetchall()
+            count = 0
+            for s in scenes:
+                frame_count = s["end_frame"] - s["start_frame"]
+                conn.execute("""
+                    INSERT OR IGNORE INTO buckets
+                      (video_id, scene_id, start_time, end_time, duration,
+                       start_frame, end_frame, frame_count,
+                       optimal_offset_frames, optimal_duration)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                """, (
+                    s["video_id"], s["id"],
+                    s["start_time"], s["end_time"], s["duration"],
+                    s["start_frame"], s["end_frame"], frame_count,
+                    s["duration"],
+                ))
+                count += 1
+            conn.commit()
+            logger.info(f"Backfilled {count} default bucket(s)")
+            return count
     
     def get_scenes(self, video_id: int) -> List[Dict[str, Any]]:
         """Get all scenes for a video."""

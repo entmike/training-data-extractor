@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useContext } from 'react'
 import { createPortal } from 'react-dom'
 import { AppContext } from '../context'
 import TagDropdown from './TagDropdown'
+import FrameCountStepper from './FrameCountStepper'
 
 export default function VideoPlayerModal({ player, onClose }) {
   const videoRef      = useRef(null)
@@ -21,14 +22,20 @@ export default function VideoPlayerModal({ player, onClose }) {
   const duration = endTime - startTime
   const title = `${videoPath?.split('/').pop()?.replace(/\.[^.]+$/, '') ?? ''} — ${formatTime(startTime)} (${duration.toFixed(1)}s)`
 
+  // ── Collection picker state ────────────────────────────
+  const [collPickerPos,   setCollPickerPos]   = useState(null) // null | { top, left }
+  const [collections,     setCollections]     = useState(null) // null = not fetched yet
+  const [collAddStatus,   setCollAddStatus]   = useState({})   // { [collId]: 'adding'|'done'|'error' }
+  const [newCollName,     setNewCollName]     = useState('')
+  const [creatingColl,    setCreatingColl]    = useState(false)
+  const collBtnRef = useRef(null)
+
   // ── Bucket state ───────────────────────────────────────
   const [bucketData,              setBucketData]              = useState(null)
   const [bucketOffset,            setBucketOffset]            = useState(0)   // seconds into scene
   const [savedBucketOffsetFrames, setSavedBucketOffsetFrames] = useState(0)
   const [savingBucketOffset,      setSavingBucketOffset]      = useState(false)
   const [playEntireScene,         setPlayEntireScene]         = useState(false)
-  const [detectingBucket,         setDetectingBucket]         = useState(false)
-  const [detectBucketError,       setDetectBucketError]       = useState('')
   const [originalBucketOffsetFrames, setOriginalBucketOffsetFrames] = useState(0)
   const bucketOffsetRef               = useRef(0)
   const bucketDurationRef             = useRef(0)
@@ -42,6 +49,8 @@ export default function VideoPlayerModal({ player, onClose }) {
   const isDraggingBucketWindow  = useRef(false)
   const dragStartX              = useRef(0)
   const dragStartOffset         = useRef(0)
+  const dragStartDuration       = useRef(0)
+  const dragMode                = useRef('body') // 'body' | 'start' | 'end'
   const [isDraggingBucket, setIsDraggingBucket] = useState(false)
 
   // ── Player state ───────────────────────────────────────
@@ -62,7 +71,9 @@ export default function VideoPlayerModal({ player, onClose }) {
   const [dropdownPos,  setDropdownPos]  = useState(null)
   const isDirty = caption !== savedCaption
 
-  const bucketDuration = bucketData?.optimal_duration || 0
+  const bucketDuration   = bucketData?.optimal_duration || 0
+  const bucketFrameCount = bucketData?.frame_count || 0
+  const sceneFrameCount  = bucketData?.scene_frame_count || Math.round(duration * fps)
 
   // ── Load bucket + waveform ─────────────────────────────
   useEffect(() => {
@@ -75,9 +86,9 @@ export default function VideoPlayerModal({ player, onClose }) {
     setWaveformUrl(`/waveform/${sceneId}`)
   }, [sceneId])
 
-  // Sync bucket offset refs whenever bucketData changes
+  // Sync bucket offset refs whenever bucketData changes (skip during drag — drag manages its own state)
   useEffect(() => {
-    if (bucketData) {
+    if (bucketData && !isDraggingBucketWindow.current) {
       const offset = bucketData.optimal_offset_frames / fps
       setBucketOffset(offset)
       setSavedBucketOffsetFrames(bucketData.optimal_offset_frames)
@@ -114,37 +125,67 @@ export default function VideoPlayerModal({ player, onClose }) {
   useEffect(() => {
     function onMove(e) {
       if (!isDraggingBucketWindow.current || !seekWrapRef.current) return
-      const rect = seekWrapRef.current.getBoundingClientRect()
+      const rect  = seekWrapRef.current.getBoundingClientRect()
       const delta = ((e.clientX - dragStartX.current) / rect.width) * duration
-      const maxOff = duration - bucketDurationRef.current
-      const newOff = Math.max(0, Math.min(maxOff, dragStartOffset.current + delta))
-      setBucketOffset(newOff)
-      bucketOffsetRef.current = newOff
-      if (videoRef.current && !playEntireSceneRef.current) {
-        videoRef.current.currentTime = newOff
-        setCurrentTime(newOff)
+      const s0    = dragStartOffset.current
+      const d0    = dragStartDuration.current
+      const minDur = 24 / fps
+
+      if (dragMode.current === 'start') {
+        // move start, keep end fixed → shrink/grow from left
+        const fixedEnd = s0 + d0
+        const newOff   = Math.max(0, Math.min(fixedEnd - minDur, s0 + delta))
+        const newDur   = fixedEnd - newOff
+        setBucketOffset(newOff); bucketOffsetRef.current = newOff
+        bucketDurationRef.current = newDur
+        setBucketData(prev => prev ? { ...prev, optimal_duration: newDur, frame_count: Math.round(newDur * fps) } : prev)
+        if (videoRef.current && !playEntireSceneRef.current) {
+          videoRef.current.currentTime = newOff; setCurrentTime(newOff)
+        }
+      } else if (dragMode.current === 'end') {
+        // move end, keep start fixed → shrink/grow from right
+        const newEnd = Math.max(s0 + minDur, Math.min(duration, s0 + d0 + delta))
+        const newDur = newEnd - s0
+        bucketDurationRef.current = newDur
+        setBucketData(prev => prev ? { ...prev, optimal_duration: newDur, frame_count: Math.round(newDur * fps) } : prev)
+        if (videoRef.current && !playEntireSceneRef.current) {
+          videoRef.current.currentTime = newEnd; setCurrentTime(newEnd)
+        }
+      } else {
+        // body — shift window, keep duration
+        const maxOff = duration - d0
+        const newOff = Math.max(0, Math.min(maxOff, s0 + delta))
+        setBucketOffset(newOff); bucketOffsetRef.current = newOff
+        if (videoRef.current && !playEntireSceneRef.current) {
+          videoRef.current.currentTime = newOff; setCurrentTime(newOff)
+        }
       }
     }
     function onUp() {
       if (!isDraggingBucketWindow.current) return
       isDraggingBucketWindow.current = false
       setIsDraggingBucket(false)
-      // Auto-save if position changed
-      const newFrames = Math.round(bucketOffsetRef.current * fps)
-      if (newFrames !== savedBucketOffsetFramesRef.current) saveBucketOffsetNow(bucketOffsetRef.current)
+      // Auto-save offset + frame_count
+      const newFrames   = Math.round(bucketOffsetRef.current * fps)
+      const newDurFrames = Math.round(bucketDurationRef.current * fps)
+      saveBucketOffsetNow(bucketOffsetRef.current, newDurFrames)
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
     return () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
-  }, [duration])
+  }, [duration, fps])
 
-  function handleBucketWindowMouseDown(e) {
+  function startBucketDrag(e, mode) {
     e.preventDefault(); e.stopPropagation()
     isDraggingBucketWindow.current = true
+    dragMode.current = mode
     setIsDraggingBucket(true)
     dragStartX.current = e.clientX
     dragStartOffset.current = bucketOffsetRef.current
+    dragStartDuration.current = bucketDurationRef.current
   }
+
+  function handleBucketWindowMouseDown(e) { startBucketDrag(e, 'body') }
 
   // ── Web Audio ──────────────────────────────────────────
   function ensureAudioContext() {
@@ -322,23 +363,15 @@ export default function VideoPlayerModal({ player, onClose }) {
   }
 
   // ── Bucket actions ─────────────────────────────────────
-  async function detectBucket() {
-    setDetectingBucket(true); setDetectBucketError('')
-    try {
-      const r = await fetch(`/api/bucket/detect/${sceneId}`, { method: 'POST' })
-      const d = await r.json()
-      if (!r.ok) throw new Error(d.error || 'Detection failed')
-      setBucketData(d.bucket)
-    } catch (e) { setDetectBucketError(e.message) }
-    finally { setDetectingBucket(false) }
-  }
-  async function saveBucketOffsetNow(offsetSecs) {
+  async function saveBucketOffsetNow(offsetSecs, frameCount) {
     setSavingBucketOffset(true)
     const offsetFrames = Math.round(offsetSecs * fps)
+    const body = { offset_frames: offsetFrames }
+    if (frameCount != null) body.frame_count = frameCount
     try {
       const r = await fetch(`/api/bucket/${sceneId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ offset_frames: offsetFrames }),
+        body: JSON.stringify(body),
       })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || 'Save failed')
@@ -346,6 +379,23 @@ export default function VideoPlayerModal({ player, onClose }) {
       setSavedBucketOffsetFrames(offsetFrames)
       savedBucketOffsetFramesRef.current = offsetFrames
     } catch (e) { console.error('Failed to save bucket offset:', e) }
+    finally { setSavingBucketOffset(false) }
+  }
+
+  async function resizeBucket(deltaFrames) {
+    const newCount = Math.max(24, Math.min(sceneFrameCount, bucketFrameCount + deltaFrames))
+    if (newCount === bucketFrameCount) return
+    setSavingBucketOffset(true)
+    try {
+      const r = await fetch(`/api/bucket/${sceneId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offset_frames: Math.round(bucketOffsetRef.current * fps), frame_count: newCount }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Resize failed')
+      setBucketData(d.bucket)
+      bucketDurationRef.current = d.bucket.optimal_duration || 0
+    } catch (e) { console.error('Failed to resize bucket:', e) }
     finally { setSavingBucketOffset(false) }
   }
 
@@ -358,6 +408,61 @@ export default function VideoPlayerModal({ player, onClose }) {
       setCurrentTime(origOffset)
     }
     saveBucketOffsetNow(origOffset)
+  }
+
+  // ── Collection picker ──────────────────────────────────
+  async function openCollectionPicker() {
+    if (collPickerPos) { setCollPickerPos(null); return }
+    if (collections === null) {
+      const r = await fetch('/api/collections')
+      if (r.ok) { const d = await r.json(); setCollections(d.collections || []) }
+      else setCollections([])
+    }
+    const rect = collBtnRef.current.getBoundingClientRect()
+    setCollPickerPos({ top: rect.bottom + window.scrollY + 4, left: rect.left + window.scrollX })
+  }
+
+  async function addToCollection(collId) {
+    setCollAddStatus(s => ({ ...s, [collId]: 'adding' }))
+    try {
+      const r = await fetch(`/api/collections/${collId}/items`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scene_id: sceneId }),
+      })
+      const d = await r.json()
+      if (!r.ok && !d.already_exists) throw new Error(d.error || 'Failed')
+      setCollAddStatus(s => ({ ...s, [collId]: 'done' }))
+      setCollections(cols => cols.map(c => c.id === collId
+        ? { ...c, item_count: d.already_exists ? c.item_count : (c.item_count || 0) + 1 }
+        : c))
+      setTimeout(() => setCollAddStatus(s => { const n = { ...s }; delete n[collId]; return n }), 2000)
+    } catch {
+      setCollAddStatus(s => ({ ...s, [collId]: 'error' }))
+      setTimeout(() => setCollAddStatus(s => { const n = { ...s }; delete n[collId]; return n }), 2000)
+    }
+  }
+
+  async function createAndAddCollection() {
+    const name = newCollName.trim()
+    if (!name) return
+    setCreatingColl(true)
+    try {
+      const r = await fetch('/api/collections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+      if (!r.ok) throw new Error()
+      const d = await r.json()
+      const newColl = { ...d.collection, item_count: 0 }
+      setCollections(cols => [newColl, ...(cols || [])])
+      setNewCollName('')
+      addToCollection(newColl.id)
+    } catch {
+      setCreatingColl(false)
+    }
+    setCreatingColl(false)
   }
 
   // ── Derived display values ─────────────────────────────
@@ -409,10 +514,7 @@ export default function VideoPlayerModal({ player, onClose }) {
 
           {/* Time */}
           <span className="vc-time">
-            {showBucketMode
-              ? `${fmtSecs(bucketRelTime)} / ${fmtSecs(bucketDuration)} (${Math.round(bucketRelTime * fps)}/${Math.round(bucketDuration * fps)}f)`
-              : `${fmtSecs(currentTime)} / ${fmtSecs(videoDur)}`
-            }
+            {fmtSecs(currentTime)} / {fmtSecs(videoDur)}
           </span>
 
           {/* Seek bar */}
@@ -421,18 +523,33 @@ export default function VideoPlayerModal({ player, onClose }) {
               <img src={waveformUrl} className="vc-waveform-img" alt="" aria-hidden="true"
                 onError={() => setWaveformUrl(null)} />
             )}
-            {/* Green bucket window — drag to reposition */}
-            {bucketData && duration > 0 && bucketDuration > 0 && (
-              <div
-                className="vc-bucket-window"
-                style={{
-                  left:  `${(bucketOffset   / duration) * 100}%`,
-                  width: `${(bucketDuration / duration) * 100}%`,
-                }}
-                onMouseDown={handleBucketWindowMouseDown}
-                title="Drag to reposition bucket window"
-              />
-            )}
+            {/* Green bucket window — drag body to reposition, handles to resize */}
+            {bucketData && duration > 0 && bucketDuration > 0 && (() => {
+              const leftPct  = (bucketOffset   / duration) * 100
+              const widthPct = (bucketDuration / duration) * 100
+              return (
+                <>
+                  <div
+                    className="vc-bucket-window"
+                    style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                    onMouseDown={handleBucketWindowMouseDown}
+                    title="Drag to reposition bucket window"
+                  />
+                  <div
+                    className="vc-bucket-handle vc-bucket-handle--start"
+                    style={{ left: `${leftPct}%` }}
+                    onMouseDown={e => startBucketDrag(e, 'start')}
+                    title="Drag to resize start"
+                  />
+                  <div
+                    className="vc-bucket-handle vc-bucket-handle--end"
+                    style={{ left: `${leftPct + widthPct}%` }}
+                    onMouseDown={e => startBucketDrag(e, 'end')}
+                    title="Drag to resize end"
+                  />
+                </>
+              )
+            })()}
             <input
               type="range"
               className="vc-seek"
@@ -450,17 +567,6 @@ export default function VideoPlayerModal({ player, onClose }) {
 
           {/* VU meter */}
           <canvas ref={canvasRef} className="vc-vu" width={72} height={16} />
-
-          {/* Play Entire Scene toggle (only when bucket exists) */}
-          {bucketData && (
-            <button
-              className={`vc-btn vc-btn--text${playEntireScene ? ' vc-btn--active' : ''}`}
-              onClick={togglePlayEntireScene}
-              title={playEntireScene ? 'Return to bucket' : 'Play entire scene'}
-            >
-              {playEntireScene ? 'Bucket' : 'Full'}
-            </button>
-          )}
 
           {/* Mute */}
           <button className="vc-btn" onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'}>
@@ -511,23 +617,41 @@ export default function VideoPlayerModal({ player, onClose }) {
         <div className="video-modal-meta">
 
           {/* Bucket action row */}
-          {(!bucketData || bucketOffsetDirty) && (
-            <div className="detect-bucket-row">
-              {!bucketData && (
-                <>
-                  <button className="detect-bucket-btn" onClick={detectBucket} disabled={detectingBucket}>
-                    {detectingBucket ? 'Detecting…' : 'Detect bucket'}
-                  </button>
-                  {detectBucketError && <span className="detect-bucket-error">{detectBucketError}</span>}
-                </>
-              )}
-              {bucketOffsetDirty && (
-                <button className="detect-bucket-btn detect-bucket-btn--reset" onClick={resetBucketOffset}>
-                  Reset position
-                </button>
-              )}
-            </div>
-          )}
+          <div className="detect-bucket-row">
+            {bucketData && (
+              <button
+                className={`detect-bucket-btn${playEntireScene ? ' detect-bucket-btn--active' : ''}`}
+                onClick={togglePlayEntireScene}
+                title={playEntireScene ? 'Return to bucket' : 'Play entire scene'}
+              >
+                {playEntireScene ? 'Bucket' : 'Full'}
+              </button>
+            )}
+            {bucketData && (
+              <FrameCountStepper
+                frameCount={bucketFrameCount}
+                min={24}
+                max={sceneFrameCount}
+                disabled={savingBucketOffset}
+                onChange={newCount => resizeBucket(newCount - bucketFrameCount)}
+              />
+            )}
+            {bucketOffsetDirty && (
+              <button className="detect-bucket-btn detect-bucket-btn--reset" onClick={resetBucketOffset}>
+                Reset position
+              </button>
+            )}
+            {bucketData && (
+              <button
+                ref={collBtnRef}
+                className={`detect-bucket-btn detect-bucket-btn--export${collPickerPos ? ' detect-bucket-btn--active' : ''}`}
+                onClick={openCollectionPicker}
+                title="Export bucket to a collection"
+              >
+                + Collection
+              </button>
+            )}
+          </div>
 
           {/* Rating */}
           <div className="star-rating">
@@ -580,6 +704,80 @@ export default function VideoPlayerModal({ player, onClose }) {
           onSelect={addTag} onClose={() => setDropdownPos(null)} />,
         document.body
       )}
+
+      {collPickerPos && createPortal(
+        <CollectionPicker
+          position={collPickerPos}
+          collections={collections || []}
+          addStatus={collAddStatus}
+          newName={newCollName}
+          onNewNameChange={setNewCollName}
+          onAdd={addToCollection}
+          onCreate={createAndAddCollection}
+          creating={creatingColl}
+          onClose={() => setCollPickerPos(null)}
+        />,
+        document.body
+      )}
+    </div>
+  )
+}
+
+function CollectionPicker({ position, collections, addStatus, newName, onNewNameChange, onAdd, onCreate, creating, onClose }) {
+  const wrapRef = useRef(null)
+
+  useEffect(() => {
+    function onMouseDown(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) onClose()
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [onClose])
+
+  return (
+    <div
+      ref={wrapRef}
+      className="coll-picker"
+      style={{ position: 'absolute', top: position.top, left: position.left, zIndex: 2000 }}
+    >
+      <div className="coll-picker-header">Add to collection</div>
+      {collections.length === 0 && (
+        <div className="coll-picker-empty">No collections yet — create one below.</div>
+      )}
+      <div className="coll-picker-list">
+        {collections.map(c => {
+          const status = addStatus[c.id]
+          return (
+            <button
+              key={c.id}
+              className={`coll-picker-item${status === 'done' ? ' coll-picker-item--done' : status === 'error' ? ' coll-picker-item--error' : ''}`}
+              onMouseDown={() => onAdd(c.id)}
+              disabled={status === 'adding'}
+            >
+              <span className="coll-picker-item-name">{c.name}</span>
+              <span className="coll-picker-item-count">{c.item_count}</span>
+              {status === 'adding' && <span className="coll-picker-status">…</span>}
+              {status === 'done'   && <span className="coll-picker-status coll-picker-status--done">✓</span>}
+              {status === 'error'  && <span className="coll-picker-status coll-picker-status--error">!</span>}
+            </button>
+          )
+        })}
+      </div>
+      <div className="coll-picker-new">
+        <input
+          className="coll-picker-new-input"
+          placeholder="New collection…"
+          value={newName}
+          onChange={e => onNewNameChange(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') onCreate(); if (e.key === 'Escape') onClose() }}
+          disabled={creating}
+        />
+        <button
+          className="coll-picker-new-btn"
+          onMouseDown={onCreate}
+          disabled={creating || !newName.trim()}
+        >{creating ? '…' : '+'}</button>
+      </div>
     </div>
   )
 }

@@ -10,8 +10,9 @@ export default function Header({
   includeMode, setIncludeMode,
   minFrames, setMinFrames,
   ratingFilter, setRatingFilter,
+  sort, setSort,
   isLoading,
-  onManageTags, onManageVideos,
+  onManageTags, onManageVideos, onManageCollections,
 }) {
   const [dropdown, setDropdown] = useState(null) // { mode: 'include'|'exclude', pos }
 
@@ -30,7 +31,6 @@ export default function Header({
 
   const statsReady = stats !== null
   const pct = statsReady && stats.total > 0 ? Math.round((stats.captioned / stats.total) * 100) : 0
-  const bucketedPct = statsReady && stats.total > 0 ? Math.round(((stats.bucketed ?? 0) / stats.total) * 100) : 0
   const videoLabel = v => (v.name || v.path).replace(/\.[^.]+$/, '').replace(/.*\//, '')
 
   function openDropdown(mode, ref) {
@@ -65,35 +65,28 @@ export default function Header({
                 ? <div className="progress-bar" style={{ width: `${pct}%` }} />
                 : <div className="skeleton skeleton--bar" />}
             </div>
-            <div className="progress-bar-wrap">
-              {statsReady
-                ? <div className="progress-bar progress-bar--bucketed" style={{ width: `${bucketedPct}%` }} />
-                : <div className="skeleton skeleton--bar" />}
-            </div>
           </div>
           <div className="stats-numbers">
             {statsReady ? <>
               <span className="stats-total">{stats.total.toLocaleString()} scenes</span>
               <span className="stats-captioned">{stats.captioned.toLocaleString()} captioned ({pct}%)</span>
-              <span className="stats-bucketed">{(stats.bucketed ?? 0).toLocaleString()} bucketed ({bucketedPct}%)</span>
             </> : <>
               <span className="skeleton skeleton--text" style={{ width: 80 }} />
               <span className="skeleton skeleton--text" style={{ width: 120 }} />
-              <span className="skeleton skeleton--text" style={{ width: 100 }} />
             </>}
           </div>
         </div>
 
         {/* Filter buttons */}
         <div className="filter-buttons">
-          {['all', 'captioned', 'uncaptioned', 'recent', 'recent-buckets'].map(f => (
+          {['all', 'captioned', 'uncaptioned', 'recent'].map(f => (
             <button
               key={f}
               className={`filter-btn${filter === f ? ' active' : ''}`}
               onClick={() => setFilter(f)}
               disabled={isLoading}
             >
-              {f === 'recent-buckets' ? 'Recent Buckets' : f.charAt(0).toUpperCase() + f.slice(1)}
+              {f.charAt(0).toUpperCase() + f.slice(1)}
             </button>
           ))}
         </div>
@@ -111,11 +104,24 @@ export default function Header({
           ))}
         </select>
 
+        {/* Sort buttons */}
+        <div className="filter-buttons">
+          {[['', 'Default'], ['frames_asc', 'Start ↑'], ['frames_desc', 'Start ↓']].map(([val, label]) => (
+            <button
+              key={val}
+              className={`filter-btn${sort === val ? ' active' : ''}`}
+              onClick={() => setSort(val)}
+              disabled={isLoading}
+            >{label}</button>
+          ))}
+        </div>
+
         <div className="header-spacer" />
 
         {/* Action buttons */}
         <button className="action-btn" onClick={onManageTags} disabled={isLoading}>Manage Tags</button>
         <button className="action-btn" onClick={onManageVideos} disabled={isLoading}>Videos</button>
+        <button className="action-btn" onClick={onManageCollections} disabled={isLoading}>Collections</button>
       </div>
 
       {/* Tag filter bar */}

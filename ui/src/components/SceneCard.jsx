@@ -161,6 +161,11 @@ export default function SceneCard({ scene: initialScene, tagMap, visible, onTags
             title={`${n} star${n > 1 ? 's' : ''}`}
           >★</button>
         ))}
+        {initialScene.collection_count > 0 && (
+          <span className="collection-count-badge" title={`In ${initialScene.collection_count} collection item${initialScene.collection_count !== 1 ? 's' : ''}`}>
+            ⊞ {initialScene.collection_count}
+          </span>
+        )}
       </div>
 
       <div className="scene-info">

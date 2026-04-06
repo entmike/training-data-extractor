@@ -5,6 +5,7 @@ import SceneGrid from './components/SceneGrid'
 import VideoPlayerModal from './components/VideoPlayerModal'
 import ManageTagsModal from './components/ManageTagsModal'
 import ManageVideosModal from './components/ManageVideosModal'
+import ManageCollectionsModal from './components/ManageCollectionsModal'
 
 function getUrlParam(key, fallback = '') {
   return new URLSearchParams(window.location.search).get(key) ?? fallback
@@ -20,11 +21,13 @@ export default function App() {
   const [activeExcludeTags, setActiveExcludeTags] = useState(new Set())
   const [includeMode, setIncludeMode] = useState('and') // 'and' | 'or'
   const [minFrames, setMinFrames] = useState(0)
-  const [ratingFilter, setRatingFilter] = useState(new Set()) // empty = any; values: 1|2|3|'unranked'
+  const [ratingFilter, setRatingFilter] = useState(new Set())
+  const [sort, setSort] = useState('') // empty = any; values: 1|2|3|'unranked'
   const [isLoading, setIsLoading] = useState(false)
   const [player, setPlayer] = useState(null)
   const [showManageTags, setShowManageTags] = useState(false)
   const [showManageVideos, setShowManageVideos] = useState(false)
+  const [showManageCollections, setShowManageCollections] = useState(false)
 
   const tagMap = Object.fromEntries(allTags.map(t => [t.tag, t]))
 
@@ -89,6 +92,8 @@ export default function App() {
         isLoading={isLoading}
         onManageTags={() => setShowManageTags(true)}
         onManageVideos={() => setShowManageVideos(true)}
+        sort={sort} setSort={setSort}
+        onManageCollections={() => setShowManageCollections(true)}
       />
       <main className="container">
         <SceneGrid
@@ -99,6 +104,7 @@ export default function App() {
           includeMode={includeMode}
           minFrames={minFrames}
           ratingFilter={ratingFilter}
+          sort={sort}
           tagMap={tagMap}
           onLoadingChange={setIsLoading}
         />
@@ -110,6 +116,9 @@ export default function App() {
       )}
       {showManageVideos && (
         <ManageVideosModal allVideos={allVideos} onClose={() => setShowManageVideos(false)} />
+      )}
+      {showManageCollections && (
+        <ManageCollectionsModal onClose={() => setShowManageCollections(false)} />
       )}
     </AppContext.Provider>
   )

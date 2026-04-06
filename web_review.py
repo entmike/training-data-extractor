@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 from flask import Flask, send_from_directory, request, jsonify, Response, send_file
 import yaml
+from PIL import Image, ImageDraw
 
 from ltx2_dataset_builder.utils.preview import generate_scene_preview  # noqa: E402
 
@@ -119,6 +120,47 @@ try:
 except Exception:
     pass
 
+
+def ensure_collections_tables():
+    """Create collections and collection_items tables if they don't exist."""
+    conn = get_db_connection()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS collections (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS collection_items (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            collection_id INTEGER NOT NULL,
+            scene_id      INTEGER NOT NULL,
+            video_id      INTEGER NOT NULL,
+            start_frame   INTEGER NOT NULL,
+            end_frame     INTEGER NOT NULL,
+            created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE,
+            FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
+            UNIQUE (collection_id, scene_id)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+try:
+    ensure_collections_tables()
+except Exception:
+    pass
+
+try:
+    from ltx2_dataset_builder.utils.io import Database as _Db
+    _n = _Db(DB_PATH).backfill_default_buckets()
+    if _n:
+        print(f"[startup] Backfilled {_n} default bucket(s)")
+except Exception as _e:
+    print(f"[startup] Bucket backfill skipped: {_e}")
 
 
 def find_preview_for_scene(video_name: str, scene_idx: int, start_frame: int = None) -> str | None:
@@ -299,9 +341,6 @@ def _generate_rms_waveform_png(video_file: Path, start_time: float, duration: fl
     Extract per-window RMS levels via FFmpeg astats, render as a bar chart PNG.
     Returns PNG bytes, or None on failure.
     """
-    if not HAS_PIL:
-        return None
-
     sample_rate = 44100
     n_bars = width // 4  # 4px per bar → 200 bars for 800px
 
@@ -376,7 +415,6 @@ def _generate_rms_waveform_png(video_file: Path, start_time: float, duration: fl
     if not levels_l:
         return None
 
-    from PIL import ImageDraw
     bg     = (28,  33,  40)   # #1c2128
     fg     = (88, 166, 255)   # #58a6ff
     center_color = (48, 54, 61)  # subtle center line
@@ -472,6 +510,7 @@ def get_scenes():
     except (ValueError, TypeError):
         min_frames = 0
     rating_values = [v for v in request.args.get('rating', '').split(',') if v]
+    sort = request.args.get('sort', '')  # 'frames_asc' | 'frames_desc' | ''
 
     conn = get_db_connection()
 
@@ -482,8 +521,6 @@ def get_scenes():
         conditions.append("s.caption IS NOT NULL AND s.caption != '' AND substr(s.caption, 1, 2) != '__'")
     elif filter_type == 'uncaptioned':
         conditions.append("(s.caption IS NULL OR s.caption = '' OR substr(s.caption, 1, 2) = '__')")
-    elif filter_type == 'recent-buckets':
-        conditions.append("EXISTS (SELECT 1 FROM buckets WHERE scene_id = s.id)")
 
     if video_filter:
         conditions.append("v.id = ?")
@@ -525,54 +562,32 @@ def get_scenes():
 
     where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-    # Need joins for recent-buckets filter
-    if filter_type == "recent-buckets":
-        scenes_from = "FROM scenes s JOIN videos v ON s.video_id = v.id JOIN buckets b ON b.scene_id = s.id"
-    else:
-        scenes_from = "FROM scenes s JOIN videos v ON s.video_id = v.id"
+    scenes_from = "FROM scenes s JOIN videos v ON s.video_id = v.id"
 
-    # For recent-buckets filter, total is count of scenes with buckets
-    if filter_type == "recent-buckets":
-        total = conn.execute(
-            "SELECT COUNT(DISTINCT s.id) FROM scenes s JOIN buckets b ON b.scene_id = s.id"
-        ).fetchone()[0]
-    else:
-        total = conn.execute(
-            f"SELECT COUNT(*) {scenes_from} {where_clause}",
-            params
-        ).fetchone()[0]
+    total = conn.execute(
+        f"SELECT COUNT(*) {scenes_from} {where_clause}",
+        params
+    ).fetchone()[0]
 
     offset = (page - 1) * limit
     
-    # Subquery to properly order and paginate bucket scenes
-    if filter_type == "recent-buckets":
-        base_query = f"""
-            SELECT s.id, s.video_id, s.start_time, s.end_time, s.duration, s.start_frame, s.end_frame,
-                   s.caption, s.caption_finished_at, s.rating, s.blurhash, s.bucket_ineligible,
-                   v.path as video_path, v.fps, v.frame_offset,
-                   (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
-                   (s.end_frame - s.start_frame) as frame_count,
-                   GROUP_CONCAT(st.tag, '|') as tags_concat
-            FROM scenes s
-            JOIN videos v ON s.video_id = v.id
-            JOIN buckets b ON b.scene_id = s.id
-            LEFT JOIN scene_tags st ON st.scene_id = s.id
-            GROUP BY s.id
-            ORDER BY b.bucket_timestamp DESC, s.start_time DESC
-            LIMIT {limit} OFFSET {offset}
-        """
-    else:
-        base_query = f"""
-            SELECT s.*, v.path as video_path, v.fps, v.frame_offset,
-                (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
-                GROUP_CONCAT(st.tag, '|') as tags_concat
-            {scenes_from}
-            LEFT JOIN scene_tags st ON st.scene_id = s.id
-            {where_clause}
-            GROUP BY s.id
-            ORDER BY {("s.caption_finished_at DESC NULLS LAST, s.id DESC" if filter_type == "recent" else "s.video_id, s.id")}
-            LIMIT {limit} OFFSET {offset}
-        """
+    base_query = f"""
+        SELECT s.*, v.path as video_path, v.fps, v.frame_offset,
+            (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
+            (SELECT COUNT(*) FROM collection_items ci WHERE ci.scene_id = s.id) as collection_count,
+            GROUP_CONCAT(st.tag, '|') as tags_concat
+        {scenes_from}
+        LEFT JOIN scene_tags st ON st.scene_id = s.id
+        {where_clause}
+        GROUP BY s.id
+        ORDER BY {
+            "s.caption_finished_at DESC NULLS LAST, s.id DESC" if filter_type == "recent"
+            else "s.start_frame ASC, s.video_id, s.id" if sort == "frames_asc"
+            else "s.start_frame DESC, s.video_id, s.id" if sort == "frames_desc"
+            else "s.video_id, s.id"
+        }
+        LIMIT {limit} OFFSET {offset}
+    """
     
     rows = conn.execute(base_query, params).fetchall()
     conn.close()
@@ -607,6 +622,7 @@ def get_scenes():
             'caption_finished_at': (d['caption_finished_at'].replace(' ', 'T') + 'Z') if d.get('caption_finished_at') else None,
             'rating': d.get('rating'),
             'blurhash': d.get('blurhash'),
+            'collection_count': d.get('collection_count') or 0,
         })
 
     return jsonify({
@@ -624,8 +640,7 @@ def api_stats():
     stats = conn.execute("""
         SELECT
             COUNT(*) as total,
-            SUM(CASE WHEN caption IS NOT NULL AND caption != '' AND substr(caption, 1, 2) != '__' THEN 1 ELSE 0 END) as captioned,
-            SUM(CASE WHEN bucket_ineligible = 1 OR EXISTS (SELECT 1 FROM buckets b WHERE b.scene_id = scenes.id) THEN 1 ELSE 0 END) as bucketed
+            SUM(CASE WHEN caption IS NOT NULL AND caption != '' AND substr(caption, 1, 2) != '__' THEN 1 ELSE 0 END) as captioned
         FROM scenes
     """).fetchone()
     conn.close()
@@ -1025,90 +1040,10 @@ def set_video_name(video_id: int):
     return jsonify({"video_id": video_id, "name": name or ""})
 
 
-@app.route('/api/bucket/detect/<int:scene_id>', methods=['POST'])
-def detect_bucket_for_scene(scene_id: int):
-    """Run bucket detection for a single scene and save the result."""
-    try:
-        from ltx2_dataset_builder.config import PipelineConfig
-        from ltx2_dataset_builder.buckets.detect import detect_speech_activity, find_optimal_bucket, save_buckets_to_db
-    except ImportError as e:
-        return jsonify({"error": f"Import error: {e}"}), 500
-
-    if not CONFIG_PATH.exists():
-        return jsonify({"error": "config.yaml not found"}), 500
-
-    try:
-        pipeline_config = PipelineConfig.from_yaml(CONFIG_PATH)
-    except Exception as e:
-        return jsonify({"error": f"Failed to load config: {e}"}), 500
-
-    conn = get_db_connection()
-    scene_row = conn.execute("""
-        SELECT s.*, v.path as video_path, v.fps as video_fps, v.frame_offset
-        FROM scenes s JOIN videos v ON s.video_id = v.id
-        WHERE s.id = ?
-    """, (scene_id,)).fetchone()
-    conn.close()
-
-    if not scene_row:
-        return jsonify({"error": "Scene not found"}), 404
-
-    scene = dict(scene_row)
-    video_path = Path(scene["video_path"])
-    video_fps = scene.get("video_fps") or 24.0
-    start_frame = int(scene.get("start_frame") or 0)
-    end_frame = int(scene.get("end_frame") or 0)
-
-    if start_frame == 0 and end_frame == 0:
-        return jsonify({"error": "Scene has no frame data"}), 400
-
-    try:
-        frame_numbers, speech_scores = detect_speech_activity(
-            video_path, start_frame, end_frame,
-            video_fps=video_fps,
-            target_fps=pipeline_config.bucket.base_fps
-        )
-
-        if len(frame_numbers) == 0:
-            bucket = {
-                "start_time": scene["start_time"],
-                "end_time": scene["end_time"],
-                "duration": scene["duration"],
-                "start_frame": start_frame,
-                "end_frame": end_frame,
-                "frame_count": end_frame - start_frame,
-                "speech_score": 0.0,
-                "speech_start_frame": None,
-                "speech_end_frame": None,
-                "optimal_offset_frames": 0,
-                "optimal_duration": scene["duration"],
-            }
-        else:
-            bucket = find_optimal_bucket(scene, frame_numbers, speech_scores, pipeline_config, video_fps)
-
-        if not bucket:
-            return jsonify({"error": "Scene too short for a valid bucket"}), 400
-
-        bucket["video_id"] = scene["video_id"]
-        bucket["scene_id"] = scene_id
-        save_buckets_to_db(scene["video_id"], [bucket], pipeline_config)
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    # Return the saved bucket row
-    conn = get_db_connection()
-    saved = conn.execute("SELECT * FROM buckets WHERE scene_id = ?", (scene_id,)).fetchone()
-    conn.close()
-
-    if saved:
-        return jsonify({"bucket": dict(saved)})
-    return jsonify({"error": "Bucket was not saved"}), 500
-
 
 @app.route('/api/bucket/<int:scene_id>', methods=['PUT'])
-def update_bucket_offset(scene_id: int):
-    """Update the bucket window offset (in frames from scene start)."""
+def update_bucket(scene_id: int):
+    """Update the bucket window offset and/or frame count."""
     data = request.get_json()
     if data is None or 'offset_frames' not in data:
         return jsonify({"error": "Missing offset_frames"}), 400
@@ -1125,15 +1060,27 @@ def update_bucket_offset(scene_id: int):
         SELECT v.fps, v.frame_offset FROM videos v
         JOIN scenes s ON s.video_id = v.id WHERE s.id = ?
     """, (scene_id,)).fetchone()
-    scene = conn.execute("SELECT start_frame FROM scenes WHERE id = ?", (scene_id,)).fetchone()
+    scene = conn.execute("SELECT start_frame, end_frame, start_time, end_time FROM scenes WHERE id = ?", (scene_id,)).fetchone()
     conn.close()
 
     if not video or not scene:
         return jsonify({"error": "Scene/video not found"}), 404
 
     fps = video["fps"] or 24.0
-    scene_start_frame = scene["start_frame"]
-    frame_count = bucket["frame_count"]
+    scene_start_frame = scene["start_frame"] or 0
+    if scene["end_frame"] is not None and scene["start_frame"] is not None:
+        scene_frame_count = scene["end_frame"] - scene["start_frame"]
+    else:
+        scene_frame_count = round((scene["end_time"] - scene["start_time"]) * fps)
+
+    # Use provided frame_count or fall back to current
+    if 'frame_count' in data:
+        frame_count = max(1, min(scene_frame_count, int(data['frame_count'])))
+    else:
+        frame_count = bucket["frame_count"]
+
+    # Clamp offset so bucket doesn't exceed scene
+    offset_frames = max(0, min(scene_frame_count - frame_count, offset_frames))
 
     new_start_frame = scene_start_frame + offset_frames
     new_end_frame = new_start_frame + frame_count
@@ -1144,6 +1091,7 @@ def update_bucket_offset(scene_id: int):
     conn = get_db_connection()
     conn.execute("""
         UPDATE buckets SET
+            frame_count = ?,
             optimal_offset_frames = ?,
             start_frame = ?,
             end_frame = ?,
@@ -1153,32 +1101,39 @@ def update_bucket_offset(scene_id: int):
             optimal_duration = ?,
             bucket_timestamp = CURRENT_TIMESTAMP
         WHERE scene_id = ?
-    """, (offset_frames, new_start_frame, new_end_frame,
+    """, (frame_count, offset_frames, new_start_frame, new_end_frame,
           new_start_time, new_end_time, new_duration, new_duration, scene_id))
     conn.commit()
     saved = conn.execute("SELECT * FROM buckets WHERE scene_id = ?", (scene_id,)).fetchone()
+    scene_fc = conn.execute("SELECT start_frame, end_frame FROM scenes WHERE id = ?", (scene_id,)).fetchone()
     conn.close()
 
-    return jsonify({"bucket": dict(saved)})
+    result = dict(saved)
+    result["scene_frame_count"] = scene_frame_count
+    return jsonify({"bucket": result})
 
 
 @app.route('/api/bucket/<int:scene_id>')
 def get_bucket_data(scene_id: int):
     """Get bucket data for a scene."""
     conn = get_db_connection()
-    
-    # Get bucket for this scene
-    bucket = conn.execute("""
-        SELECT * FROM buckets WHERE scene_id = ?
-    """, (scene_id,)).fetchone()
-    
+
+    bucket = conn.execute("SELECT * FROM buckets WHERE scene_id = ?", (scene_id,)).fetchone()
     if not bucket:
         conn.close()
         return jsonify({"bucket": None})
-    
+
     result = dict(bucket)
+
+    scene = conn.execute("SELECT start_frame, end_frame, start_time, end_time FROM scenes WHERE id = ?", (scene_id,)).fetchone()
+    fps = conn.execute("SELECT v.fps FROM videos v JOIN scenes s ON s.video_id = v.id WHERE s.id = ?", (scene_id,)).fetchone()
+    if scene:
+        if scene["start_frame"] is not None and scene["end_frame"] is not None:
+            result["scene_frame_count"] = scene["end_frame"] - scene["start_frame"]
+        elif scene["start_time"] is not None and scene["end_time"] is not None and fps:
+            result["scene_frame_count"] = round((scene["end_time"] - scene["start_time"]) * (fps["fps"] or 24.0))
     conn.close()
-    
+
     return jsonify({"bucket": result})
 
 
@@ -1302,6 +1257,295 @@ def serve_bucket_waveform(scene_id: int):
         return Response(waveform_bytes, mimetype='image/png')
     
     return jsonify({"error": "Waveform generation failed"}), 500
+
+
+@app.route('/api/collections', methods=['GET'])
+def get_collections():
+    """List all collections with item count."""
+    conn = get_db_connection()
+    rows = conn.execute("""
+        SELECT c.id, c.name, c.created_at,
+               COUNT(ci.id) as item_count
+        FROM collections c
+        LEFT JOIN collection_items ci ON ci.collection_id = c.id
+        GROUP BY c.id
+        ORDER BY c.created_at DESC
+    """).fetchall()
+    conn.close()
+    return jsonify({"collections": [dict(r) for r in rows]})
+
+
+@app.route('/api/collections', methods=['POST'])
+def create_collection():
+    """Create a new collection."""
+    data = request.get_json()
+    if not data or not data.get('name'):
+        return jsonify({"error": "Missing name"}), 400
+    name = data['name'].strip()
+    if not name:
+        return jsonify({"error": "Empty name"}), 400
+    conn = get_db_connection()
+    cur = conn.execute("INSERT INTO collections (name) VALUES (?)", (name,))
+    conn.commit()
+    row = conn.execute("SELECT * FROM collections WHERE id = ?", (cur.lastrowid,)).fetchone()
+    conn.close()
+    return jsonify({"collection": dict(row)}), 201
+
+
+@app.route('/api/collections/<int:collection_id>', methods=['PUT'])
+def rename_collection(collection_id: int):
+    """Rename a collection."""
+    data = request.get_json()
+    if not data or not data.get('name'):
+        return jsonify({"error": "Missing name"}), 400
+    name = data['name'].strip()
+    if not name:
+        return jsonify({"error": "Empty name"}), 400
+    conn = get_db_connection()
+    if conn.execute("SELECT id FROM collections WHERE id = ?", (collection_id,)).fetchone() is None:
+        conn.close()
+        return jsonify({"error": "Collection not found"}), 404
+    conn.execute("UPDATE collections SET name = ? WHERE id = ?", (name, collection_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"collection_id": collection_id, "name": name})
+
+
+@app.route('/api/collections/<int:collection_id>', methods=['DELETE'])
+def delete_collection(collection_id: int):
+    """Delete a collection and all its items."""
+    conn = get_db_connection()
+    if conn.execute("SELECT id FROM collections WHERE id = ?", (collection_id,)).fetchone() is None:
+        conn.close()
+        return jsonify({"error": "Collection not found"}), 404
+    conn.execute("DELETE FROM collection_items WHERE collection_id = ?", (collection_id,))
+    conn.execute("DELETE FROM collections WHERE id = ?", (collection_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True})
+
+
+@app.route('/api/collections/<int:collection_id>/export', methods=['POST'])
+def export_collection(collection_id: int):
+    """Extract all collection items as MP4 clips + caption .txt files, return as a zip."""
+    import zipfile
+    import tempfile
+
+    conn = get_db_connection()
+    coll = conn.execute("SELECT * FROM collections WHERE id = ?", (collection_id,)).fetchone()
+    if not coll:
+        conn.close()
+        return jsonify({"error": "Collection not found"}), 404
+
+    rows = conn.execute("""
+        SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame,
+               v.path as video_path, v.fps, v.frame_offset,
+               s.caption
+        FROM collection_items ci
+        JOIN videos v ON ci.video_id = v.id
+        JOIN scenes s ON ci.scene_id = s.id
+        WHERE ci.collection_id = ?
+        ORDER BY ci.created_at ASC
+    """, (collection_id,)).fetchall()
+    conn.close()
+
+    if not rows:
+        return jsonify({"error": "Collection is empty"}), 400
+
+    collection_slug = re.sub(r'[^\w\-]', '_', coll['name']).strip('_')
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        zip_buf = io.BytesIO()
+
+        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for i, row in enumerate(rows):
+                item = dict(row)
+                fps = item['fps'] or 24.0
+                frame_offset = item['frame_offset'] or 0
+                video_file = Path(item['video_path'])
+
+                if not video_file.exists():
+                    continue
+
+                stem = f"{i + 1:04d}_scene{item['scene_id']}"
+                mp4_name = f"{stem}.mp4"
+                txt_name = f"{stem}.txt"
+                mp4_path = tmpdir_path / mp4_name
+
+                start_time = max(0.0, (item['start_frame'] + frame_offset + 1) / fps)
+                duration   = (item['end_frame'] - item['start_frame']) / fps
+
+                if duration <= 0:
+                    continue
+
+                cmd = [
+                    'ffmpeg', '-y',
+                    '-ss', f'{start_time:.6f}',
+                    '-i', str(video_file),
+                    '-t', f'{duration:.6f}',
+                    '-c:v', 'libx264',
+                    '-preset', 'fast',
+                    '-crf', '18',
+                    '-pix_fmt', 'yuv420p',
+                    '-ac', '2',
+                    '-c:a', 'aac',
+                    '-movflags', '+faststart',
+                    '-f', 'mp4',
+                    str(mp4_path),
+                ]
+                result = subprocess.run(cmd, stderr=subprocess.DEVNULL)
+                if result.returncode == 0 and mp4_path.exists():
+                    zf.write(mp4_path, mp4_name)
+
+                caption = (item.get('caption') or '').strip()
+                if caption and not caption.startswith('__'):
+                    zf.writestr(txt_name, caption)
+
+        zip_data = zip_buf.getvalue()
+
+    zip_io = io.BytesIO(zip_data)
+    return send_file(
+        zip_io,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=f'{collection_slug}.zip',
+    )
+
+
+@app.route('/api/collections/<int:collection_id>/items', methods=['GET'])
+def get_collection_items(collection_id: int):
+    """Get all items in a collection with scene/video metadata."""
+    conn = get_db_connection()
+    if conn.execute("SELECT id FROM collections WHERE id = ?", (collection_id,)).fetchone() is None:
+        conn.close()
+        return jsonify({"error": "Collection not found"}), 404
+    rows = conn.execute("""
+        SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame, ci.created_at,
+               v.path as video_path, v.fps, v.frame_offset,
+               COALESCE(v.name, '') as video_name_custom,
+               s.caption, s.start_time, s.end_time, s.rating,
+               s.start_frame as scene_start_frame, s.end_frame as scene_end_frame
+        FROM collection_items ci
+        JOIN videos v ON ci.video_id = v.id
+        JOIN scenes s ON ci.scene_id = s.id
+        WHERE ci.collection_id = ?
+        ORDER BY ci.created_at ASC
+    """, (collection_id,)).fetchall()
+    conn.close()
+    items = []
+    for r in rows:
+        d = dict(r)
+        video_display = d['video_name_custom'] or Path(d['video_path']).stem
+        items.append({
+            'id': d['id'],
+            'scene_id': d['scene_id'],
+            'video_id': d['video_id'],
+            'start_frame': d['start_frame'],
+            'end_frame': d['end_frame'],
+            'frame_count': d['end_frame'] - d['start_frame'],
+            'created_at': d['created_at'],
+            'video_name': video_display,
+            'fps': d['fps'] or 24.0,
+            'frame_offset': d['frame_offset'] or 0,
+            'caption': d.get('caption') or '',
+            'start_time': d.get('start_time'),
+            'end_time': d.get('end_time'),
+            'rating': d.get('rating'),
+            'scene_start_frame': d.get('scene_start_frame') or 0,
+            'scene_end_frame': d.get('scene_end_frame') or 0,
+        })
+    return jsonify({"items": items})
+
+
+@app.route('/api/collections/<int:collection_id>/items', methods=['POST'])
+def add_collection_item(collection_id: int):
+    """Add a scene's bucket to a collection."""
+    data = request.get_json()
+    if not data or 'scene_id' not in data:
+        return jsonify({"error": "Missing scene_id"}), 400
+    scene_id = int(data['scene_id'])
+
+    conn = get_db_connection()
+    if conn.execute("SELECT id FROM collections WHERE id = ?", (collection_id,)).fetchone() is None:
+        conn.close()
+        return jsonify({"error": "Collection not found"}), 404
+
+    bucket = conn.execute("SELECT * FROM buckets WHERE scene_id = ?", (scene_id,)).fetchone()
+    if not bucket:
+        conn.close()
+        return jsonify({"error": "No bucket found for this scene."}), 400
+
+    scene = conn.execute("SELECT video_id FROM scenes WHERE id = ?", (scene_id,)).fetchone()
+    if not scene:
+        conn.close()
+        return jsonify({"error": "Scene not found"}), 404
+
+    video_id = scene['video_id']
+    start_frame = bucket['start_frame']
+    end_frame = bucket['end_frame']
+
+    try:
+        cur = conn.execute("""
+            INSERT INTO collection_items (collection_id, scene_id, video_id, start_frame, end_frame)
+            VALUES (?, ?, ?, ?, ?)
+        """, (collection_id, scene_id, video_id, start_frame, end_frame))
+        conn.commit()
+        item_id = cur.lastrowid
+        conn.close()
+        return jsonify({
+            "item_id": item_id, "collection_id": collection_id,
+            "scene_id": scene_id, "video_id": video_id,
+            "start_frame": start_frame, "end_frame": end_frame,
+        }), 201
+    except sqlite3.IntegrityError:
+        existing = conn.execute(
+            "SELECT id FROM collection_items WHERE collection_id = ? AND scene_id = ?",
+            (collection_id, scene_id)
+        ).fetchone()
+        conn.close()
+        return jsonify({"item_id": existing['id'] if existing else None, "already_exists": True}), 200
+
+
+@app.route('/api/collections/<int:collection_id>/items/<int:item_id>', methods=['PUT'])
+def update_collection_item(collection_id: int, item_id: int):
+    """Update the start_frame and end_frame of a collection item."""
+    data = request.get_json()
+    if data is None or 'start_frame' not in data or 'end_frame' not in data:
+        return jsonify({"error": "Missing start_frame or end_frame"}), 400
+    start_frame = int(data['start_frame'])
+    end_frame = int(data['end_frame'])
+    if end_frame <= start_frame:
+        return jsonify({"error": "end_frame must be greater than start_frame"}), 400
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT id FROM collection_items WHERE id = ? AND collection_id = ?",
+        (item_id, collection_id)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "Item not found"}), 404
+    conn.execute(
+        "UPDATE collection_items SET start_frame = ?, end_frame = ? WHERE id = ?",
+        (start_frame, end_frame, item_id)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"item_id": item_id, "start_frame": start_frame, "end_frame": end_frame,
+                    "frame_count": end_frame - start_frame})
+
+
+@app.route('/api/collections/<int:collection_id>/items/<int:item_id>', methods=['DELETE'])
+def remove_collection_item(collection_id: int, item_id: int):
+    """Remove an item from a collection."""
+    conn = get_db_connection()
+    conn.execute(
+        "DELETE FROM collection_items WHERE id = ? AND collection_id = ?",
+        (item_id, collection_id)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True})
 
 
 if __name__ == '__main__':

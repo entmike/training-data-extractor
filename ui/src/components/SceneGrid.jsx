@@ -3,7 +3,7 @@ import SceneCard from './SceneCard'
 
 const BATCH_SIZE = 50
 
-export default function SceneGrid({ filter, videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, tagMap, onLoadingChange }) {
+export default function SceneGrid({ filter, videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, sort, tagMap, onLoadingChange }) {
   const [scenes, setScenes] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [isEmpty, setIsEmpty] = useState(false)
@@ -22,6 +22,7 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
     activeIncludeTags.size > 1 ? includeMode : '',
     minFrames,
     [...ratingFilter].map(String).sort().join(','),
+    sort,
   ].join('|')
 
   useEffect(() => {
@@ -53,6 +54,7 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
       if (activeIncludeTags.size > 1) params.set('include_mode', includeMode)
       if (minFrames > 0) params.set('min_frames', minFrames)
       if (ratingFilter.size > 0) params.set('rating', [...ratingFilter].join(','))
+      if (sort) params.set('sort', sort)
       const r = await fetch('/api/scenes?' + params)
       if (!r.ok) throw new Error('fetch failed')
       const data = await r.json()
@@ -70,7 +72,7 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
         onLoadingChange?.(false)
       }
     }
-  }, [filter, videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter])
+  }, [filter, videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, sort])
 
   // Explicitly trigger initial load when loadNext changes (filter params changed).
   // The IntersectionObserver alone is unreliable here: if the sentinel is already
