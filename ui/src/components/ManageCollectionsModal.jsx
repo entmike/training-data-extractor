@@ -40,6 +40,8 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
   const [exportError, setExportError] = useState('')
   const [clearingCaptions, setClearingCaptions] = useState(false)
   const [viewMode, setViewMode] = useState('thumb') // 'card' | 'thumb'
+  const [captionPromptDraft, setCaptionPromptDraft] = useState('')
+  const [savingPrompt, setSavingPrompt] = useState(false)
   const mouseDownOnOverlay = useRef(false)
 
   useEffect(() => {
@@ -60,6 +62,11 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
       .then(d => { setItems(d.items || []); setLoadingItems(false) })
       .catch(() => setLoadingItems(false))
   }, [selectedId])
+
+  useEffect(() => {
+    const col = collections.find(c => c.id === selectedId)
+    setCaptionPromptDraft(col?.caption_prompt || '')
+  }, [selectedId, collections])
 
   async function fetchCollections() {
     setLoadingCollections(true)
@@ -107,13 +114,31 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
   async function commitRename(id) {
     const name = renameDraft.trim()
     if (!name) { setRenamingId(null); return }
-    await fetch(`/api/collections/${id}`, {
+    const r = await fetch(`/api/collections/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     })
-    setCollections(cols => cols.map(c => c.id === id ? { ...c, name } : c))
+    if (r.ok) {
+      const d = await r.json()
+      setCollections(cols => cols.map(c => c.id === id ? { ...c, ...d.collection } : c))
+    }
     setRenamingId(null)
+  }
+
+  async function saveCaptionPrompt() {
+    if (!selectedId) return
+    setSavingPrompt(true)
+    const r = await fetch(`/api/collections/${selectedId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caption_prompt: captionPromptDraft }),
+    })
+    if (r.ok) {
+      const d = await r.json()
+      setCollections(cols => cols.map(c => c.id === selectedId ? { ...c, ...d.collection } : c))
+    }
+    setSavingPrompt(false)
   }
 
   async function removeItem(itemId) {
@@ -257,17 +282,30 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
               <>
                 <div className="collections-items-header">
                   <strong>{selectedCol.name}</strong>
-                  <span className="collection-count">{items.length} items</span>
-                  <div className="header-spacer" />
-                  {exportError && <span className="collection-export-error">{exportError}</span>}
-                  <button
-                    className="collection-clear-captions-btn"
-                    onClick={clearCaptions}
-                    disabled={clearingCaptions || items.length === 0}
-                    title="Clear captions for all scenes in this collection"
-                  >
-                    {clearingCaptions ? 'Clearing…' : 'Clear captions'}
-                  </button>
+                </div>
+                <div className="collection-prompt-section">
+                  <label className="collection-prompt-label">
+                    Caption prompt override
+                    <span className="collection-prompt-hint"> — overrides video prompt; leave blank to use video default</span>
+                  </label>
+                  <textarea
+                    className="collection-prompt-textarea"
+                    value={captionPromptDraft}
+                    onChange={e => setCaptionPromptDraft(e.target.value)}
+                    placeholder="Leave blank to use the video's prompt (or system default if none set)"
+                    rows={3}
+                  />
+                  {captionPromptDraft !== (selectedCol?.caption_prompt || '') && (
+                    <button
+                      className="collection-prompt-save-btn"
+                      onClick={saveCaptionPrompt}
+                      disabled={savingPrompt}
+                    >
+                      {savingPrompt ? '…' : 'Save'}
+                    </button>
+                  )}
+                </div>
+                <div className="collections-items-toolbar">
                   <div className="view-toggle">
                     <button
                       className={`view-toggle-btn${viewMode === 'card' ? ' active' : ''}`}
@@ -280,6 +318,17 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
                       title="Thumbnail view"
                     >⊞</button>
                   </div>
+                  <span className="collection-count">{items.length} items</span>
+                  <div className="header-spacer" />
+                  {exportError && <span className="collection-export-error">{exportError}</span>}
+                  <button
+                    className="collection-clear-captions-btn"
+                    onClick={clearCaptions}
+                    disabled={clearingCaptions || items.length === 0}
+                    title="Clear captions for all scenes in this collection"
+                  >
+                    {clearingCaptions ? 'Clearing…' : 'Clear captions'}
+                  </button>
                   <button
                     className="collection-export-btn"
                     onClick={exportCollection}

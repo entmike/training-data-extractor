@@ -426,6 +426,95 @@ def _get_scene_prep_args(db: Database, scene: Dict[str, Any]):
     )
 
 
+def _pick_next_collection_item(db: Database) -> Optional[Dict[str, Any]]:
+    """
+    Pick the next collection item whose caption is empty.
+    Items that already have a real caption, or that are marked __skip__/__error__,
+    are skipped.
+    """
+    with db._connection() as conn:
+        row = conn.execute(
+            """
+            SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame,
+                   s.start_time, s.end_time,
+                   COUNT(st.tag) AS tag_count,
+                   c.caption_prompt AS collection_caption_prompt
+            FROM collection_items ci
+            JOIN scenes s ON s.id = ci.scene_id
+            JOIN collections c ON c.id = ci.collection_id
+            LEFT JOIN scene_tags st ON st.scene_id = ci.scene_id
+            WHERE ci.caption IS NULL OR ci.caption = ''
+            GROUP BY ci.id
+            ORDER BY tag_count DESC, ci.created_at
+            LIMIT 1
+            """
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def _pick_next_work_item(db: Database, video_id: Optional[int]) -> Optional[Dict[str, Any]]:
+    """
+    Pick the next item to caption, prioritising collection items over scenes.
+    Returns a dict with an added 'work_type' key: 'collection_item' or 'scene'.
+    """
+    item = _pick_next_collection_item(db)
+    if item:
+        return {**item, "work_type": "collection_item"}
+    scene = _pick_next_scene(db, video_id)
+    if scene:
+        return {**scene, "work_type": "scene"}
+    return None
+
+
+def _get_collection_item_prep_args(db: Database, item: Dict[str, Any]):
+    """
+    Gather everything needed to call prepare_scene_inputs for a collection item.
+    Uses the item's own start_frame/end_frame (not the full scene range) so the
+    clip sent to Qwen matches the specific collection clip.
+    """
+    video = db.get_video_by_id(item["video_id"])
+    if not video:
+        return None
+    video_path = Path(video["path"])
+    fps = video.get("fps", 24.0)
+    frame_offset = db.get_frame_offset(item["video_id"])
+    # Prompt resolution: collection override → video prompt → system default (None)
+    raw_prompt = (
+        item.get("collection_caption_prompt") or
+        video.get("prompt") or
+        None
+    )
+    video_prompt = raw_prompt
+    scene_id = item["scene_id"]
+    with db._connection() as conn:
+        tag_rows = conn.execute(
+            """SELECT st.tag, COALESCE(td.description, '') as description,
+                      COALESCE(td.display_name, '') as display_name
+               FROM scene_tags st
+               LEFT JOIN tag_definitions td ON td.tag = st.tag
+               WHERE st.scene_id = ?
+               ORDER BY st.created_at, st.tag""",
+            (scene_id,)
+        ).fetchall()
+    scene_tags = [r["display_name"] or r["tag"] for r in tag_rows] if tag_rows else None
+    scene_tag_definitions = (
+        {(r["display_name"] or r["tag"]): r["description"] for r in tag_rows if r["description"]}
+        if tag_rows else None
+    )
+    return dict(
+        video_path=video_path,
+        start_time=item["start_time"],
+        end_time=item["end_time"],
+        frame_offset=frame_offset,
+        fps=fps,
+        start_frame=item["start_frame"],   # collection item's specific clip range
+        end_frame=item["end_frame"],
+        prompt=video_prompt,
+        tags=scene_tags,
+        tag_definitions=scene_tag_definitions,
+    )
+
+
 def caption_all_scenes(
     config: PipelineConfig,
     video_id: Optional[int] = None
@@ -453,19 +542,51 @@ def caption_all_scenes(
     _retrofit_caption_metadata(db)
     count = 0
 
-    # Prefetch state: background thread preparing next scene's inputs
-    prefetch_result = {}   # keys: inputs, tmpdir, prompt, error
+    # Prefetch state: background thread preparing next item's inputs
+    prefetch_result: Dict[str, Any] = {}
     prefetch_thread = None
 
-    def _launch_prefetch(scene):
-        """Start background prep for `scene`; result lands in prefetch_result."""
+    def _item_duration(work_item: Dict[str, Any]) -> float:
+        if work_item["work_type"] == "collection_item":
+            fps_val = (db.get_video_by_id(work_item["video_id"]) or {}).get("fps", 24.0) or 24.0
+            return (work_item["end_frame"] - work_item["start_frame"]) / fps_val
+        return work_item["end_time"] - work_item["start_time"]
+
+    def _get_prep_args(work_item: Dict[str, Any]):
+        if work_item["work_type"] == "collection_item":
+            return _get_collection_item_prep_args(db, work_item)
+        return _get_scene_prep_args(db, work_item)
+
+    def _save_caption(work_item: Dict[str, Any], caption: str,
+                      started_at: Optional[str] = None, finished_at: Optional[str] = None,
+                      prompt: Optional[str] = None) -> None:
+        if work_item["work_type"] == "collection_item":
+            db.update_collection_item_caption(work_item["id"], caption)
+        else:
+            db.update_scene_caption(
+                work_item["id"], caption,
+                started_at=started_at, finished_at=finished_at, prompt=prompt
+            )
+
+    def _log_label(work_item: Dict[str, Any]) -> str:
+        if work_item["work_type"] == "collection_item":
+            return (f"collection item {work_item['id']} "
+                    f"(scene {work_item['scene_id']}, "
+                    f"frames {work_item['start_frame']}-{work_item['end_frame']})")
+        video = db.get_video_by_id(work_item["video_id"]) or {}
+        stem = Path(video.get("path", "?")).stem
+        return (f"scene {work_item['id']} "
+                f"({work_item['start_time']:.1f}s-{work_item['end_time']:.1f}s, "
+                f"tags={work_item.get('tag_count', 0)}) from {stem}")
+
+    def _launch_prefetch(work_item: Dict[str, Any]):
+        """Start background prep for work_item; result lands in prefetch_result."""
         prefetch_result.clear()
-        args = _get_scene_prep_args(db, scene)
+        args = _get_prep_args(work_item)
         if args is None:
-            prefetch_result["error"] = RuntimeError(f"No video for scene {scene['id']}")
+            prefetch_result["error"] = RuntimeError(f"No video for {_log_label(work_item)}")
             return
-        duration = scene["end_time"] - scene["start_time"]
-        if duration > 60:
+        if _item_duration(work_item) > 60:
             prefetch_result["skip"] = True
             return
 
@@ -482,89 +603,74 @@ def caption_all_scenes(
         t.start()
         return t
 
-    # Bootstrap: pick and start prefetching the first scene
-    scene = _pick_next_scene(db, video_id)
-    if scene is None:
-        logger.info("No scenes to caption")
+    # Bootstrap: collection items have priority over scenes
+    work_item = _pick_next_work_item(db, video_id)
+    if work_item is None:
+        logger.info("Nothing to caption")
         return 0
 
-    prefetch_thread = _launch_prefetch(scene)
+    prefetch_thread = _launch_prefetch(work_item)
 
     while True:
-        duration = scene["end_time"] - scene["start_time"]
-        tag_count = scene.get("tag_count", 0)
-        video_path_stem = Path(db.get_video_by_id(scene["video_id"])["path"]).stem
-        logger.info(
-            f"Captioning scene {scene['id']} ({scene['start_time']:.1f}s-{scene['end_time']:.1f}s,"
-            f" tags={tag_count}) from {video_path_stem}"
-        )
+        duration = _item_duration(work_item)
+        logger.info(f"Captioning {_log_label(work_item)}")
 
         if duration > 60:
-            logger.warning(f"Scene {scene['id']} is {duration:.1f}s (>60s), skipping")
-            db.update_scene_caption(scene["id"], "__skip__")
-            # Prefetch is already marked skip; pick the next one
-            scene = _pick_next_scene(db, video_id)
-            if scene is None:
+            logger.warning(f"{_log_label(work_item)} is {duration:.1f}s (>60s), skipping")
+            _save_caption(work_item, "__skip__")
+            work_item = _pick_next_work_item(db, video_id)
+            if work_item is None:
                 break
-            prefetch_thread = _launch_prefetch(scene)
+            prefetch_thread = _launch_prefetch(work_item)
             continue
 
-        # Wait for prefetch to finish (usually already done while GPU was busy)
         if prefetch_thread is not None:
             prefetch_thread.join()
 
         if "error" in prefetch_result:
-            logger.error(f"Prefetch failed for scene {scene['id']}: {prefetch_result['error']}")
-            db.update_scene_caption(
-                scene["id"], f"__error__: {prefetch_result['error']}",
-                started_at=_now_utc(), finished_at=_now_utc()
-            )
+            logger.error(f"Prefetch failed for {_log_label(work_item)}: {prefetch_result['error']}")
+            _save_caption(work_item, f"__error__: {prefetch_result['error']}",
+                          started_at=_now_utc(), finished_at=_now_utc())
             break
 
-        inputs    = prefetch_result["inputs"]
-        tmpdir    = prefetch_result["tmpdir"]
+        inputs      = prefetch_result["inputs"]
+        tmpdir      = prefetch_result["tmpdir"]
         prompt_used = prefetch_result["prompt"]
-        started_at = _now_utc()
+        started_at  = _now_utc()
 
         try:
-            # ── GPU inference ──────────────────────────────────────────────────
-            # Immediately after kicking off inference we write nothing to DB yet,
-            # so _pick_next_scene will still return this scene — that's fine because
-            # we don't start the next prefetch until after we write the caption below.
             caption = run_scene_inference(inputs)
             finished_at = _now_utc()
         except Exception as e:
-            logger.error(f"Failed to caption scene {scene['id']}: {e}")
-            db.update_scene_caption(
-                scene["id"], f"__error__: {e}",
-                started_at=started_at, finished_at=_now_utc()
-            )
+            logger.error(f"Failed to caption {_log_label(work_item)}: {e}")
+            _save_caption(work_item, f"__error__: {e}",
+                          started_at=started_at, finished_at=_now_utc())
             tmpdir.cleanup()
             break
         finally:
             tmpdir.cleanup()
 
         if caption:
-            db.update_scene_caption(
-                scene["id"], caption,
-                started_at=started_at, finished_at=finished_at, prompt=prompt_used
-            )
+            _save_caption(work_item, caption,
+                          started_at=started_at, finished_at=finished_at, prompt=prompt_used)
             count += 1
-            print(f"\n[Scene {scene['id']}] {scene['start_time']:.1f}s-{scene['end_time']:.1f}s")
+            wt = work_item["work_type"]
+            if wt == "collection_item":
+                print(f"\n[Collection item {work_item['id']} / scene {work_item['scene_id']}]"
+                      f" frames {work_item['start_frame']}-{work_item['end_frame']}")
+            else:
+                print(f"\n[Scene {work_item['id']}]"
+                      f" {work_item['start_time']:.1f}s-{work_item['end_time']:.1f}s")
             print(f"  {caption}")
         else:
-            logger.warning(f"Empty caption for scene {scene['id']}")
-            db.update_scene_caption(
-                scene["id"], "__empty__",
-                started_at=started_at, finished_at=_now_utc(), prompt=prompt_used
-            )
+            logger.warning(f"Empty caption for {_log_label(work_item)}")
+            _save_caption(work_item, "__empty__",
+                          started_at=started_at, finished_at=_now_utc(), prompt=prompt_used)
 
-        # Caption written → pick next scene and kick off prefetch immediately,
-        # so preprocessing runs while the caller does any bookkeeping.
-        scene = _pick_next_scene(db, video_id)
-        if scene is None:
+        work_item = _pick_next_work_item(db, video_id)
+        if work_item is None:
             break
-        prefetch_thread = _launch_prefetch(scene)
+        prefetch_thread = _launch_prefetch(work_item)
 
-    logger.info(f"Captioned {count} scenes")
+    logger.info(f"Captioned {count} items")
     return count

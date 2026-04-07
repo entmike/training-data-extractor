@@ -19,7 +19,9 @@ UI_DIST = Path(__file__).parent / 'ui' / 'dist'
 UI_SRC = Path(__file__).parent / 'ui' / 'src'  # For development without rebuild
 
 # Load config
-CONFIG_PATH = Path("config.yaml")
+_HERE = Path(__file__).parent
+
+CONFIG_PATH = _HERE / "config.yaml"
 if CONFIG_PATH.exists():
     with open(CONFIG_PATH) as f:
         config = yaml.safe_load(f)
@@ -29,10 +31,15 @@ else:
         "output_dir": "./dataset"
     }
 
-DB_PATH = Path(config.get("db_path", ".cache/index.db"))
-OUTPUT_DIR = Path(config.get("output_dir", "./dataset"))
-DEBUG_SCENES_DIR = Path(".cache/previews")
-WAVEFORMS_DIR = Path(".cache/waveforms")
+def _resolve(p: str) -> Path:
+    """Resolve a config path relative to the project root, not the cwd."""
+    path = Path(p)
+    return path if path.is_absolute() else _HERE / path
+
+DB_PATH = _resolve(config.get("db_path", ".cache/index.db"))
+OUTPUT_DIR = _resolve(config.get("output_dir", "./dataset"))
+DEBUG_SCENES_DIR = _HERE / ".cache/previews"
+WAVEFORMS_DIR = _HERE / ".cache/waveforms"
 CLIPS_DIR     = Path(".cache/clips")
 
 
@@ -149,6 +156,12 @@ def ensure_collections_tables():
     # Migration: add caption column if it doesn't exist yet
     try:
         conn.execute("ALTER TABLE collection_items ADD COLUMN caption TEXT DEFAULT ''")
+        conn.commit()
+    except Exception:
+        pass  # column already exists
+    # Migration: add caption_prompt column to collections if it doesn't exist yet
+    try:
+        conn.execute("ALTER TABLE collections ADD COLUMN caption_prompt TEXT")
         conn.commit()
     except Exception:
         pass  # column already exists
@@ -1271,7 +1284,7 @@ def get_collections():
     """List all collections with item count."""
     conn = get_db_connection()
     rows = conn.execute("""
-        SELECT c.id, c.name, c.created_at,
+        SELECT c.id, c.name, c.caption_prompt, c.created_at,
                COUNT(ci.id) as item_count
         FROM collections c
         LEFT JOIN collection_items ci ON ci.collection_id = c.id
@@ -1300,22 +1313,31 @@ def create_collection():
 
 
 @app.route('/api/collections/<int:collection_id>', methods=['PUT'])
-def rename_collection(collection_id: int):
-    """Rename a collection."""
+def update_collection(collection_id: int):
+    """Update a collection's name and/or caption_prompt."""
     data = request.get_json()
-    if not data or not data.get('name'):
-        return jsonify({"error": "Missing name"}), 400
-    name = data['name'].strip()
-    if not name:
+    if not data:
+        return jsonify({"error": "Missing data"}), 400
+    has_name = 'name' in data
+    has_prompt = 'caption_prompt' in data
+    if not has_name and not has_prompt:
+        return jsonify({"error": "Nothing to update"}), 400
+    name = data['name'].strip() if has_name else None
+    if has_name and not name:
         return jsonify({"error": "Empty name"}), 400
     conn = get_db_connection()
     if conn.execute("SELECT id FROM collections WHERE id = ?", (collection_id,)).fetchone() is None:
         conn.close()
         return jsonify({"error": "Collection not found"}), 404
-    conn.execute("UPDATE collections SET name = ? WHERE id = ?", (name, collection_id))
+    if has_name:
+        conn.execute("UPDATE collections SET name = ? WHERE id = ?", (name, collection_id))
+    if has_prompt:
+        prompt_val = data['caption_prompt'].strip() if data['caption_prompt'] else None
+        conn.execute("UPDATE collections SET caption_prompt = ? WHERE id = ?", (prompt_val, collection_id))
     conn.commit()
+    row = conn.execute("SELECT c.id, c.name, c.caption_prompt, c.created_at FROM collections c WHERE c.id = ?", (collection_id,)).fetchone()
     conn.close()
-    return jsonify({"collection_id": collection_id, "name": name})
+    return jsonify({"collection": dict(row)})
 
 
 @app.route('/api/collections/<int:collection_id>', methods=['DELETE'])

@@ -465,6 +465,15 @@ class Database:
             )
             conn.commit()
     
+    def update_collection_item_caption(self, item_id: int, caption: str) -> None:
+        """Update the caption for a collection item."""
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE collection_items SET caption = ? WHERE id = ?",
+                (caption, item_id)
+            )
+            conn.commit()
+
     # Candidate operations
     def add_candidate(
         self,

@@ -1379,13 +1379,18 @@ html, body {
   overflow: hidden;
 }
 .collections-items-header {
+  padding: 10px 14px 8px;
+  font-size: 14px;
+  color: var(--text-heading);
+}
+.collections-items-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--border-subtle);
-  font-size: 14px;
-  color: var(--text-heading);
+  font-size: 13px;
+  flex-shrink: 0;
 }
 .collection-export-btn {
   background: var(--blue);
@@ -1419,6 +1424,55 @@ html, body {
   font-size: 12px;
   color: var(--red);
 }
+.collection-prompt-section {
+  padding: 4px 12px 8px;
+  background: var(--bg2);
+  flex-shrink: 0;
+}
+.collection-prompt-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg2);
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.collection-prompt-hint {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.7;
+}
+.collection-prompt-textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 5px;
+  font-size: 12px;
+  padding: 6px 8px;
+  resize: vertical;
+  font-family: inherit;
+  min-height: 52px;
+}
+.collection-prompt-textarea:focus { outline: none; border-color: var(--accent); }
+.collection-prompt-save-btn {
+  display: block;
+  margin-top: 6px;
+  margin-left: auto;
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  border-radius: 5px;
+  font-size: 12px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+.collection-prompt-save-btn:disabled { opacity: .5; cursor: default; }
+.collection-prompt-save-btn:not(:disabled):hover { filter: brightness(1.15); }
 .collections-loading {
   padding: 14px;
   color: var(--text-muted);
