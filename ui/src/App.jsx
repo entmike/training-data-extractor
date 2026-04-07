@@ -12,7 +12,6 @@ function getUrlParam(key, fallback = '') {
 }
 
 export default function App() {
-  const [filter, setFilter] = useState(() => getUrlParam('filter', 'captioned'))
   const [videoFilter, setVideoFilter] = useState(() => getUrlParam('video', ''))
   const [stats, setStats] = useState(null)
   const [allTags, setAllTags] = useState([])
@@ -35,14 +34,11 @@ export default function App() {
   // Sync URL params
   useEffect(() => {
     const url = new URL(window.location)
-    filter !== 'captioned'
-      ? url.searchParams.set('filter', filter)
-      : url.searchParams.delete('filter')
     videoFilter
       ? url.searchParams.set('video', videoFilter)
       : url.searchParams.delete('video')
     window.history.replaceState({}, '', url)
-  }, [filter, videoFilter])
+  }, [videoFilter])
 
   const fetchStats = useCallback(async () => {
     const r = await fetch('/api/stats')
@@ -81,7 +77,6 @@ export default function App() {
     <AppContext.Provider value={{ tagMap, openPlayer, refreshTags: fetchTags }}>
       <Header
         stats={stats}
-        filter={filter} setFilter={setFilter}
         videoFilter={videoFilter} setVideoFilter={setVideoFilter}
         allVideos={allVideos}
         allTags={allTags}
@@ -99,7 +94,6 @@ export default function App() {
       />
       <main className="container">
         <SceneGrid
-          filter={filter}
           videoFilter={videoFilter}
           activeIncludeTags={activeIncludeTags}
           activeExcludeTags={activeExcludeTags}

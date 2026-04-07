@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import TagDropdown from './TagDropdown'
 
 export default function Header({
-  stats, filter, setFilter, videoFilter, setVideoFilter,
+  stats, videoFilter, setVideoFilter,
   allVideos, allTags,
   activeIncludeTags, setActiveIncludeTags,
   activeExcludeTags, setActiveExcludeTags,
@@ -76,20 +76,6 @@ export default function Header({
               <span className="skeleton skeleton--text" style={{ width: 120 }} />
             </>}
           </div>
-        </div>
-
-        {/* Filter buttons */}
-        <div className="filter-buttons">
-          {['all', 'captioned', 'uncaptioned', 'recent'].map(f => (
-            <button
-              key={f}
-              className={`filter-btn${filter === f ? ' active' : ''}`}
-              onClick={() => setFilter(f)}
-              disabled={isLoading}
-            >
-              {f.charAt(0).toUpperCase() + f.slice(1)}
-            </button>
-          ))}
         </div>
 
         {/* Video filter */}

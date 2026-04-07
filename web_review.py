@@ -517,7 +517,6 @@ def serve_waveform(scene_id: int):
 @app.route('/api/scenes')
 def get_scenes():
     """Return paginated scene data as JSON for infinite scroll."""
-    filter_type = request.args.get('filter', 'captioned')
     video_filter = request.args.get('video', '')
     page = max(1, int(request.args.get('page', 1) or 1))
     limit = min(50, int(request.args.get('limit', 50) or 50))
@@ -536,11 +535,6 @@ def get_scenes():
 
     conditions = []
     params = []
-
-    if filter_type in ('captioned', 'recent'):
-        conditions.append("s.caption IS NOT NULL AND s.caption != '' AND substr(s.caption, 1, 2) != '__'")
-    elif filter_type == 'uncaptioned':
-        conditions.append("(s.caption IS NULL OR s.caption = '' OR substr(s.caption, 1, 2) = '__')")
 
     if video_filter:
         conditions.append("v.id = ?")
@@ -601,8 +595,7 @@ def get_scenes():
         {where_clause}
         GROUP BY s.id
         ORDER BY {
-            "s.caption_finished_at DESC NULLS LAST, s.id DESC" if filter_type == "recent"
-            else "s.start_frame ASC, s.video_id, s.id" if sort == "frames_asc"
+            "s.start_frame ASC, s.video_id, s.id" if sort == "frames_asc"
             else "s.start_frame DESC, s.video_id, s.id" if sort == "frames_desc"
             else "s.video_id, s.id"
         }
@@ -1607,6 +1600,59 @@ def remove_collection_item(collection_id: int, item_id: int):
     conn.commit()
     conn.close()
     return jsonify({"success": True})
+
+
+@app.route('/api/scenes/<int:scene_id>/collection_items', methods=['GET'])
+def get_scene_collection_items(scene_id: int):
+    """Get all collection items for a given scene, with collection metadata."""
+    conn = get_db_connection()
+    rows = conn.execute("""
+        SELECT ci.id, ci.scene_id, ci.video_id, ci.collection_id,
+               ci.start_frame, ci.end_frame, ci.created_at,
+               ci.caption as item_caption,
+               c.name as collection_name,
+               v.path as video_path, v.fps, v.frame_offset,
+               COALESCE(v.name, '') as video_name_custom,
+               s.caption as scene_caption, s.start_time, s.end_time, s.rating, s.blurhash,
+               s.start_frame as scene_start_frame, s.end_frame as scene_end_frame
+        FROM collection_items ci
+        JOIN collections c ON ci.collection_id = c.id
+        JOIN videos v ON ci.video_id = v.id
+        JOIN scenes s ON ci.scene_id = s.id
+        WHERE ci.scene_id = ?
+        ORDER BY c.name ASC, ci.created_at ASC
+    """, (scene_id,)).fetchall()
+    conn.close()
+    items = []
+    for r in rows:
+        d = dict(r)
+        video_display = d['video_name_custom'] or Path(d['video_path']).stem
+        t = int(d.get('start_time') or 0)
+        items.append({
+            'id': d['id'],
+            'scene_id': d['scene_id'],
+            'video_id': d['video_id'],
+            'collection_id': d['collection_id'],
+            'collection_name': d['collection_name'],
+            'start_frame': d['start_frame'],
+            'end_frame': d['end_frame'],
+            'frame_count': d['end_frame'] - d['start_frame'],
+            'created_at': d['created_at'],
+            'video_name': video_display,
+            'video_path': d['video_path'],
+            'fps': d['fps'] or 24.0,
+            'frame_offset': d['frame_offset'] or 0,
+            'caption': d.get('item_caption') or '',
+            'start_time': d.get('start_time'),
+            'end_time': d.get('end_time'),
+            'start_time_hms': f"{t//3600:02d}:{(t%3600)//60:02d}:{t%60:02d}",
+            'duration': (d.get('end_time') or 0) - (d.get('start_time') or 0),
+            'rating': d.get('rating'),
+            'blurhash': d.get('blurhash'),
+            'scene_start_frame': d.get('scene_start_frame') or 0,
+            'scene_end_frame': d.get('scene_end_frame') or 0,
+        })
+    return jsonify({"items": items})
 
 
 if __name__ == '__main__':

@@ -3,7 +3,7 @@ import SceneCardGrid from './SceneCardGrid'
 
 const BATCH_SIZE = 50
 
-export default function SceneGrid({ filter, videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, sort, tagMap, viewMode, onLoadingChange }) {
+export default function SceneGrid({ videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, sort, tagMap, viewMode, onLoadingChange }) {
   const [scenes, setScenes] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [isEmpty, setIsEmpty] = useState(false)
@@ -15,7 +15,6 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
 
   // filterKey drives scene-list reset: any server-side filter param change resets the list
   const filterKey = [
-    filter,
     videoFilter,
     [...activeIncludeTags].sort().join(','),
     [...activeExcludeTags].sort().join(','),
@@ -47,7 +46,7 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
     setIsLoading(true)
     onLoadingChange?.(true)
     try {
-      const params = new URLSearchParams({ filter, page: pageRef.current, limit: BATCH_SIZE })
+      const params = new URLSearchParams({ page: pageRef.current, limit: BATCH_SIZE })
       if (videoFilter) params.set('video', videoFilter)
       if (activeIncludeTags.size > 0) params.set('include_tags', [...activeIncludeTags].join(','))
       if (activeExcludeTags.size > 0) params.set('exclude_tags', [...activeExcludeTags].join(','))
@@ -72,7 +71,7 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
         onLoadingChange?.(false)
       }
     }
-  }, [filter, videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, sort])
+  }, [videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, sort])
 
   // Explicitly trigger initial load when loadNext changes (filter params changed).
   // The IntersectionObserver alone is unreliable here: if the sentinel is already

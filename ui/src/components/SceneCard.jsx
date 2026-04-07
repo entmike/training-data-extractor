@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { AppContext } from '../context'
 import TagDropdown from './TagDropdown'
 import BlurhashCanvas from './BlurhashCanvas'
+import CollectionItemEditor from './CollectionItemEditor'
 
 function formatRelativeTime(ts) {
   const d = new Date(ts)
@@ -31,6 +32,32 @@ export default function SceneCard({ scene: initialScene, tagMap, visible, onTags
 
   const [imgLoaded, setImgLoaded] = useState(false)
   const isDirty = caption !== savedCaption
+
+  // Collection badge state
+  const [collItems, setCollItems] = useState(null) // null = not fetched
+  const [collLoading, setCollLoading] = useState(false)
+  const [showCollPicker, setShowCollPicker] = useState(false)
+  const [editingCollItem, setEditingCollItem] = useState(null)
+  const badgeRef = useRef(null)
+
+  async function handleBadgeClick(e) {
+    e.stopPropagation()
+    setCollLoading(true)
+    setShowCollPicker(false)
+    try {
+      const r = await fetch(`/api/scenes/${initialScene.id}/collection_items`)
+      const d = await r.json()
+      const fetched = d.items || []
+      setCollItems(fetched)
+      if (fetched.length === 1) {
+        setEditingCollItem(fetched[0])
+      } else if (fetched.length > 1) {
+        setShowCollPicker(true)
+      }
+    } finally {
+      setCollLoading(false)
+    }
+  }
   const imgSrc = initialScene.preview_path
     ? `/preview/${initialScene.preview_path}`
     : `/scene_preview/${initialScene.id}`
@@ -163,7 +190,12 @@ export default function SceneCard({ scene: initialScene, tagMap, visible, onTags
           >★</button>
         ))}
         {initialScene.collection_count > 0 && (
-          <span className="collection-count-badge" title={`In ${initialScene.collection_count} collection item${initialScene.collection_count !== 1 ? 's' : ''}`}>
+          <span
+            ref={badgeRef}
+            className={`collection-count-badge collection-count-badge--clickable${collLoading ? ' collection-count-badge--loading' : ''}`}
+            title={`In ${initialScene.collection_count} collection${initialScene.collection_count !== 1 ? 's' : ''} — click to edit`}
+            onClick={handleBadgeClick}
+          >
             ⊞ {initialScene.collection_count}
           </span>
         )}
@@ -233,6 +265,37 @@ export default function SceneCard({ scene: initialScene, tagMap, visible, onTags
           sceneId={initialScene.id}
         />,
         document.body
+      )}
+
+      {showCollPicker && collItems && createPortal(
+        <div className="coll-picker-overlay" onClick={() => setShowCollPicker(false)}>
+          <div
+            className="coll-picker-popup"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="coll-picker-title">Select collection item</div>
+            {collItems.map(ci => (
+              <button
+                key={ci.id}
+                className="coll-picker-row"
+                onClick={() => { setShowCollPicker(false); setEditingCollItem(ci) }}
+              >
+                <span className="coll-picker-name">{ci.collection_name}</span>
+                <span className="coll-picker-frames">{ci.frame_count}f</span>
+              </button>
+            ))}
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {editingCollItem && (
+        <CollectionItemEditor
+          item={editingCollItem}
+          collectionId={editingCollItem.collection_id}
+          onClose={() => setEditingCollItem(null)}
+          onSaved={updated => setEditingCollItem(prev => ({ ...prev, ...updated }))}
+        />
       )}
     </div>
   )
