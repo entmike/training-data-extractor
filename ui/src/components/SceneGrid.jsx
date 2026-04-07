@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import SceneCard from './SceneCard'
+import SceneCardGrid from './SceneCardGrid'
 
 const BATCH_SIZE = 50
 
-export default function SceneGrid({ filter, videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, sort, tagMap, onLoadingChange }) {
+export default function SceneGrid({ filter, videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, sort, tagMap, viewMode, onLoadingChange }) {
   const [scenes, setScenes] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [isEmpty, setIsEmpty] = useState(false)
@@ -93,6 +93,9 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
     return () => obs.disconnect()
   }, [loadNext])
 
+  const isInitialLoad = isLoading && scenes.length === 0
+  const skeletonCount = viewMode === 'thumb' ? 24 : 6
+
   return (
     <>
       {isEmpty && (
@@ -100,18 +103,30 @@ export default function SceneGrid({ filter, videoFilter, activeIncludeTags, acti
           <h2>No scenes found</h2>
         </div>
       )}
-      <div className="scenes-grid">
-        {scenes.map(scene => (
-          <SceneCard
-            key={scene.id}
-            scene={scene}
-            tagMap={tagMap}
-            visible={true}
-            onTagsChange={handleTagsChange}
-          />
-        ))}
-      </div>
-      {isLoading && <div className="loading-indicator">Loading…</div>}
+      <SceneCardGrid
+        scenes={scenes}
+        tagMap={tagMap}
+        viewMode={viewMode}
+        onTagsChange={handleTagsChange}
+      />
+      {isLoading && (
+        <div className={isInitialLoad ? undefined : 'skeleton-pagination-wrap'}>
+          <div className={viewMode === 'thumb' ? 'scenes-thumbgrid' : 'scenes-grid'}>
+            {Array.from({ length: isInitialLoad ? skeletonCount : (viewMode === 'thumb' ? 8 : 2) }).map((_, i) => (
+              <div key={i} className={viewMode === 'thumb' ? 'coll-skeleton-thumb' : 'coll-skeleton-card'}>
+                <span className="skeleton skeleton--bar coll-skeleton-img" />
+                {viewMode === 'card' && (
+                  <div className="coll-skeleton-lines">
+                    <span className="skeleton skeleton--text" style={{ width: '55%' }} />
+                    <span className="skeleton skeleton--text" style={{ width: '80%' }} />
+                    <span className="skeleton skeleton--text" style={{ width: '38%' }} />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div ref={sentinelRef} style={{ height: 1 }} />
     </>
   )

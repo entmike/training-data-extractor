@@ -139,12 +139,19 @@ def ensure_collections_tables():
             video_id      INTEGER NOT NULL,
             start_frame   INTEGER NOT NULL,
             end_frame     INTEGER NOT NULL,
+            caption       TEXT DEFAULT '',
             created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE,
             FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
             UNIQUE (collection_id, scene_id)
         )
     """)
+    # Migration: add caption column if it doesn't exist yet
+    try:
+        conn.execute("ALTER TABLE collection_items ADD COLUMN caption TEXT DEFAULT ''")
+        conn.commit()
+    except Exception:
+        pass  # column already exists
     conn.commit()
     conn.close()
 
@@ -1422,14 +1429,18 @@ def get_collection_items(collection_id: int):
         return jsonify({"error": "Collection not found"}), 404
     rows = conn.execute("""
         SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame, ci.created_at,
+               ci.caption as item_caption,
                v.path as video_path, v.fps, v.frame_offset,
                COALESCE(v.name, '') as video_name_custom,
-               s.caption, s.start_time, s.end_time, s.rating,
-               s.start_frame as scene_start_frame, s.end_frame as scene_end_frame
+               s.caption as scene_caption, s.start_time, s.end_time, s.rating, s.blurhash,
+               s.start_frame as scene_start_frame, s.end_frame as scene_end_frame,
+               GROUP_CONCAT(st.tag, '|') as tags_concat
         FROM collection_items ci
         JOIN videos v ON ci.video_id = v.id
         JOIN scenes s ON ci.scene_id = s.id
+        LEFT JOIN scene_tags st ON st.scene_id = s.id
         WHERE ci.collection_id = ?
+        GROUP BY ci.id
         ORDER BY ci.created_at ASC
     """, (collection_id,)).fetchall()
     conn.close()
@@ -1437,6 +1448,8 @@ def get_collection_items(collection_id: int):
     for r in rows:
         d = dict(r)
         video_display = d['video_name_custom'] or Path(d['video_path']).stem
+        tags_raw = d.get('tags_concat') or ''
+        t = int(d.get('start_time') or 0)
         items.append({
             'id': d['id'],
             'scene_id': d['scene_id'],
@@ -1446,12 +1459,17 @@ def get_collection_items(collection_id: int):
             'frame_count': d['end_frame'] - d['start_frame'],
             'created_at': d['created_at'],
             'video_name': video_display,
+            'video_path': d['video_path'],
             'fps': d['fps'] or 24.0,
             'frame_offset': d['frame_offset'] or 0,
-            'caption': d.get('caption') or '',
+            'caption': d.get('item_caption') or '',
+            'tags': [tag for tag in tags_raw.split('|') if tag],
             'start_time': d.get('start_time'),
             'end_time': d.get('end_time'),
+            'start_time_hms': f"{t//3600:02d}:{(t%3600)//60:02d}:{t%60:02d}",
+            'duration': (d.get('end_time') or 0) - (d.get('start_time') or 0),
             'rating': d.get('rating'),
+            'blurhash': d.get('blurhash'),
             'scene_start_frame': d.get('scene_start_frame') or 0,
             'scene_end_frame': d.get('scene_end_frame') or 0,
         })
@@ -1533,6 +1551,27 @@ def update_collection_item(collection_id: int, item_id: int):
     conn.close()
     return jsonify({"item_id": item_id, "start_frame": start_frame, "end_frame": end_frame,
                     "frame_count": end_frame - start_frame})
+
+
+@app.route('/api/collections/<int:collection_id>/items/<int:item_id>/caption', methods=['PUT'])
+def update_collection_item_caption(collection_id: int, item_id: int):
+    """Update the caption of a collection item (independent of the scene caption)."""
+    data = request.get_json()
+    if data is None or 'caption' not in data:
+        return jsonify({"error": "Missing caption"}), 400
+    caption = data['caption']
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT id FROM collection_items WHERE id = ? AND collection_id = ?",
+        (item_id, collection_id)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "Item not found"}), 404
+    conn.execute("UPDATE collection_items SET caption = ? WHERE id = ?", (caption, item_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"item_id": item_id, "caption": caption})
 
 
 @app.route('/api/collections/<int:collection_id>/items/<int:item_id>', methods=['DELETE'])

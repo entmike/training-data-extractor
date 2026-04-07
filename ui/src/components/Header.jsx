@@ -11,6 +11,7 @@ export default function Header({
   minFrames, setMinFrames,
   ratingFilter, setRatingFilter,
   sort, setSort,
+  viewMode, setViewMode,
   isLoading,
   onManageTags, onManageVideos, onManageCollections,
 }) {
@@ -119,6 +120,18 @@ export default function Header({
         <div className="header-spacer" />
 
         {/* Action buttons */}
+        <div className="view-toggle">
+          <button
+            className={`view-toggle-btn${viewMode === 'card' ? ' active' : ''}`}
+            onClick={() => setViewMode('card')}
+            title="Card view"
+          >⊟</button>
+          <button
+            className={`view-toggle-btn${viewMode === 'thumb' ? ' active' : ''}`}
+            onClick={() => setViewMode('thumb')}
+            title="Thumbnail view"
+          >⊞</button>
+        </div>
         <button className="action-btn" onClick={onManageTags} disabled={isLoading}>Manage Tags</button>
         <button className="action-btn" onClick={onManageVideos} disabled={isLoading}>Videos</button>
         <button className="action-btn" onClick={onManageCollections} disabled={isLoading}>Collections</button>

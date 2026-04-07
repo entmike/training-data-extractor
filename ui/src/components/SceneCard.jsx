@@ -15,7 +15,7 @@ function formatRelativeTime(ts) {
   return d.toLocaleDateString()
 }
 
-export default function SceneCard({ scene: initialScene, tagMap, visible, onTagsChange }) {
+export default function SceneCard({ scene: initialScene, tagMap, visible, onTagsChange, onPlay }) {
   const { openPlayer, refreshTags } = useContext(AppContext)
 
   const rawCaption = (initialScene.caption && !initialScene.caption.startsWith('__'))
@@ -108,6 +108,7 @@ export default function SceneCard({ scene: initialScene, tagMap, visible, onTags
   }
 
   function playVideo() {
+    if (onPlay) { onPlay(); return }
     openPlayer({
       sceneId: initialScene.id,
       videoPath: initialScene.video_path,

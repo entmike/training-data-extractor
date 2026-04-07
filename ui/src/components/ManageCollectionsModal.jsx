@@ -1,26 +1,45 @@
 import { useState, useEffect, useRef } from 'react'
 import CollectionItemEditor from './CollectionItemEditor'
+import SceneCardGrid from './SceneCardGrid'
 
-function formatFrame(frame, fps) {
-  const secs = frame / fps
-  const h = Math.floor(secs / 3600)
-  const m = Math.floor((secs % 3600) / 60)
-  const s = Math.floor(secs % 60)
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+/** Map a collection item to the shape SceneCard / SceneThumbnail expect */
+function itemToScene(item) {
+  return {
+    id: item.scene_id,
+    preview_path: null,
+    blurhash: item.blurhash,
+    video_path: item.video_path,
+    start_frame: item.start_frame,
+    end_frame: item.end_frame,
+    start_time: item.start_time,
+    end_time: item.end_time,
+    fps: item.fps,
+    frame_offset: item.frame_offset,
+    caption: item.caption,
+    tags: item.tags || [],
+    rating: item.rating,
+    video_name: item.video_name,
+    start_time_hms: item.start_time_hms,
+    duration: item.duration,
+    collection_count: 0,
+  }
 }
 
-export default function ManageCollectionsModal({ onClose }) {
+export default function ManageCollectionsModal({ tagMap, onClose }) {
   const [collections, setCollections] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [items, setItems] = useState([])
+  const [loadingCollections, setLoadingCollections] = useState(true)
   const [loadingItems, setLoadingItems] = useState(false)
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
   const [renamingId, setRenamingId] = useState(null)
   const [renameDraft, setRenameDraft] = useState('')
   const [editingItem, setEditingItem] = useState(null)
-  const [exporting,   setExporting]   = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState('')
+  const [clearingCaptions, setClearingCaptions] = useState(false)
+  const [viewMode, setViewMode] = useState('thumb') // 'card' | 'thumb'
   const mouseDownOnOverlay = useRef(false)
 
   useEffect(() => {
@@ -28,10 +47,10 @@ export default function ManageCollectionsModal({ onClose }) {
   }, [])
 
   useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape') onClose() }
+    function onKey(e) { if (e.key === 'Escape' && !editingItem) onClose() }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, editingItem])
 
   useEffect(() => {
     if (selectedId == null) { setItems([]); return }
@@ -43,6 +62,7 @@ export default function ManageCollectionsModal({ onClose }) {
   }, [selectedId])
 
   async function fetchCollections() {
+    setLoadingCollections(true)
     const r = await fetch('/api/collections')
     if (r.ok) {
       const d = await r.json()
@@ -50,6 +70,7 @@ export default function ManageCollectionsModal({ onClose }) {
       setCollections(cols)
       if (cols.length > 0 && selectedId == null) setSelectedId(cols[0].id)
     }
+    setLoadingCollections(false)
   }
 
   async function createCollection() {
@@ -105,6 +126,21 @@ export default function ManageCollectionsModal({ onClose }) {
     setItems(prev => prev.map(i => i.id === updated.id ? { ...i, ...updated } : i))
   }
 
+  async function clearCaptions() {
+    const captionedCount = items.filter(i => i.caption && !i.caption.startsWith('__')).length
+    if (!confirm(`Clear captions for all ${items.length} items in "${selectedCol?.name}"?\n\n${captionedCount} item${captionedCount !== 1 ? 's' : ''} currently have captions. This cannot be undone.`)) return
+    setClearingCaptions(true)
+    await Promise.all(items.map(item =>
+      fetch(`/api/collections/${selectedId}/items/${item.id}/caption`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caption: '' }),
+      })
+    ))
+    setItems(prev => prev.map(i => ({ ...i, caption: '' })))
+    setClearingCaptions(false)
+  }
+
   async function exportCollection() {
     setExporting(true); setExportError('')
     try {
@@ -147,7 +183,16 @@ export default function ManageCollectionsModal({ onClose }) {
           {/* Left sidebar: collection list */}
           <div className="collections-sidebar">
             <div className="collections-list">
-              {collections.map(col => (
+              {loadingCollections ? (
+                [1,2,3].map(n => (
+                  <div key={n} className="collection-item collection-item--skeleton">
+                    <span className="skeleton skeleton--text" style={{ width: `${50 + n * 15}%` }} />
+                    <span className="skeleton skeleton--text" style={{ width: 20 }} />
+                  </div>
+                ))
+              ) : collections.length === 0 ? (
+                <div className="collections-empty">No collections yet</div>
+              ) : collections.map(col => (
                 <div
                   key={col.id}
                   className={`collection-item${col.id === selectedId ? ' collection-item--active' : ''}`}
@@ -184,9 +229,6 @@ export default function ManageCollectionsModal({ onClose }) {
                   </div>
                 </div>
               ))}
-              {collections.length === 0 && (
-                <div className="collections-empty">No collections yet</div>
-              )}
             </div>
 
             {/* New collection form */}
@@ -219,6 +261,26 @@ export default function ManageCollectionsModal({ onClose }) {
                   <div className="header-spacer" />
                   {exportError && <span className="collection-export-error">{exportError}</span>}
                   <button
+                    className="collection-clear-captions-btn"
+                    onClick={clearCaptions}
+                    disabled={clearingCaptions || items.length === 0}
+                    title="Clear captions for all scenes in this collection"
+                  >
+                    {clearingCaptions ? 'Clearing…' : 'Clear captions'}
+                  </button>
+                  <div className="view-toggle">
+                    <button
+                      className={`view-toggle-btn${viewMode === 'card' ? ' active' : ''}`}
+                      onClick={() => setViewMode('card')}
+                      title="Card view"
+                    >⊟</button>
+                    <button
+                      className={`view-toggle-btn${viewMode === 'thumb' ? ' active' : ''}`}
+                      onClick={() => setViewMode('thumb')}
+                      title="Thumbnail view"
+                    >⊞</button>
+                  </div>
+                  <button
                     className="collection-export-btn"
                     onClick={exportCollection}
                     disabled={exporting || items.length === 0}
@@ -228,77 +290,46 @@ export default function ManageCollectionsModal({ onClose }) {
                   </button>
                 </div>
                 {loadingItems ? (
-                  <div className="collections-loading">Loading…</div>
-                ) : items.length === 0 ? (
-                  <div className="collections-empty">No items in this collection.</div>
-                ) : (() => {
-                  // Group by frame_count, sorted ascending
-                  const groups = []
-                  const seen = new Map()
-                  for (const item of items) {
-                    const fc = item.frame_count
-                    if (!seen.has(fc)) { seen.set(fc, []); groups.push(fc) }
-                    seen.get(fc).push(item)
-                  }
-                  groups.sort((a, b) => a - b)
-                  return (
-                    <div className="collections-items-list">
-                      {groups.map(fc => (
-                        <div key={fc} className="collection-fc-group">
-                          <div className="collection-fc-header">
-                            {fc}f &nbsp;·&nbsp; {seen.get(fc).length} item{seen.get(fc).length !== 1 ? 's' : ''}
-                          </div>
-                          {seen.get(fc).map(item => {
-                            const fps = item.fps || 24
-                            const startTC = formatFrame(item.start_frame, fps)
-                            const endTC = formatFrame(item.end_frame, fps)
-                            return (
-                              <div key={item.id} className="collection-entry">
-                                <div className="collection-entry-preview">
-                                  <img
-                                    src={`/scene_preview/${item.scene_id}`}
-                                    alt=""
-                                    className="collection-entry-thumb"
-                                    loading="lazy"
-                                  />
-                                </div>
-                                <div className="collection-entry-info">
-                                  <div className="collection-entry-video">{item.video_name}</div>
-                                  <div className="collection-entry-frames">
-                                    <span title="Start frame">f{item.start_frame}</span>
-                                    <span className="collection-entry-sep">→</span>
-                                    <span title="End frame">f{item.end_frame}</span>
-                                  </div>
-                                  <div className="collection-entry-tc">
-                                    {startTC} → {endTC}
-                                  </div>
-                                  <div className="collection-entry-scene">scene #{item.scene_id}</div>
-                                  {item.caption && (
-                                    <div className="collection-entry-caption" title={item.caption}>
-                                      {item.caption.length > 80 ? item.caption.slice(0, 80) + '…' : item.caption}
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="collection-entry-btns">
-                                <button
-                                  className="collection-entry-edit"
-                                  title="Edit frame range"
-                                  onClick={() => setEditingItem(item)}
-                                >✎</button>
-                                <button
-                                  className="collection-entry-remove"
-                                  title="Remove from collection"
-                                  onClick={() => removeItem(item.id)}
-                                >✕</button>
-                              </div>
-                              </div>
-                            )
-                          })}
+                  <div className="collections-items-scroll">
+                    <div className={viewMode === 'thumb' ? 'scenes-thumbgrid' : 'scenes-grid'}>
+                      {Array.from({ length: 12 }).map((_, i) => (
+                        <div key={i} className={viewMode === 'thumb' ? 'coll-skeleton-thumb' : 'coll-skeleton-card'}>
+                          <span className="skeleton skeleton--bar coll-skeleton-img" />
+                          {viewMode === 'card' && (
+                            <div className="coll-skeleton-lines">
+                              <span className="skeleton skeleton--text" style={{ width: '60%' }} />
+                              <span className="skeleton skeleton--text" style={{ width: '85%' }} />
+                              <span className="skeleton skeleton--text" style={{ width: '40%' }} />
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
-                  )
-                })()}
+                  </div>
+                ) : items.length === 0 ? (
+                  <div className="collections-empty">No items in this collection.</div>
+                ) : (
+                  <div className="collections-items-scroll">
+                    <SceneCardGrid
+                      scenes={items.map(itemToScene)}
+                      tagMap={tagMap}
+                      viewMode={viewMode}
+                      onPlay={scene => setEditingItem(items.find(i => i.scene_id === scene.id) ?? null)}
+                      renderOverlay={scene => {
+                        const item = items.find(i => i.scene_id === scene.id)
+                        return (
+                          <div className="coll-item-overlays">
+                            <button
+                              className="coll-item-remove-btn"
+                              title="Remove from collection"
+                              onClick={() => item && removeItem(item.id)}
+                            >✕</button>
+                          </div>
+                        )
+                      }}
+                    />
+                  </div>
+                )}
               </>
             ) : (
               <div className="collections-empty">Select a collection to view its items.</div>

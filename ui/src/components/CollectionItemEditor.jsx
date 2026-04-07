@@ -164,7 +164,7 @@ export default function CollectionItemEditor({ item, collectionId, onClose, onSa
   async function doSaveCaption(val) {
     setCaptionStatus('saving')
     try {
-      const r = await fetch(`/api/caption/${item.scene_id}`, {
+      const r = await fetch(`/api/collections/${collectionId}/items/${item.id}/caption`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ caption: val }),

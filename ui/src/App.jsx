@@ -23,6 +23,7 @@ export default function App() {
   const [minFrames, setMinFrames] = useState(0)
   const [ratingFilter, setRatingFilter] = useState(new Set())
   const [sort, setSort] = useState('') // empty = any; values: 1|2|3|'unranked'
+  const [viewMode, setViewMode] = useState('card') // 'card' | 'thumb'
   const [isLoading, setIsLoading] = useState(false)
   const [player, setPlayer] = useState(null)
   const [showManageTags, setShowManageTags] = useState(false)
@@ -93,6 +94,7 @@ export default function App() {
         onManageTags={() => setShowManageTags(true)}
         onManageVideos={() => setShowManageVideos(true)}
         sort={sort} setSort={setSort}
+        viewMode={viewMode} setViewMode={setViewMode}
         onManageCollections={() => setShowManageCollections(true)}
       />
       <main className="container">
@@ -105,6 +107,7 @@ export default function App() {
           minFrames={minFrames}
           ratingFilter={ratingFilter}
           sort={sort}
+          viewMode={viewMode}
           tagMap={tagMap}
           onLoadingChange={setIsLoading}
         />
@@ -118,7 +121,10 @@ export default function App() {
         <ManageVideosModal allVideos={allVideos} onClose={() => setShowManageVideos(false)} />
       )}
       {showManageCollections && (
-        <ManageCollectionsModal onClose={() => setShowManageCollections(false)} />
+        <ManageCollectionsModal
+          tagMap={tagMap}
+          onClose={() => setShowManageCollections(false)}
+        />
       )}
     </AppContext.Provider>
   )

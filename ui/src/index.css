@@ -276,6 +276,94 @@ html, body {
   gap: 24px;
 }
 
+.scenes-thumbgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 4px;
+}
+
+/* ── Scene thumbnail (compact grid) ─────────────────────── */
+.scene-thumb {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  cursor: pointer;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--bg-card);
+}
+.scene-thumb:hover .scene-thumb__play { opacity: 1; }
+.scene-thumb:hover .scene-thumb__img { transform: scale(1.04); }
+
+.scene-thumb__blur {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.scene-thumb__img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: opacity 0.2s, transform 0.2s;
+}
+.scene-thumb__play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.35);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.scene-thumb__play svg {
+  width: 32px;
+  height: 32px;
+  fill: rgba(255,255,255,0.9);
+}
+.scene-thumb__rating {
+  position: absolute;
+  bottom: 4px;
+  left: 5px;
+  font-size: 10px;
+  color: #fbbf24;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+  pointer-events: none;
+}
+.scene-thumb__collection {
+  position: absolute;
+  bottom: 4px;
+  right: 5px;
+  font-size: 10px;
+  color: #4ade80;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+  pointer-events: none;
+}
+
+/* ── View mode toggle ────────────────────────────────────── */
+.view-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.view-toggle-btn {
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  transition: all 0.15s;
+}
+.view-toggle-btn:hover { color: var(--text); background: var(--border); }
+.view-toggle-btn.active { color: var(--blue); background: rgba(59,130,246,0.12); }
+
+.skeleton-pagination-wrap { margin-top: 24px; }
+
 .loading-indicator {
   text-align: center;
   padding: 24px;
@@ -1313,6 +1401,20 @@ html, body {
 }
 .collection-export-btn:disabled { opacity: .5; cursor: default; }
 .collection-export-btn:not(:disabled):hover { filter: brightness(1.15); }
+.collection-clear-captions-btn {
+  background: transparent;
+  border: 1px solid var(--red);
+  color: var(--red);
+  border-radius: 5px;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.collection-clear-captions-btn:disabled { opacity: .45; cursor: default; }
+.collection-clear-captions-btn:not(:disabled):hover { background: var(--red); color: #fff; }
 .collection-export-error {
   font-size: 12px;
   color: var(--red);
@@ -1330,6 +1432,79 @@ html, body {
   flex-direction: column;
   gap: 6px;
 }
+
+/* Collections grid (card / thumb) */
+.collections-items-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+.collections-items-scroll.scenes-thumbgrid {
+  align-content: start;
+}
+/* Collection sidebar skeleton rows */
+.collection-item--skeleton {
+  pointer-events: none;
+  gap: 8px;
+}
+
+/* Collection items grid skeletons */
+.coll-skeleton-thumb {
+  aspect-ratio: 16 / 9;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.coll-skeleton-card {
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+.coll-skeleton-img {
+  display: block;
+  aspect-ratio: 16 / 9;
+  width: 100%;
+}
+.coll-skeleton-lines {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Wrapper that adds remove/edit overlays on top of any scene card or thumbnail */
+.collection-scene-wrap {
+  position: relative;
+}
+.coll-item-overlays {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  z-index: 10;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.collection-scene-wrap:hover .coll-item-overlays { opacity: 1; }
+.coll-item-edit-btn,
+.coll-item-remove-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.65);
+  color: var(--text-muted);
+  transition: color 0.15s, background 0.15s;
+}
+.coll-item-edit-btn:hover { color: var(--blue); background: rgba(0,0,0,0.8); }
+.coll-item-remove-btn { color: #f87171; }
+.coll-item-remove-btn:hover { color: #fff; background: rgba(220,38,38,0.75); }
 .collection-entry {
   display: flex;
   align-items: flex-start;
