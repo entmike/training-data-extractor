@@ -7,7 +7,7 @@ function fmtSecs(s) {
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 }
 
-export default function CollectionItemEditor({ item, collectionId, onClose, onSaved }) {
+export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
   const videoRef    = useRef(null)
   const seekWrapRef = useRef(null)
   const timeRafRef  = useRef(null)
@@ -164,7 +164,7 @@ export default function CollectionItemEditor({ item, collectionId, onClose, onSa
   async function doSaveCaption(val) {
     setCaptionStatus('saving')
     try {
-      const r = await fetch(`/api/collections/${collectionId}/items/${item.id}/caption`, {
+      const r = await fetch(`/api/clips/${clipId}/items/${item.id}/caption`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ caption: val }),
@@ -189,7 +189,7 @@ export default function CollectionItemEditor({ item, collectionId, onClose, onSa
     const newStart = sceneStart + startOff
     const newEnd   = sceneStart + endOff
     try {
-      const r = await fetch(`/api/collections/${collectionId}/items/${item.id}`, {
+      const r = await fetch(`/api/clips/${clipId}/items/${item.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ start_frame: newStart, end_frame: newEnd }),
@@ -217,7 +217,7 @@ export default function CollectionItemEditor({ item, collectionId, onClose, onSa
       <div className="video-modal-content cie-modal">
         <div className="video-modal-header">
           <span className="video-modal-title">
-            Edit collection item — {item.video_name} · scene #{item.scene_id}
+            Edit clip item — {item.video_name} · scene #{item.scene_id}
           </span>
           <button className="modal-close-btn" onClick={onClose}>&times;</button>
         </div>

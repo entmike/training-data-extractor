@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react'
-import CollectionItemEditor from './CollectionItemEditor'
+import { useState, useEffect } from 'react'
+import ClipItemEditor from './ClipItemEditor'
 import SceneCardGrid from './SceneCardGrid'
+import SceneCardSkeleton from './SceneCardSkeleton'
 
-/** Map a collection item to the shape SceneCard / SceneThumbnail expect */
-function itemToScene(item) {
+/** Map a clip item to the shape SceneCard / SceneThumbnail expect */
+function itemToScene(item, clipId) {
   return {
     id: item.scene_id,
     preview_path: null,
@@ -21,15 +22,16 @@ function itemToScene(item) {
     video_name: item.video_name,
     start_time_hms: item.start_time_hms,
     duration: item.duration,
-    collection_count: 0,
+    clip_count: 0,
+    captionUrl: `/api/clips/${clipId}/items/${item.id}/caption`,
   }
 }
 
-export default function ManageCollectionsModal({ tagMap, onClose }) {
-  const [collections, setCollections] = useState([])
+export default function ManageClipsModal({ tagMap, onClose, initialClipName, onClipSelect }) {
+  const [clips, setClips] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [items, setItems] = useState([])
-  const [loadingCollections, setLoadingCollections] = useState(true)
+  const [loadingClips, setLoadingClips] = useState(true)
   const [loadingItems, setLoadingItems] = useState(false)
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
@@ -42,10 +44,10 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
   const [viewMode, setViewMode] = useState('thumb') // 'card' | 'thumb'
   const [captionPromptDraft, setCaptionPromptDraft] = useState('')
   const [savingPrompt, setSavingPrompt] = useState(false)
-  const mouseDownOnOverlay = useRef(false)
+  const [detailCollapsed, setDetailCollapsed] = useState(false)
 
   useEffect(() => {
-    fetchCollections()
+    fetchClips()
   }, [])
 
   useEffect(() => {
@@ -57,34 +59,42 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
   useEffect(() => {
     if (selectedId == null) { setItems([]); return }
     setLoadingItems(true)
-    fetch(`/api/collections/${selectedId}/items`)
+    fetch(`/api/clips/${selectedId}/items`)
       .then(r => r.json())
       .then(d => { setItems(d.items || []); setLoadingItems(false) })
       .catch(() => setLoadingItems(false))
   }, [selectedId])
 
   useEffect(() => {
-    const col = collections.find(c => c.id === selectedId)
+    const col = clips.find(c => c.id === selectedId)
     setCaptionPromptDraft(col?.caption_prompt || '')
-  }, [selectedId, collections])
+  }, [selectedId, clips])
 
-  async function fetchCollections() {
-    setLoadingCollections(true)
-    const r = await fetch('/api/collections')
+  async function fetchClips() {
+    setLoadingClips(true)
+    const r = await fetch('/api/clips')
     if (r.ok) {
       const d = await r.json()
-      const cols = d.collections || []
-      setCollections(cols)
-      if (cols.length > 0 && selectedId == null) setSelectedId(cols[0].id)
+      const cols = d.clips || []
+      setClips(cols)
+      if (cols.length > 0 && selectedId == null) {
+        const match = initialClipName ? cols.find(c => c.name === initialClipName) : null
+        setSelectedId(match ? match.id : cols[0].id)
+      }
     }
-    setLoadingCollections(false)
+    setLoadingClips(false)
   }
 
-  async function createCollection() {
+  function selectClip(col) {
+    setSelectedId(col.id)
+    onClipSelect?.(col.name)
+  }
+
+  async function createClip() {
     const name = newName.trim()
     if (!name) return
     setCreating(true)
-    const r = await fetch('/api/collections', {
+    const r = await fetch('/api/clips', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
@@ -92,17 +102,17 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
     if (r.ok) {
       const d = await r.json()
       setNewName('')
-      await fetchCollections()
-      setSelectedId(d.collection.id)
+      await fetchClips()
+      setSelectedId(d.clip.id)
     }
     setCreating(false)
   }
 
-  async function deleteCollection(id) {
-    if (!confirm('Delete this collection and all its items?')) return
-    await fetch(`/api/collections/${id}`, { method: 'DELETE' })
-    const next = collections.filter(c => c.id !== id)
-    setCollections(next)
+  async function deleteClip(id) {
+    if (!confirm('Delete this clip and all its items?')) return
+    await fetch(`/api/clips/${id}`, { method: 'DELETE' })
+    const next = clips.filter(c => c.id !== id)
+    setClips(next)
     if (selectedId === id) setSelectedId(next.length > 0 ? next[0].id : null)
   }
 
@@ -114,14 +124,14 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
   async function commitRename(id) {
     const name = renameDraft.trim()
     if (!name) { setRenamingId(null); return }
-    const r = await fetch(`/api/collections/${id}`, {
+    const r = await fetch(`/api/clips/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     })
     if (r.ok) {
       const d = await r.json()
-      setCollections(cols => cols.map(c => c.id === id ? { ...c, ...d.collection } : c))
+      setClips(cols => cols.map(c => c.id === id ? { ...c, ...d.clip } : c))
     }
     setRenamingId(null)
   }
@@ -129,22 +139,22 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
   async function saveCaptionPrompt() {
     if (!selectedId) return
     setSavingPrompt(true)
-    const r = await fetch(`/api/collections/${selectedId}`, {
+    const r = await fetch(`/api/clips/${selectedId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ caption_prompt: captionPromptDraft }),
     })
     if (r.ok) {
       const d = await r.json()
-      setCollections(cols => cols.map(c => c.id === selectedId ? { ...c, ...d.collection } : c))
+      setClips(cols => cols.map(c => c.id === selectedId ? { ...c, ...d.clip } : c))
     }
     setSavingPrompt(false)
   }
 
   async function removeItem(itemId) {
-    await fetch(`/api/collections/${selectedId}/items/${itemId}`, { method: 'DELETE' })
+    await fetch(`/api/clips/${selectedId}/items/${itemId}`, { method: 'DELETE' })
     setItems(prev => prev.filter(i => i.id !== itemId))
-    setCollections(cols => cols.map(c => c.id === selectedId ? { ...c, item_count: c.item_count - 1 } : c))
+    setClips(cols => cols.map(c => c.id === selectedId ? { ...c, item_count: c.item_count - 1 } : c))
   }
 
   function handleItemSaved(updated) {
@@ -156,7 +166,7 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
     if (!confirm(`Clear captions for all ${items.length} items in "${selectedCol?.name}"?\n\n${captionedCount} item${captionedCount !== 1 ? 's' : ''} currently have captions. This cannot be undone.`)) return
     setClearingCaptions(true)
     await Promise.all(items.map(item =>
-      fetch(`/api/collections/${selectedId}/items/${item.id}/caption`, {
+      fetch(`/api/clips/${selectedId}/items/${item.id}/caption`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ caption: '' }),
@@ -166,10 +176,10 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
     setClearingCaptions(false)
   }
 
-  async function exportCollection() {
+  async function exportClip() {
     setExporting(true); setExportError('')
     try {
-      const r = await fetch(`/api/collections/${selectedId}/export`, { method: 'POST' })
+      const r = await fetch(`/api/clips/${selectedId}/export`, { method: 'POST' })
       if (!r.ok) {
         const d = await r.json().catch(() => ({}))
         throw new Error(d.error || 'Export failed')
@@ -189,43 +199,33 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
     setExporting(false)
   }
 
-  const selectedCol = collections.find(c => c.id === selectedId)
+  const selectedCol = clips.find(c => c.id === selectedId)
 
   return (
     <>
-    <div
-      className="modal-overlay"
-      onMouseDown={e => { mouseDownOnOverlay.current = e.target === e.currentTarget }}
-      onClick={e => { if (mouseDownOnOverlay.current && e.target === e.currentTarget) onClose() }}
-    >
-      <div className="modal-box collections-modal-box">
-        <div className="modal-header">
-          <h2 className="modal-title">Collections</h2>
-          <button className="modal-close-btn" onClick={onClose}>&times;</button>
-        </div>
-
-        <div className="collections-layout">
-          {/* Left sidebar: collection list */}
-          <div className="collections-sidebar">
-            <div className="collections-list">
-              {loadingCollections ? (
+    <div className="clips-page">
+        <div className="clips-layout">
+          {/* Left sidebar: clip list */}
+          <div className="clips-sidebar">
+            <div className="clips-list">
+              {loadingClips ? (
                 [1,2,3].map(n => (
-                  <div key={n} className="collection-item collection-item--skeleton">
+                  <div key={n} className="clip-item clip-item--skeleton">
                     <span className="skeleton skeleton--text" style={{ width: `${50 + n * 15}%` }} />
                     <span className="skeleton skeleton--text" style={{ width: 20 }} />
                   </div>
                 ))
-              ) : collections.length === 0 ? (
-                <div className="collections-empty">No collections yet</div>
-              ) : collections.map(col => (
+              ) : clips.length === 0 ? (
+                <div className="clips-empty">No clips yet</div>
+              ) : clips.map(col => (
                 <div
                   key={col.id}
-                  className={`collection-item${col.id === selectedId ? ' collection-item--active' : ''}`}
-                  onClick={() => setSelectedId(col.id)}
+                  className={`clip-item${col.id === selectedId ? ' clip-item--active' : ''}`}
+                  onClick={() => selectClip(col)}
                 >
                   {renamingId === col.id ? (
                     <input
-                      className="collection-rename-input"
+                      className="clip-rename-input"
                       value={renameDraft}
                       autoFocus
                       onChange={e => setRenameDraft(e.target.value)}
@@ -237,38 +237,38 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
                       onClick={e => e.stopPropagation()}
                     />
                   ) : (
-                    <span className="collection-name">{col.name}</span>
+                    <span className="clip-name">{col.name}</span>
                   )}
-                  <span className="collection-count">{col.item_count}</span>
-                  <div className="collection-actions">
+                  <span className="clip-count">{col.item_count}</span>
+                  <div className="clip-actions">
                     <button
-                      className="collection-action-btn"
+                      className="clip-action-btn"
                       title="Rename"
                       onClick={e => { e.stopPropagation(); startRename(col) }}
                     >✎</button>
                     <button
-                      className="collection-action-btn collection-action-btn--danger"
+                      className="clip-action-btn clip-action-btn--danger"
                       title="Delete"
-                      onClick={e => { e.stopPropagation(); deleteCollection(col.id) }}
+                      onClick={e => { e.stopPropagation(); deleteClip(col.id) }}
                     >✕</button>
                   </div>
                 </div>
               ))}
             </div>
 
-            {/* New collection form */}
-            <div className="new-collection-form">
+            {/* New clip form */}
+            <div className="new-clip-form">
               <input
-                className="new-collection-input"
-                placeholder="New collection name…"
+                className="new-clip-input"
+                placeholder="New clip name…"
                 value={newName}
                 onChange={e => setNewName(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && createCollection()}
+                onKeyDown={e => e.key === 'Enter' && createClip()}
                 disabled={creating}
               />
               <button
-                className="new-collection-btn"
-                onClick={createCollection}
+                className="new-clip-btn"
+                onClick={createClip}
                 disabled={creating || !newName.trim()}
               >
                 {creating ? '…' : '+'}
@@ -277,19 +277,20 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
           </div>
 
           {/* Right: items */}
-          <div className="collections-items-panel">
+          <div className="clips-items-panel">
             {selectedCol ? (
               <>
-                <div className="collections-items-header">
-                  <strong>{selectedCol.name}</strong>
+                <div className="clips-items-header detail-panel-header" onClick={() => setDetailCollapsed(c => !c)}>
+                  <span className="collapse-toggle-btn">{detailCollapsed ? '▸' : '▾'}</span>
+                  <strong className="detail-panel-title">{selectedCol.name}</strong>
                 </div>
-                <div className="collection-prompt-section">
-                  <label className="collection-prompt-label">
+                {!detailCollapsed && <div className="clip-prompt-section">
+                  <label className="clip-prompt-label">
                     Caption prompt override
-                    <span className="collection-prompt-hint"> — overrides video prompt; leave blank to use video default</span>
+                    <span className="clip-prompt-hint"> — overrides video prompt; leave blank to use video default</span>
                   </label>
                   <textarea
-                    className="collection-prompt-textarea"
+                    className="clip-prompt-textarea"
                     value={captionPromptDraft}
                     onChange={e => setCaptionPromptDraft(e.target.value)}
                     placeholder="Leave blank to use the video's prompt (or system default if none set)"
@@ -297,15 +298,15 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
                   />
                   {captionPromptDraft !== (selectedCol?.caption_prompt || '') && (
                     <button
-                      className="collection-prompt-save-btn"
+                      className="clip-prompt-save-btn"
                       onClick={saveCaptionPrompt}
                       disabled={savingPrompt}
                     >
                       {savingPrompt ? '…' : 'Save'}
                     </button>
                   )}
-                </div>
-                <div className="collections-items-toolbar">
+                </div>}
+                <div className="clips-items-toolbar">
                   <div className="view-toggle">
                     <button
                       className={`view-toggle-btn${viewMode === 'card' ? ' active' : ''}`}
@@ -318,20 +319,20 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
                       title="Thumbnail view"
                     >⊞</button>
                   </div>
-                  <span className="collection-count">{items.length} items</span>
+                  <span className="clip-count">{items.length} items</span>
                   <div className="header-spacer" />
-                  {exportError && <span className="collection-export-error">{exportError}</span>}
+                  {exportError && <span className="clip-export-error">{exportError}</span>}
                   <button
-                    className="collection-clear-captions-btn"
+                    className="clip-clear-captions-btn"
                     onClick={clearCaptions}
                     disabled={clearingCaptions || items.length === 0}
-                    title="Clear captions for all scenes in this collection"
+                    title="Clear captions for all scenes in this clip"
                   >
                     {clearingCaptions ? 'Clearing…' : 'Clear captions'}
                   </button>
                   <button
-                    className="collection-export-btn"
-                    onClick={exportCollection}
+                    className="clip-export-btn"
+                    onClick={exportClip}
                     disabled={exporting || items.length === 0}
                     title="Extract clips + captions and download as zip"
                   >
@@ -339,38 +340,29 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
                   </button>
                 </div>
                 {loadingItems ? (
-                  <div className="collections-items-scroll">
+                  <div className="clips-items-scroll">
                     <div className={viewMode === 'thumb' ? 'scenes-thumbgrid' : 'scenes-grid'}>
                       {Array.from({ length: 12 }).map((_, i) => (
-                        <div key={i} className={viewMode === 'thumb' ? 'coll-skeleton-thumb' : 'coll-skeleton-card'}>
-                          <span className="skeleton skeleton--bar coll-skeleton-img" />
-                          {viewMode === 'card' && (
-                            <div className="coll-skeleton-lines">
-                              <span className="skeleton skeleton--text" style={{ width: '60%' }} />
-                              <span className="skeleton skeleton--text" style={{ width: '85%' }} />
-                              <span className="skeleton skeleton--text" style={{ width: '40%' }} />
-                            </div>
-                          )}
-                        </div>
+                        <SceneCardSkeleton key={i} viewMode={viewMode} />
                       ))}
                     </div>
                   </div>
                 ) : items.length === 0 ? (
-                  <div className="collections-empty">No items in this collection.</div>
+                  <div className="clips-empty">No items in this clip.</div>
                 ) : (
-                  <div className="collections-items-scroll">
+                  <div className="clips-items-scroll">
                     <SceneCardGrid
-                      scenes={items.map(itemToScene)}
+                      scenes={items.map(item => itemToScene(item, selectedId))}
                       tagMap={tagMap}
                       viewMode={viewMode}
                       onPlay={scene => setEditingItem(items.find(i => i.scene_id === scene.id) ?? null)}
                       renderOverlay={scene => {
                         const item = items.find(i => i.scene_id === scene.id)
                         return (
-                          <div className="coll-item-overlays">
+                          <div className="clip-item-overlays">
                             <button
-                              className="coll-item-remove-btn"
-                              title="Remove from collection"
+                              className="clip-item-remove-btn"
+                              title="Remove from clip"
                               onClick={() => item && removeItem(item.id)}
                             >✕</button>
                           </div>
@@ -381,17 +373,16 @@ export default function ManageCollectionsModal({ tagMap, onClose }) {
                 )}
               </>
             ) : (
-              <div className="collections-empty">Select a collection to view its items.</div>
+              <div className="clips-empty">Select a clip to view its items.</div>
             )}
           </div>
         </div>
-      </div>
     </div>
 
     {editingItem && (
-      <CollectionItemEditor
+      <ClipItemEditor
         item={editingItem}
-        collectionId={selectedId}
+        clipId={selectedId}
         onClose={() => setEditingItem(null)}
         onSaved={updated => { handleItemSaved(updated); setEditingItem(prev => ({ ...prev, ...updated })) }}
       />

@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import SceneCardGrid from './SceneCardGrid'
+import SceneCardSkeleton from './SceneCardSkeleton'
 
 const BATCH_SIZE = 50
 
-export default function SceneGrid({ videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, sort, tagMap, viewMode, onLoadingChange }) {
+export default function SceneGrid({ videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, tagMap, viewMode, onLoadingChange }) {
   const [scenes, setScenes] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [isEmpty, setIsEmpty] = useState(false)
+  const [sort, setSort] = useState('')
   const sentinelRef = useRef(null)
   const loadingRef = useRef(false)
   const hasMoreRef = useRef(true)
@@ -96,7 +98,19 @@ export default function SceneGrid({ videoFilter, activeIncludeTags, activeExclud
   const skeletonCount = viewMode === 'thumb' ? 24 : 6
 
   return (
-    <>
+    <div className="scene-grid-wrap">
+      <div className="scene-grid-toolbar">
+        <div className="filter-buttons">
+          {[['', 'Default'], ['frames_asc', 'Start ↑'], ['frames_desc', 'Start ↓']].map(([val, label]) => (
+            <button
+              key={val}
+              className={`filter-btn${sort === val ? ' active' : ''}`}
+              onClick={() => setSort(val)}
+              disabled={isLoading}
+            >{label}</button>
+          ))}
+        </div>
+      </div>
       {isEmpty && (
         <div className="empty-state">
           <h2>No scenes found</h2>
@@ -112,21 +126,12 @@ export default function SceneGrid({ videoFilter, activeIncludeTags, activeExclud
         <div className={isInitialLoad ? undefined : 'skeleton-pagination-wrap'}>
           <div className={viewMode === 'thumb' ? 'scenes-thumbgrid' : 'scenes-grid'}>
             {Array.from({ length: isInitialLoad ? skeletonCount : (viewMode === 'thumb' ? 8 : 2) }).map((_, i) => (
-              <div key={i} className={viewMode === 'thumb' ? 'coll-skeleton-thumb' : 'coll-skeleton-card'}>
-                <span className="skeleton skeleton--bar coll-skeleton-img" />
-                {viewMode === 'card' && (
-                  <div className="coll-skeleton-lines">
-                    <span className="skeleton skeleton--text" style={{ width: '55%' }} />
-                    <span className="skeleton skeleton--text" style={{ width: '80%' }} />
-                    <span className="skeleton skeleton--text" style={{ width: '38%' }} />
-                  </div>
-                )}
-              </div>
+              <SceneCardSkeleton key={i} viewMode={viewMode} />
             ))}
           </div>
         </div>
       )}
       <div ref={sentinelRef} style={{ height: 1 }} />
-    </>
+    </div>
   )
 }

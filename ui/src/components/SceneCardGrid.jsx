@@ -2,7 +2,7 @@ import SceneCard from './SceneCard'
 import SceneThumbnail from './SceneThumbnail'
 
 /**
- * Shared card/thumbnail grid used by both SceneGrid and ManageCollectionsModal.
+ * Shared card/thumbnail grid used by both SceneGrid and ManageClipsModal.
  *
  * Props:
  *   scenes         — array of scene-shaped objects
@@ -18,7 +18,7 @@ export default function SceneCardGrid({ scenes, tagMap, viewMode, onTagsChange, 
   return (
     <div className={viewMode === 'thumb' ? 'scenes-thumbgrid' : 'scenes-grid'}>
       {scenes.map(scene => (
-        <div key={scene.id} className={hasOverlay ? 'collection-scene-wrap' : undefined}>
+        <div key={scene.id} className={hasOverlay ? 'clip-scene-wrap' : undefined}>
           {viewMode === 'thumb' ? (
             <SceneThumbnail
               scene={scene}

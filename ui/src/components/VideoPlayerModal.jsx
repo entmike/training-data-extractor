@@ -22,10 +22,10 @@ export default function VideoPlayerModal({ player, onClose }) {
   const duration = endTime - startTime
   const title = `${videoPath?.split('/').pop()?.replace(/\.[^.]+$/, '') ?? ''} — ${formatTime(startTime)} (${duration.toFixed(1)}s)`
 
-  // ── Collection picker state ────────────────────────────
+  // ── Clip picker state ────────────────────────────
   const [collPickerPos,   setCollPickerPos]   = useState(null) // null | { top, left }
-  const [collections,     setCollections]     = useState(null) // null = not fetched yet
-  const [collAddStatus,   setCollAddStatus]   = useState({})   // { [collId]: 'adding'|'done'|'error' }
+  const [clips,     setClips]     = useState(null) // null = not fetched yet
+  const [collAddStatus,   setCollAddStatus]   = useState({})   // { [clipId]: 'adding'|'done'|'error' }
   const [newCollName,     setNewCollName]     = useState('')
   const [creatingColl,    setCreatingColl]    = useState(false)
   const collBtnRef = useRef(null)
@@ -410,55 +410,55 @@ export default function VideoPlayerModal({ player, onClose }) {
     saveBucketOffsetNow(origOffset)
   }
 
-  // ── Collection picker ──────────────────────────────────
-  async function openCollectionPicker() {
+  // ── Clip picker ──────────────────────────────────
+  async function openClipPicker() {
     if (collPickerPos) { setCollPickerPos(null); return }
-    if (collections === null) {
-      const r = await fetch('/api/collections')
-      if (r.ok) { const d = await r.json(); setCollections(d.collections || []) }
-      else setCollections([])
+    if (clips === null) {
+      const r = await fetch('/api/clips')
+      if (r.ok) { const d = await r.json(); setClips(d.clips || []) }
+      else setClips([])
     }
     const rect = collBtnRef.current.getBoundingClientRect()
     setCollPickerPos({ top: rect.bottom + window.scrollY + 4, left: rect.left + window.scrollX })
   }
 
-  async function addToCollection(collId) {
-    setCollAddStatus(s => ({ ...s, [collId]: 'adding' }))
+  async function addToClip(clipId) {
+    setCollAddStatus(s => ({ ...s, [clipId]: 'adding' }))
     try {
-      const r = await fetch(`/api/collections/${collId}/items`, {
+      const r = await fetch(`/api/clips/${clipId}/items`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scene_id: sceneId }),
       })
       const d = await r.json()
       if (!r.ok && !d.already_exists) throw new Error(d.error || 'Failed')
-      setCollAddStatus(s => ({ ...s, [collId]: 'done' }))
-      setCollections(cols => cols.map(c => c.id === collId
+      setCollAddStatus(s => ({ ...s, [clipId]: 'done' }))
+      setClips(cols => cols.map(c => c.id === clipId
         ? { ...c, item_count: d.already_exists ? c.item_count : (c.item_count || 0) + 1 }
         : c))
-      setTimeout(() => setCollAddStatus(s => { const n = { ...s }; delete n[collId]; return n }), 2000)
+      setTimeout(() => setCollAddStatus(s => { const n = { ...s }; delete n[clipId]; return n }), 2000)
     } catch {
-      setCollAddStatus(s => ({ ...s, [collId]: 'error' }))
-      setTimeout(() => setCollAddStatus(s => { const n = { ...s }; delete n[collId]; return n }), 2000)
+      setCollAddStatus(s => ({ ...s, [clipId]: 'error' }))
+      setTimeout(() => setCollAddStatus(s => { const n = { ...s }; delete n[clipId]; return n }), 2000)
     }
   }
 
-  async function createAndAddCollection() {
+  async function createAndAddClip() {
     const name = newCollName.trim()
     if (!name) return
     setCreatingColl(true)
     try {
-      const r = await fetch('/api/collections', {
+      const r = await fetch('/api/clips', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
       })
       if (!r.ok) throw new Error()
       const d = await r.json()
-      const newColl = { ...d.collection, item_count: 0 }
-      setCollections(cols => [newColl, ...(cols || [])])
+      const newClip = { ...d.clip, item_count: 0 }
+      setClips(cols => [newClip, ...(cols || [])])
       setNewCollName('')
-      addToCollection(newColl.id)
+      addToClip(newClip.id)
     } catch {
       setCreatingColl(false)
     }
@@ -645,10 +645,10 @@ export default function VideoPlayerModal({ player, onClose }) {
               <button
                 ref={collBtnRef}
                 className={`detect-bucket-btn detect-bucket-btn--export${collPickerPos ? ' detect-bucket-btn--active' : ''}`}
-                onClick={openCollectionPicker}
-                title="Export bucket to a collection"
+                onClick={openClipPicker}
+                title="Export bucket to a clip"
               >
-                + Collection
+                + Clip
               </button>
             )}
           </div>
@@ -706,14 +706,14 @@ export default function VideoPlayerModal({ player, onClose }) {
       )}
 
       {collPickerPos && createPortal(
-        <CollectionPicker
+        <ClipPicker
           position={collPickerPos}
-          collections={collections || []}
+          clips={clips || []}
           addStatus={collAddStatus}
           newName={newCollName}
           onNewNameChange={setNewCollName}
-          onAdd={addToCollection}
-          onCreate={createAndAddCollection}
+          onAdd={addToClip}
+          onCreate={createAndAddClip}
           creating={creatingColl}
           onClose={() => setCollPickerPos(null)}
         />,
@@ -723,7 +723,7 @@ export default function VideoPlayerModal({ player, onClose }) {
   )
 }
 
-function CollectionPicker({ position, collections, addStatus, newName, onNewNameChange, onAdd, onCreate, creating, onClose }) {
+function ClipPicker({ position, clips, addStatus, newName, onNewNameChange, onAdd, onCreate, creating, onClose }) {
   const wrapRef = useRef(null)
 
   useEffect(() => {
@@ -737,43 +737,43 @@ function CollectionPicker({ position, collections, addStatus, newName, onNewName
   return (
     <div
       ref={wrapRef}
-      className="coll-picker"
+      className="clip-picker"
       style={{ position: 'absolute', top: position.top, left: position.left, zIndex: 2000 }}
     >
-      <div className="coll-picker-header">Add to collection</div>
-      {collections.length === 0 && (
-        <div className="coll-picker-empty">No collections yet — create one below.</div>
+      <div className="clip-picker-header">Add to clip</div>
+      {clips.length === 0 && (
+        <div className="clip-picker-empty">No clips yet — create one below.</div>
       )}
-      <div className="coll-picker-list">
-        {collections.map(c => {
+      <div className="clip-picker-list">
+        {clips.map(c => {
           const status = addStatus[c.id]
           return (
             <button
               key={c.id}
-              className={`coll-picker-item${status === 'done' ? ' coll-picker-item--done' : status === 'error' ? ' coll-picker-item--error' : ''}`}
+              className={`clip-picker-item${status === 'done' ? ' clip-picker-item--done' : status === 'error' ? ' clip-picker-item--error' : ''}`}
               onMouseDown={() => onAdd(c.id)}
               disabled={status === 'adding'}
             >
-              <span className="coll-picker-item-name">{c.name}</span>
-              <span className="coll-picker-item-count">{c.item_count}</span>
-              {status === 'adding' && <span className="coll-picker-status">…</span>}
-              {status === 'done'   && <span className="coll-picker-status coll-picker-status--done">✓</span>}
-              {status === 'error'  && <span className="coll-picker-status coll-picker-status--error">!</span>}
+              <span className="clip-picker-item-name">{c.name}</span>
+              <span className="clip-picker-item-count">{c.item_count}</span>
+              {status === 'adding' && <span className="clip-picker-status">…</span>}
+              {status === 'done'   && <span className="clip-picker-status clip-picker-status--done">✓</span>}
+              {status === 'error'  && <span className="clip-picker-status clip-picker-status--error">!</span>}
             </button>
           )
         })}
       </div>
-      <div className="coll-picker-new">
+      <div className="clip-picker-new">
         <input
-          className="coll-picker-new-input"
-          placeholder="New collection…"
+          className="clip-picker-new-input"
+          placeholder="New clip…"
           value={newName}
           onChange={e => onNewNameChange(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') onCreate(); if (e.key === 'Escape') onClose() }}
           disabled={creating}
         />
         <button
-          className="coll-picker-new-btn"
+          className="clip-picker-new-btn"
           onMouseDown={onCreate}
           disabled={creating || !newName.trim()}
         >{creating ? '…' : '+'}</button>

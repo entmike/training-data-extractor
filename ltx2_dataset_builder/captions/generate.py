@@ -426,9 +426,9 @@ def _get_scene_prep_args(db: Database, scene: Dict[str, Any]):
     )
 
 
-def _pick_next_collection_item(db: Database) -> Optional[Dict[str, Any]]:
+def _pick_next_clip_item(db: Database) -> Optional[Dict[str, Any]]:
     """
-    Pick the next collection item whose caption is empty.
+    Pick the next clip item whose caption is empty.
     Items that already have a real caption, or that are marked __skip__/__error__,
     are skipped.
     """
@@ -438,10 +438,10 @@ def _pick_next_collection_item(db: Database) -> Optional[Dict[str, Any]]:
             SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame,
                    s.start_time, s.end_time,
                    COUNT(st.tag) AS tag_count,
-                   c.caption_prompt AS collection_caption_prompt
-            FROM collection_items ci
+                   c.caption_prompt AS clip_caption_prompt
+            FROM clip_items ci
             JOIN scenes s ON s.id = ci.scene_id
-            JOIN collections c ON c.id = ci.collection_id
+            JOIN clips c ON c.id = ci.clip_id
             LEFT JOIN scene_tags st ON st.scene_id = ci.scene_id
             WHERE ci.caption IS NULL OR ci.caption = ''
             GROUP BY ci.id
@@ -454,23 +454,23 @@ def _pick_next_collection_item(db: Database) -> Optional[Dict[str, Any]]:
 
 def _pick_next_work_item(db: Database, video_id: Optional[int]) -> Optional[Dict[str, Any]]:
     """
-    Pick the next item to caption, prioritising collection items over scenes.
-    Returns a dict with an added 'work_type' key: 'collection_item' or 'scene'.
+    Pick the next item to caption, prioritising clip items over scenes.
+    Returns a dict with an added 'work_type' key: 'clip_item' or 'scene'.
     """
-    item = _pick_next_collection_item(db)
+    item = _pick_next_clip_item(db)
     if item:
-        return {**item, "work_type": "collection_item"}
+        return {**item, "work_type": "clip_item"}
     scene = _pick_next_scene(db, video_id)
     if scene:
         return {**scene, "work_type": "scene"}
     return None
 
 
-def _get_collection_item_prep_args(db: Database, item: Dict[str, Any]):
+def _get_clip_item_prep_args(db: Database, item: Dict[str, Any]):
     """
-    Gather everything needed to call prepare_scene_inputs for a collection item.
+    Gather everything needed to call prepare_scene_inputs for a clip item.
     Uses the item's own start_frame/end_frame (not the full scene range) so the
-    clip sent to Qwen matches the specific collection clip.
+    clip sent to Qwen matches the specific clip range.
     """
     video = db.get_video_by_id(item["video_id"])
     if not video:
@@ -478,9 +478,9 @@ def _get_collection_item_prep_args(db: Database, item: Dict[str, Any]):
     video_path = Path(video["path"])
     fps = video.get("fps", 24.0)
     frame_offset = db.get_frame_offset(item["video_id"])
-    # Prompt resolution: collection override → video prompt → system default (None)
+    # Prompt resolution: clip override → video prompt → system default (None)
     raw_prompt = (
-        item.get("collection_caption_prompt") or
+        item.get("clip_caption_prompt") or
         video.get("prompt") or
         None
     )
@@ -507,7 +507,7 @@ def _get_collection_item_prep_args(db: Database, item: Dict[str, Any]):
         end_time=item["end_time"],
         frame_offset=frame_offset,
         fps=fps,
-        start_frame=item["start_frame"],   # collection item's specific clip range
+        start_frame=item["start_frame"],   # clip item's specific clip range
         end_frame=item["end_frame"],
         prompt=video_prompt,
         tags=scene_tags,
@@ -547,21 +547,21 @@ def caption_all_scenes(
     prefetch_thread = None
 
     def _item_duration(work_item: Dict[str, Any]) -> float:
-        if work_item["work_type"] == "collection_item":
+        if work_item["work_type"] == "clip_item":
             fps_val = (db.get_video_by_id(work_item["video_id"]) or {}).get("fps", 24.0) or 24.0
             return (work_item["end_frame"] - work_item["start_frame"]) / fps_val
         return work_item["end_time"] - work_item["start_time"]
 
     def _get_prep_args(work_item: Dict[str, Any]):
-        if work_item["work_type"] == "collection_item":
-            return _get_collection_item_prep_args(db, work_item)
+        if work_item["work_type"] == "clip_item":
+            return _get_clip_item_prep_args(db, work_item)
         return _get_scene_prep_args(db, work_item)
 
     def _save_caption(work_item: Dict[str, Any], caption: str,
                       started_at: Optional[str] = None, finished_at: Optional[str] = None,
                       prompt: Optional[str] = None) -> None:
-        if work_item["work_type"] == "collection_item":
-            db.update_collection_item_caption(work_item["id"], caption)
+        if work_item["work_type"] == "clip_item":
+            db.update_clip_item_caption(work_item["id"], caption)
         else:
             db.update_scene_caption(
                 work_item["id"], caption,
@@ -569,8 +569,8 @@ def caption_all_scenes(
             )
 
     def _log_label(work_item: Dict[str, Any]) -> str:
-        if work_item["work_type"] == "collection_item":
-            return (f"collection item {work_item['id']} "
+        if work_item["work_type"] == "clip_item":
+            return (f"clip item {work_item['id']} "
                     f"(scene {work_item['scene_id']}, "
                     f"frames {work_item['start_frame']}-{work_item['end_frame']})")
         video = db.get_video_by_id(work_item["video_id"]) or {}
@@ -603,7 +603,7 @@ def caption_all_scenes(
         t.start()
         return t
 
-    # Bootstrap: collection items have priority over scenes
+    # Bootstrap: clip items have priority over scenes
     work_item = _pick_next_work_item(db, video_id)
     if work_item is None:
         logger.info("Nothing to caption")
@@ -655,7 +655,7 @@ def caption_all_scenes(
                           started_at=started_at, finished_at=finished_at, prompt=prompt_used)
             count += 1
             wt = work_item["work_type"]
-            if wt == "collection_item":
+            if wt == "clip_item":
                 print(f"\n[Collection item {work_item['id']} / scene {work_item['scene_id']}]"
                       f" frames {work_item['start_frame']}-{work_item['end_frame']}")
             else:

@@ -128,40 +128,40 @@ except Exception:
     pass
 
 
-def ensure_collections_tables():
-    """Create collections and collection_items tables if they don't exist."""
+def ensure_clips_tables():
+    """Create clips and clip_items tables if they don't exist."""
     conn = get_db_connection()
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS collections (
+        CREATE TABLE IF NOT EXISTS clips (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             name       TEXT NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS collection_items (
+        CREATE TABLE IF NOT EXISTS clip_items (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            collection_id INTEGER NOT NULL,
+            clip_id INTEGER NOT NULL,
             scene_id      INTEGER NOT NULL,
             video_id      INTEGER NOT NULL,
             start_frame   INTEGER NOT NULL,
             end_frame     INTEGER NOT NULL,
             caption       TEXT DEFAULT '',
             created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE,
+            FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE CASCADE,
             FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
-            UNIQUE (collection_id, scene_id)
+            UNIQUE (clip_id, scene_id)
         )
     """)
     # Migration: add caption column if it doesn't exist yet
     try:
-        conn.execute("ALTER TABLE collection_items ADD COLUMN caption TEXT DEFAULT ''")
+        conn.execute("ALTER TABLE clip_items ADD COLUMN caption TEXT DEFAULT ''")
         conn.commit()
     except Exception:
         pass  # column already exists
-    # Migration: add caption_prompt column to collections if it doesn't exist yet
+    # Migration: add caption_prompt column to clips if it doesn't exist yet
     try:
-        conn.execute("ALTER TABLE collections ADD COLUMN caption_prompt TEXT")
+        conn.execute("ALTER TABLE clips ADD COLUMN caption_prompt TEXT")
         conn.commit()
     except Exception:
         pass  # column already exists
@@ -170,7 +170,7 @@ def ensure_collections_tables():
 
 
 try:
-    ensure_collections_tables()
+    ensure_clips_tables()
 except Exception:
     pass
 
@@ -208,6 +208,15 @@ def find_preview_for_scene(video_name: str, scene_idx: int, start_frame: int = N
 @app.route('/')
 def index():
     """Serve React UI."""
+    return send_from_directory(UI_DIST, 'index.html')
+
+
+@app.route('/videos', strict_slashes=False)
+@app.route('/videos/<path:_>')
+@app.route('/clips', strict_slashes=False)
+@app.route('/clips/<path:_>')
+def spa_routes(_=''):
+    """Serve the SPA for client-side routes."""
     return send_from_directory(UI_DIST, 'index.html')
 
 
@@ -588,7 +597,7 @@ def get_scenes():
     base_query = f"""
         SELECT s.*, v.path as video_path, v.fps, v.frame_offset,
             (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
-            (SELECT COUNT(*) FROM collection_items ci WHERE ci.scene_id = s.id) as collection_count,
+            (SELECT COUNT(*) FROM clip_items ci WHERE ci.scene_id = s.id) as clip_count,
             GROUP_CONCAT(st.tag, '|') as tags_concat
         {scenes_from}
         LEFT JOIN scene_tags st ON st.scene_id = s.id
@@ -635,7 +644,7 @@ def get_scenes():
             'caption_finished_at': (d['caption_finished_at'].replace(' ', 'T') + 'Z') if d.get('caption_finished_at') else None,
             'rating': d.get('rating'),
             'blurhash': d.get('blurhash'),
-            'collection_count': d.get('collection_count') or 0,
+            'clip_count': d.get('clip_count') or 0,
         })
 
     return jsonify({
@@ -1272,25 +1281,25 @@ def serve_bucket_waveform(scene_id: int):
     return jsonify({"error": "Waveform generation failed"}), 500
 
 
-@app.route('/api/collections', methods=['GET'])
-def get_collections():
-    """List all collections with item count."""
+@app.route('/api/clips', methods=['GET'])
+def get_clips():
+    """List all clips with item count."""
     conn = get_db_connection()
     rows = conn.execute("""
         SELECT c.id, c.name, c.caption_prompt, c.created_at,
                COUNT(ci.id) as item_count
-        FROM collections c
-        LEFT JOIN collection_items ci ON ci.collection_id = c.id
+        FROM clips c
+        LEFT JOIN clip_items ci ON ci.clip_id = c.id
         GROUP BY c.id
         ORDER BY c.created_at DESC
     """).fetchall()
     conn.close()
-    return jsonify({"collections": [dict(r) for r in rows]})
+    return jsonify({"clips": [dict(r) for r in rows]})
 
 
-@app.route('/api/collections', methods=['POST'])
-def create_collection():
-    """Create a new collection."""
+@app.route('/api/clips', methods=['POST'])
+def create_clip():
+    """Create a new clip."""
     data = request.get_json()
     if not data or not data.get('name'):
         return jsonify({"error": "Missing name"}), 400
@@ -1298,16 +1307,16 @@ def create_collection():
     if not name:
         return jsonify({"error": "Empty name"}), 400
     conn = get_db_connection()
-    cur = conn.execute("INSERT INTO collections (name) VALUES (?)", (name,))
+    cur = conn.execute("INSERT INTO clips (name) VALUES (?)", (name,))
     conn.commit()
-    row = conn.execute("SELECT * FROM collections WHERE id = ?", (cur.lastrowid,)).fetchone()
+    row = conn.execute("SELECT * FROM clips WHERE id = ?", (cur.lastrowid,)).fetchone()
     conn.close()
-    return jsonify({"collection": dict(row)}), 201
+    return jsonify({"clip": dict(row)}), 201
 
 
-@app.route('/api/collections/<int:collection_id>', methods=['PUT'])
-def update_collection(collection_id: int):
-    """Update a collection's name and/or caption_prompt."""
+@app.route('/api/clips/<int:clip_id>', methods=['PUT'])
+def update_clip(clip_id: int):
+    """Update a clip's name and/or caption_prompt."""
     data = request.get_json()
     if not data:
         return jsonify({"error": "Missing data"}), 400
@@ -1319,42 +1328,42 @@ def update_collection(collection_id: int):
     if has_name and not name:
         return jsonify({"error": "Empty name"}), 400
     conn = get_db_connection()
-    if conn.execute("SELECT id FROM collections WHERE id = ?", (collection_id,)).fetchone() is None:
+    if conn.execute("SELECT id FROM clips WHERE id = ?", (clip_id,)).fetchone() is None:
         conn.close()
         return jsonify({"error": "Collection not found"}), 404
     if has_name:
-        conn.execute("UPDATE collections SET name = ? WHERE id = ?", (name, collection_id))
+        conn.execute("UPDATE clips SET name = ? WHERE id = ?", (name, clip_id))
     if has_prompt:
         prompt_val = data['caption_prompt'].strip() if data['caption_prompt'] else None
-        conn.execute("UPDATE collections SET caption_prompt = ? WHERE id = ?", (prompt_val, collection_id))
+        conn.execute("UPDATE clips SET caption_prompt = ? WHERE id = ?", (prompt_val, clip_id))
     conn.commit()
-    row = conn.execute("SELECT c.id, c.name, c.caption_prompt, c.created_at FROM collections c WHERE c.id = ?", (collection_id,)).fetchone()
+    row = conn.execute("SELECT c.id, c.name, c.caption_prompt, c.created_at FROM clips c WHERE c.id = ?", (clip_id,)).fetchone()
     conn.close()
-    return jsonify({"collection": dict(row)})
+    return jsonify({"clip": dict(row)})
 
 
-@app.route('/api/collections/<int:collection_id>', methods=['DELETE'])
-def delete_collection(collection_id: int):
-    """Delete a collection and all its items."""
+@app.route('/api/clips/<int:clip_id>', methods=['DELETE'])
+def delete_clip(clip_id: int):
+    """Delete a clip and all its items."""
     conn = get_db_connection()
-    if conn.execute("SELECT id FROM collections WHERE id = ?", (collection_id,)).fetchone() is None:
+    if conn.execute("SELECT id FROM clips WHERE id = ?", (clip_id,)).fetchone() is None:
         conn.close()
         return jsonify({"error": "Collection not found"}), 404
-    conn.execute("DELETE FROM collection_items WHERE collection_id = ?", (collection_id,))
-    conn.execute("DELETE FROM collections WHERE id = ?", (collection_id,))
+    conn.execute("DELETE FROM clip_items WHERE clip_id = ?", (clip_id,))
+    conn.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
     conn.commit()
     conn.close()
     return jsonify({"success": True})
 
 
-@app.route('/api/collections/<int:collection_id>/export', methods=['POST'])
-def export_collection(collection_id: int):
-    """Extract all collection items as MP4 clips + caption .txt files, return as a zip."""
+@app.route('/api/clips/<int:clip_id>/export', methods=['POST'])
+def export_clip(clip_id: int):
+    """Extract all clip items as MP4 clips + caption .txt files, return as a zip."""
     import zipfile
     import tempfile
 
     conn = get_db_connection()
-    coll = conn.execute("SELECT * FROM collections WHERE id = ?", (collection_id,)).fetchone()
+    coll = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
     if not coll:
         conn.close()
         return jsonify({"error": "Collection not found"}), 404
@@ -1363,18 +1372,18 @@ def export_collection(collection_id: int):
         SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame,
                v.path as video_path, v.fps, v.frame_offset,
                s.caption
-        FROM collection_items ci
+        FROM clip_items ci
         JOIN videos v ON ci.video_id = v.id
         JOIN scenes s ON ci.scene_id = s.id
-        WHERE ci.collection_id = ?
+        WHERE ci.clip_id = ?
         ORDER BY ci.created_at ASC
-    """, (collection_id,)).fetchall()
+    """, (clip_id,)).fetchall()
     conn.close()
 
     if not rows:
         return jsonify({"error": "Collection is empty"}), 400
 
-    collection_slug = re.sub(r'[^\w\-]', '_', coll['name']).strip('_')
+    clip_slug = re.sub(r'[^\w\-]', '_', coll['name']).strip('_')
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -1431,15 +1440,15 @@ def export_collection(collection_id: int):
         zip_io,
         mimetype='application/zip',
         as_attachment=True,
-        download_name=f'{collection_slug}.zip',
+        download_name=f'{clip_slug}.zip',
     )
 
 
-@app.route('/api/collections/<int:collection_id>/items', methods=['GET'])
-def get_collection_items(collection_id: int):
-    """Get all items in a collection with scene/video metadata."""
+@app.route('/api/clips/<int:clip_id>/items', methods=['GET'])
+def get_clip_items(clip_id: int):
+    """Get all items in a clip with scene/video metadata."""
     conn = get_db_connection()
-    if conn.execute("SELECT id FROM collections WHERE id = ?", (collection_id,)).fetchone() is None:
+    if conn.execute("SELECT id FROM clips WHERE id = ?", (clip_id,)).fetchone() is None:
         conn.close()
         return jsonify({"error": "Collection not found"}), 404
     rows = conn.execute("""
@@ -1450,14 +1459,14 @@ def get_collection_items(collection_id: int):
                s.caption as scene_caption, s.start_time, s.end_time, s.rating, s.blurhash,
                s.start_frame as scene_start_frame, s.end_frame as scene_end_frame,
                GROUP_CONCAT(st.tag, '|') as tags_concat
-        FROM collection_items ci
+        FROM clip_items ci
         JOIN videos v ON ci.video_id = v.id
         JOIN scenes s ON ci.scene_id = s.id
         LEFT JOIN scene_tags st ON st.scene_id = s.id
-        WHERE ci.collection_id = ?
+        WHERE ci.clip_id = ?
         GROUP BY ci.id
         ORDER BY ci.created_at ASC
-    """, (collection_id,)).fetchall()
+    """, (clip_id,)).fetchall()
     conn.close()
     items = []
     for r in rows:
@@ -1477,12 +1486,13 @@ def get_collection_items(collection_id: int):
             'video_path': d['video_path'],
             'fps': d['fps'] or 24.0,
             'frame_offset': d['frame_offset'] or 0,
-            'caption': d.get('item_caption') or '',
+            'caption': d['item_caption'] or '',
+            'scene_caption': d['scene_caption'] or '',
             'tags': [tag for tag in tags_raw.split('|') if tag],
             'start_time': d.get('start_time'),
             'end_time': d.get('end_time'),
             'start_time_hms': f"{t//3600:02d}:{(t%3600)//60:02d}:{t%60:02d}",
-            'duration': (d.get('end_time') or 0) - (d.get('start_time') or 0),
+            'duration': (d['end_frame'] - d['start_frame']) / (d['fps'] or 24.0),
             'rating': d.get('rating'),
             'blurhash': d.get('blurhash'),
             'scene_start_frame': d.get('scene_start_frame') or 0,
@@ -1491,16 +1501,16 @@ def get_collection_items(collection_id: int):
     return jsonify({"items": items})
 
 
-@app.route('/api/collections/<int:collection_id>/items', methods=['POST'])
-def add_collection_item(collection_id: int):
-    """Add a scene's bucket to a collection."""
+@app.route('/api/clips/<int:clip_id>/items', methods=['POST'])
+def add_clip_item(clip_id: int):
+    """Add a scene's bucket to a clip."""
     data = request.get_json()
     if not data or 'scene_id' not in data:
         return jsonify({"error": "Missing scene_id"}), 400
     scene_id = int(data['scene_id'])
 
     conn = get_db_connection()
-    if conn.execute("SELECT id FROM collections WHERE id = ?", (collection_id,)).fetchone() is None:
+    if conn.execute("SELECT id FROM clips WHERE id = ?", (clip_id,)).fetchone() is None:
         conn.close()
         return jsonify({"error": "Collection not found"}), 404
 
@@ -1520,29 +1530,29 @@ def add_collection_item(collection_id: int):
 
     try:
         cur = conn.execute("""
-            INSERT INTO collection_items (collection_id, scene_id, video_id, start_frame, end_frame)
+            INSERT INTO clip_items (clip_id, scene_id, video_id, start_frame, end_frame)
             VALUES (?, ?, ?, ?, ?)
-        """, (collection_id, scene_id, video_id, start_frame, end_frame))
+        """, (clip_id, scene_id, video_id, start_frame, end_frame))
         conn.commit()
         item_id = cur.lastrowid
         conn.close()
         return jsonify({
-            "item_id": item_id, "collection_id": collection_id,
+            "item_id": item_id, "clip_id": clip_id,
             "scene_id": scene_id, "video_id": video_id,
             "start_frame": start_frame, "end_frame": end_frame,
         }), 201
     except sqlite3.IntegrityError:
         existing = conn.execute(
-            "SELECT id FROM collection_items WHERE collection_id = ? AND scene_id = ?",
-            (collection_id, scene_id)
+            "SELECT id FROM clip_items WHERE clip_id = ? AND scene_id = ?",
+            (clip_id, scene_id)
         ).fetchone()
         conn.close()
         return jsonify({"item_id": existing['id'] if existing else None, "already_exists": True}), 200
 
 
-@app.route('/api/collections/<int:collection_id>/items/<int:item_id>', methods=['PUT'])
-def update_collection_item(collection_id: int, item_id: int):
-    """Update the start_frame and end_frame of a collection item."""
+@app.route('/api/clips/<int:clip_id>/items/<int:item_id>', methods=['PUT'])
+def update_clip_item(clip_id: int, item_id: int):
+    """Update the start_frame and end_frame of a clip item."""
     data = request.get_json()
     if data is None or 'start_frame' not in data or 'end_frame' not in data:
         return jsonify({"error": "Missing start_frame or end_frame"}), 400
@@ -1552,14 +1562,14 @@ def update_collection_item(collection_id: int, item_id: int):
         return jsonify({"error": "end_frame must be greater than start_frame"}), 400
     conn = get_db_connection()
     row = conn.execute(
-        "SELECT id FROM collection_items WHERE id = ? AND collection_id = ?",
-        (item_id, collection_id)
+        "SELECT id FROM clip_items WHERE id = ? AND clip_id = ?",
+        (item_id, clip_id)
     ).fetchone()
     if not row:
         conn.close()
         return jsonify({"error": "Item not found"}), 404
     conn.execute(
-        "UPDATE collection_items SET start_frame = ?, end_frame = ? WHERE id = ?",
+        "UPDATE clip_items SET start_frame = ?, end_frame = ? WHERE id = ?",
         (start_frame, end_frame, item_id)
     )
     conn.commit()
@@ -1568,55 +1578,55 @@ def update_collection_item(collection_id: int, item_id: int):
                     "frame_count": end_frame - start_frame})
 
 
-@app.route('/api/collections/<int:collection_id>/items/<int:item_id>/caption', methods=['PUT'])
-def update_collection_item_caption(collection_id: int, item_id: int):
-    """Update the caption of a collection item (independent of the scene caption)."""
+@app.route('/api/clips/<int:clip_id>/items/<int:item_id>/caption', methods=['PUT'])
+def update_clip_item_caption(clip_id: int, item_id: int):
+    """Update the caption of a clip item (independent of the scene caption)."""
     data = request.get_json()
     if data is None or 'caption' not in data:
         return jsonify({"error": "Missing caption"}), 400
     caption = data['caption']
     conn = get_db_connection()
     row = conn.execute(
-        "SELECT id FROM collection_items WHERE id = ? AND collection_id = ?",
-        (item_id, collection_id)
+        "SELECT id FROM clip_items WHERE id = ? AND clip_id = ?",
+        (item_id, clip_id)
     ).fetchone()
     if not row:
         conn.close()
         return jsonify({"error": "Item not found"}), 404
-    conn.execute("UPDATE collection_items SET caption = ? WHERE id = ?", (caption, item_id))
+    conn.execute("UPDATE clip_items SET caption = ? WHERE id = ?", (caption, item_id))
     conn.commit()
     conn.close()
     return jsonify({"item_id": item_id, "caption": caption})
 
 
-@app.route('/api/collections/<int:collection_id>/items/<int:item_id>', methods=['DELETE'])
-def remove_collection_item(collection_id: int, item_id: int):
-    """Remove an item from a collection."""
+@app.route('/api/clips/<int:clip_id>/items/<int:item_id>', methods=['DELETE'])
+def remove_clip_item(clip_id: int, item_id: int):
+    """Remove an item from a clip."""
     conn = get_db_connection()
     conn.execute(
-        "DELETE FROM collection_items WHERE id = ? AND collection_id = ?",
-        (item_id, collection_id)
+        "DELETE FROM clip_items WHERE id = ? AND clip_id = ?",
+        (item_id, clip_id)
     )
     conn.commit()
     conn.close()
     return jsonify({"success": True})
 
 
-@app.route('/api/scenes/<int:scene_id>/collection_items', methods=['GET'])
-def get_scene_collection_items(scene_id: int):
-    """Get all collection items for a given scene, with collection metadata."""
+@app.route('/api/scenes/<int:scene_id>/clip_items', methods=['GET'])
+def get_scene_clip_items(scene_id: int):
+    """Get all clip items for a given scene, with clip metadata."""
     conn = get_db_connection()
     rows = conn.execute("""
-        SELECT ci.id, ci.scene_id, ci.video_id, ci.collection_id,
+        SELECT ci.id, ci.scene_id, ci.video_id, ci.clip_id,
                ci.start_frame, ci.end_frame, ci.created_at,
                ci.caption as item_caption,
-               c.name as collection_name,
+               c.name as clip_name,
                v.path as video_path, v.fps, v.frame_offset,
                COALESCE(v.name, '') as video_name_custom,
                s.caption as scene_caption, s.start_time, s.end_time, s.rating, s.blurhash,
                s.start_frame as scene_start_frame, s.end_frame as scene_end_frame
-        FROM collection_items ci
-        JOIN collections c ON ci.collection_id = c.id
+        FROM clip_items ci
+        JOIN clips c ON ci.clip_id = c.id
         JOIN videos v ON ci.video_id = v.id
         JOIN scenes s ON ci.scene_id = s.id
         WHERE ci.scene_id = ?
@@ -1632,8 +1642,8 @@ def get_scene_collection_items(scene_id: int):
             'id': d['id'],
             'scene_id': d['scene_id'],
             'video_id': d['video_id'],
-            'collection_id': d['collection_id'],
-            'collection_name': d['collection_name'],
+            'clip_id': d['clip_id'],
+            'clip_name': d['clip_name'],
             'start_frame': d['start_frame'],
             'end_frame': d['end_frame'],
             'frame_count': d['end_frame'] - d['start_frame'],

@@ -45,8 +45,8 @@ export default function SceneThumbnail({ scene, tagMap, onPlay }) {
       {scene.rating > 0 && (
         <span className="scene-thumb__rating">{'★'.repeat(scene.rating)}</span>
       )}
-      {scene.collection_count > 0 && (
-        <span className="scene-thumb__collection">⊞{scene.collection_count}</span>
+      {scene.clip_count > 0 && (
+        <span className="scene-thumb__clip">⊞{scene.clip_count}</span>
       )}
       <div className="scene-thumb__play">
         <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
