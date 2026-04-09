@@ -95,7 +95,7 @@ def generate_candidates_for_video(
     Returns:
         List of candidate clip dicts
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     
     # Calculate target duration based on frame count and FPS
     # 121 frames at 24 fps ≈ 5.04 seconds
@@ -142,7 +142,7 @@ def generate_all_candidates(config: PipelineConfig) -> List[Dict[str, Any]]:
     Returns:
         List of all candidate clips
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     videos = db.get_all_videos()
     
     all_candidates = []
@@ -174,7 +174,7 @@ def get_pending_candidates(config: PipelineConfig) -> List[Dict[str, Any]]:
     Returns:
         List of pending candidates
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     return db.get_candidates(status="pending")
 
 
@@ -188,5 +188,5 @@ def get_accepted_candidates(config: PipelineConfig) -> List[Dict[str, Any]]:
     Returns:
         List of accepted candidates
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     return db.get_candidates(status="accepted")

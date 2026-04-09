@@ -1829,6 +1829,24 @@ html, body {
 .clips-items-scroll.scenes-thumbgrid {
   align-content: start;
 }
+.scene-card-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.scene-card-panel-toolbar {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.scene-card-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
 /* Clip sidebar skeleton rows */
 .clip-item--skeleton {
   pointer-events: none;

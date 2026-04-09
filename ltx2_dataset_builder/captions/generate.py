@@ -538,7 +538,7 @@ def caption_all_scenes(
     Returns:
         Number of scenes captioned
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     _retrofit_caption_metadata(db)
     count = 0
 

@@ -83,6 +83,22 @@ class PipelineConfig:
     cache_dir: Path = field(default_factory=lambda: Path("./.cache"))
     db_path: Path = field(default_factory=lambda: Path("./.cache/index.db"))
 
+    # PostgreSQL DSN — when set, all pipeline steps use PostgreSQL instead of SQLite
+    pg_dsn: Optional[str] = None
+
+    @property
+    def dsn(self) -> str:
+        """Return the PostgreSQL DSN, falling back to DATABASE_URL env var."""
+        import os
+        dsn = self.pg_dsn or os.environ.get('DATABASE_URL')
+        if not dsn:
+            raise ValueError(
+                "No pg_dsn in config.yaml and no DATABASE_URL env var. "
+                "Add 'pg_dsn: postgresql://ltx2:ltx2@localhost:5432/ltx2' to config.yaml "
+                "or set DATABASE_URL in your environment."
+            )
+        return dsn
+
     # Token for character identification
     token: str = "character_person"
 
@@ -121,6 +137,9 @@ class PipelineConfig:
         for key in ['source_dir', 'output_dir', 'cache_dir', 'db_path']:
             if key in data:
                 setattr(config, key, Path(data[key]))
+
+        if 'pg_dsn' in data:
+            config.pg_dsn = data['pg_dsn']
 
         for key in ['token', 'num_workers', 'gpu_batch_size', 'skip_existing', 'verbose']:
             if key in data:

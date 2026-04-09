@@ -354,11 +354,8 @@ Examples:
     # List videos mode
     if args.list_videos:
         from .utils.io import Database
-        db_path = Path(".cache/index.db")
-        if not db_path.exists():
-            logger.error("No database found. Run --step index first.")
-            return 1
-        db = Database(db_path)
+        dsn = config.dsn
+        db = Database(dsn)
         videos = db.get_all_videos()
         if not videos:
             logger.info("No videos indexed.")
@@ -366,10 +363,10 @@ Examples:
         with db._connection() as conn:
             for v in videos:
                 scene_count = conn.execute(
-                    "SELECT COUNT(*) as n FROM scenes WHERE video_id = ?", (v["id"],)
+                    "SELECT COUNT(*) as n FROM scenes WHERE video_id = %s", (v["id"],)
                 ).fetchone()["n"]
                 captioned = conn.execute(
-                    "SELECT COUNT(*) as n FROM scenes WHERE video_id = ? AND caption IS NOT NULL AND caption != '' AND substr(caption, 1, 2) != '__'",
+                    "SELECT COUNT(*) as n FROM scenes WHERE video_id = %s AND caption IS NOT NULL AND caption != '' AND substr(caption, 1, 2) != '__'",
                     (v["id"],)
                 ).fetchone()["n"]
                 duration_str = f"{int(v['duration'] // 60)}m{int(v['duration'] % 60)}s" if v.get("duration") else "?"
@@ -396,11 +393,8 @@ Examples:
         from .utils.io import Database
         if not args.video:
             parser.error("--set-frame-offset requires --video")
-        db_path = Path(".cache/index.db")
-        if not db_path.exists():
-            logger.error("No database found. Run --step index first.")
-            return 1
-        db = Database(db_path)
+        dsn = config.dsn
+        db = Database(dsn)
 
         # Find video by ID or name
         videos = db.get_all_videos()
@@ -426,11 +420,8 @@ Examples:
         from .utils.io import Database
         if not args.video:
             parser.error("--set-name requires --video")
-        db_path = Path(".cache/index.db")
-        if not db_path.exists():
-            logger.error("No database found. Run --step index first.")
-            return 1
-        db = Database(db_path)
+        dsn = config.dsn
+        db = Database(dsn)
 
         # Find video by ID or name
         videos = db.get_all_videos()

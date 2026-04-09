@@ -24,3 +24,5 @@ ui/dist/
 # Version file (keep in git)
 !VERSION
 !ltx2_dataset_builder/VERSION
+
+.env

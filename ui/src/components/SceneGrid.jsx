@@ -1,14 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import SceneCardGrid from './SceneCardGrid'
 import SceneCardSkeleton from './SceneCardSkeleton'
+import ViewToggle from './ViewToggle'
 
 const BATCH_SIZE = 50
 
-export default function SceneGrid({ videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, tagMap, viewMode, onLoadingChange }) {
+export default function SceneGrid({ videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, tagMap, onLoadingChange, totalCount }) {
   const [scenes, setScenes] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [isEmpty, setIsEmpty] = useState(false)
   const [sort, setSort] = useState('')
+  const [viewMode, setViewMode] = useState('card')
   const sentinelRef = useRef(null)
   const loadingRef = useRef(false)
   const hasMoreRef = useRef(true)
@@ -100,6 +102,7 @@ export default function SceneGrid({ videoFilter, activeIncludeTags, activeExclud
   return (
     <div className="scene-grid-wrap">
       <div className="scene-grid-toolbar">
+        <ViewToggle value={viewMode} onChange={setViewMode} />
         <div className="filter-buttons">
           {[['', 'Default'], ['frames_asc', 'Start ↑'], ['frames_desc', 'Start ↓']].map(([val, label]) => (
             <button
@@ -110,6 +113,7 @@ export default function SceneGrid({ videoFilter, activeIncludeTags, activeExclud
             >{label}</button>
           ))}
         </div>
+        {totalCount != null && <span className="toolbar-count">{totalCount.toLocaleString()} scenes</span>}
       </div>
       {isEmpty && (
         <div className="empty-state">

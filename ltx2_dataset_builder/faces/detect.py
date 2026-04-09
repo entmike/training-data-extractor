@@ -172,7 +172,7 @@ def filter_candidates_by_face(
     Returns:
         List of candidates that passed face filtering
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     
     if candidates is None:
         # Get pending candidates

@@ -190,7 +190,7 @@ def generate_scene_previews(
     import tempfile
     import os
     
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     
     if output_dir is None:
         output_dir = config.output_dir / "debug" / "scenes"
@@ -309,7 +309,7 @@ def generate_candidate_previews(
     Returns:
         Number of previews generated
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     
     if output_dir is None:
         output_dir = config.output_dir / "debug" / "candidates"

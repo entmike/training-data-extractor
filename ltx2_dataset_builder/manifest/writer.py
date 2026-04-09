@@ -89,7 +89,7 @@ def generate_manifest_entries(
     Yields:
         Manifest entry dictionaries
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     samples = db.get_samples()
     
     for sample in samples:
@@ -158,7 +158,7 @@ def write_captions(
     Returns:
         Number of caption files written
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     samples = db.get_samples()
     
     count = 0
@@ -190,7 +190,7 @@ def generate_statistics(config: PipelineConfig) -> Dict[str, Any]:
     Returns:
         Statistics dictionary
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     
     videos = db.get_all_videos()
     candidates = db.get_candidates()

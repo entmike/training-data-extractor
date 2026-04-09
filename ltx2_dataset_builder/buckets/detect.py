@@ -317,7 +317,7 @@ def detect_buckets_for_video(
     Returns:
         List of bucket dicts
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     video = db.get_video_by_id(video_id)
     
     if not video:
@@ -415,7 +415,7 @@ def save_buckets_to_db(
     Returns:
         List of bucket IDs
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     ids = []
     
     with db._connection() as conn:
@@ -470,7 +470,7 @@ def detect_all_buckets(config: PipelineConfig) -> int:
     Returns:
         Total number of buckets detected
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     videos = db.get_all_videos()
     
     total_buckets = 0

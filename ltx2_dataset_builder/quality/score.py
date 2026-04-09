@@ -149,7 +149,7 @@ def filter_candidates_by_quality(
     Returns:
         List of candidates that passed quality filtering.
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
 
     if candidates is None:
         candidates = db.get_candidates(status="pending")

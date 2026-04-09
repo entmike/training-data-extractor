@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Web frontend for reviewing scene captions."""
 
-import sqlite3
+import os
 import re
 import subprocess
 import io
 from pathlib import Path
 from typing import Optional
+import psycopg2
+import psycopg2.extras
+import psycopg2.pool
 from flask import Flask, send_from_directory, request, jsonify, Response, send_file
 import yaml
 from PIL import Image, ImageDraw
@@ -16,167 +19,98 @@ from ltx2_dataset_builder.utils.preview import generate_scene_preview  # noqa: E
 app = Flask(__name__)
 
 UI_DIST = Path(__file__).parent / 'ui' / 'dist'
-UI_SRC = Path(__file__).parent / 'ui' / 'src'  # For development without rebuild
-
-# Load config
 _HERE = Path(__file__).parent
 
+# Load .env if present (simple KEY=VALUE parser, no dependency needed)
+_env_file = _HERE / '.env'
+if _env_file.exists():
+    for _line in _env_file.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith('#') and '=' in _line:
+            _k, _, _v = _line.partition('=')
+            os.environ.setdefault(_k.strip(), _v.strip())
+
+# Load config.yaml
 CONFIG_PATH = _HERE / "config.yaml"
 if CONFIG_PATH.exists():
     with open(CONFIG_PATH) as f:
         config = yaml.safe_load(f)
 else:
-    config = {
-        "db_path": ".cache/index.db",
-        "output_dir": "./dataset"
-    }
+    config = {"output_dir": "./dataset"}
 
 def _resolve(p: str) -> Path:
-    """Resolve a config path relative to the project root, not the cwd."""
     path = Path(p)
     return path if path.is_absolute() else _HERE / path
 
-DB_PATH = _resolve(config.get("db_path", ".cache/index.db"))
-OUTPUT_DIR = _resolve(config.get("output_dir", "./dataset"))
+OUTPUT_DIR       = _resolve(config.get("output_dir", "./dataset"))
 DEBUG_SCENES_DIR = _HERE / ".cache/previews"
-WAVEFORMS_DIR = _HERE / ".cache/waveforms"
-CLIPS_DIR     = Path(".cache/clips")
+WAVEFORMS_DIR    = _HERE / ".cache/waveforms"
+CLIPS_DIR        = _HERE / ".cache/clips"
 
+# ── PostgreSQL connection pool ────────────────────────────────────────────────
 
-def get_db_connection():
-    """Get database connection."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+_pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
 
-
-def ensure_tags_table():
-    """Create scene_tags table if it doesn't exist."""
-    conn = get_db_connection()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS scene_tags (
-            scene_id INTEGER NOT NULL,
-            tag      TEXT    NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (scene_id, tag),
-            FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE
+def _get_dsn() -> str:
+    dsn = config.get('pg_dsn') or os.environ.get('DATABASE_URL')
+    if not dsn:
+        raise RuntimeError(
+            "No pg_dsn in config.yaml and no DATABASE_URL env var. "
+            "Set DATABASE_URL=postgresql://ltx2:ltx2@localhost:5432/ltx2 in .env"
         )
-    """)
-    conn.commit()
-    conn.close()
+    return dsn
+
+def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    global _pool
+    if _pool is None:
+        _pool = psycopg2.pool.ThreadedConnectionPool(2, 10, _get_dsn())
+    return _pool
 
 
-def ensure_tag_definitions_table():
-    """Create tag_definitions table if it doesn't exist, and migrate schema."""
-    conn = get_db_connection()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS tag_definitions (
-            tag          TEXT PRIMARY KEY,
-            description  TEXT NOT NULL DEFAULT '',
-            display_name TEXT NOT NULL DEFAULT ''
-        )
-    """)
-    # Migrate: add display_name column if upgrading from older schema
+class _DbConn:
+    """Thin wrapper: exposes conn.execute(), conn.commit(), conn.close()
+    so all route handlers work unchanged from the sqlite3 era."""
+
+    def __init__(self):
+        self._conn = _get_pool().getconn()
+
+    def execute(self, sql: str, params=()):
+        cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params if params else None)
+        return cur
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        _get_pool().putconn(self._conn)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+
+def get_db_connection() -> _DbConn:
+    return _DbConn()
+
+
+def _init_schema():
+    """Ensure all tables exist. Schema is defined in io.py; this call is a no-op
+    if tables already exist, so startup is always safe."""
     try:
-        conn.execute("ALTER TABLE tag_definitions ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
-    except Exception:
-        pass  # column already exists
-    conn.commit()
-    conn.close()
+        from ltx2_dataset_builder.utils.io import Database as _Db
+        _Db(_get_dsn())  # _init_tables() runs in __init__
+        print("[startup] PostgreSQL schema ready")
+    except Exception as e:
+        print(f"[startup] Schema init failed: {e}")
 
-
-try:
-    ensure_tags_table()
-    ensure_tag_definitions_table()
-except Exception:
-    pass
-
-
-def ensure_videos_prompt_column():
-    """Add prompt column to videos table if it doesn't exist."""
-    conn = get_db_connection()
-    try:
-        conn.execute("ALTER TABLE videos ADD COLUMN prompt TEXT")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass  # Column already exists
-    finally:
-        conn.close()
-
-
-try:
-    ensure_videos_prompt_column()
-except Exception:
-    pass
-
-
-def ensure_rating_column():
-    """Add rating column to scenes table if it doesn't exist."""
-    conn = get_db_connection()
-    try:
-        conn.execute("ALTER TABLE scenes ADD COLUMN rating INTEGER")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass  # Column already exists
-    finally:
-        conn.close()
-
-
-try:
-    ensure_rating_column()
-except Exception:
-    pass
-
-
-def ensure_clips_tables():
-    """Create clips and clip_items tables if they don't exist."""
-    conn = get_db_connection()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS clips (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            name       TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS clip_items (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            clip_id INTEGER NOT NULL,
-            scene_id      INTEGER NOT NULL,
-            video_id      INTEGER NOT NULL,
-            start_frame   INTEGER NOT NULL,
-            end_frame     INTEGER NOT NULL,
-            caption       TEXT DEFAULT '',
-            created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (clip_id) REFERENCES clips(id) ON DELETE CASCADE,
-            FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
-            UNIQUE (clip_id, scene_id)
-        )
-    """)
-    # Migration: add caption column if it doesn't exist yet
-    try:
-        conn.execute("ALTER TABLE clip_items ADD COLUMN caption TEXT DEFAULT ''")
-        conn.commit()
-    except Exception:
-        pass  # column already exists
-    # Migration: add caption_prompt column to clips if it doesn't exist yet
-    try:
-        conn.execute("ALTER TABLE clips ADD COLUMN caption_prompt TEXT")
-        conn.commit()
-    except Exception:
-        pass  # column already exists
-    conn.commit()
-    conn.close()
-
-
-try:
-    ensure_clips_tables()
-except Exception:
-    pass
+_init_schema()
 
 try:
     from ltx2_dataset_builder.utils.io import Database as _Db
-    _n = _Db(DB_PATH).backfill_default_buckets()
+    _n = _Db(_get_dsn()).backfill_default_buckets()
     if _n:
         print(f"[startup] Backfilled {_n} default bucket(s)")
 except Exception as _e:
@@ -246,7 +180,7 @@ def scene_preview(scene_id: int):
         SELECT s.*, v.path as video_path, v.fps, v.frame_offset
         FROM scenes s
         JOIN videos v ON s.video_id = v.id
-        WHERE s.id = ?
+        WHERE s.id = %s
     """, (scene_id,)).fetchone()
     conn.close()
     
@@ -306,7 +240,7 @@ def serve_clip(scene_id: int):
                v.path as video_path, v.fps, v.frame_offset
         FROM scenes s
         JOIN videos v ON s.video_id = v.id
-        WHERE s.id = ?
+        WHERE s.id = %s
     """, (scene_id,)).fetchone()
     conn.close()
 
@@ -482,7 +416,7 @@ def serve_waveform(scene_id: int):
                v.path as video_path, v.fps, v.frame_offset
         FROM scenes s
         JOIN videos v ON s.video_id = v.id
-        WHERE s.id = ?
+        WHERE s.id = %s
     """, (scene_id,)).fetchone()
     conn.close()
 
@@ -546,28 +480,28 @@ def get_scenes():
     params = []
 
     if video_filter:
-        conditions.append("v.id = ?")
+        conditions.append("v.id = %s")
         params.append(int(video_filter))
 
     # Tag include filter
     if include_tags:
         if include_mode == 'or':
-            ph = ','.join(['?'] * len(include_tags))
+            ph = ','.join(['%s'] * len(include_tags))
             conditions.append(f"EXISTS (SELECT 1 FROM scene_tags st2 WHERE st2.scene_id = s.id AND st2.tag IN ({ph}))")
             params.extend(include_tags)
         else:  # AND — each tag must be present
             for tag in include_tags:
-                conditions.append("EXISTS (SELECT 1 FROM scene_tags st2 WHERE st2.scene_id = s.id AND st2.tag = ?)")
+                conditions.append("EXISTS (SELECT 1 FROM scene_tags st2 WHERE st2.scene_id = s.id AND st2.tag = %s)")
                 params.append(tag)
 
     # Tag exclude filter
     for tag in exclude_tags:
-        conditions.append("NOT EXISTS (SELECT 1 FROM scene_tags st2 WHERE st2.scene_id = s.id AND st2.tag = ?)")
+        conditions.append("NOT EXISTS (SELECT 1 FROM scene_tags st2 WHERE st2.scene_id = s.id AND st2.tag = %s)")
         params.append(tag)
 
     # Min frames
     if min_frames > 0:
-        conditions.append("(COALESCE(s.end_frame, 0) - COALESCE(s.start_frame, 0)) >= ?")
+        conditions.append("(COALESCE(s.end_frame, 0) - COALESCE(s.start_frame, 0)) >= %s")
         params.append(min_frames)
 
     # Rating filter
@@ -577,7 +511,7 @@ def get_scenes():
         if 'unranked' in rating_values:
             rating_parts.append("s.rating IS NULL")
         if numeric:
-            ph = ','.join(['?'] * len(numeric))
+            ph = ','.join(['%s'] * len(numeric))
             rating_parts.append(f"s.rating IN ({ph})")
             params.extend([int(v) for v in numeric])
         if rating_parts:
@@ -588,9 +522,9 @@ def get_scenes():
     scenes_from = "FROM scenes s JOIN videos v ON s.video_id = v.id"
 
     total = conn.execute(
-        f"SELECT COUNT(*) {scenes_from} {where_clause}",
+        f"SELECT COUNT(*) AS total {scenes_from} {where_clause}",
         params
-    ).fetchone()[0]
+    ).fetchone()["total"]
 
     offset = (page - 1) * limit
     
@@ -598,11 +532,9 @@ def get_scenes():
         SELECT s.*, v.path as video_path, v.fps, v.frame_offset,
             (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
             (SELECT COUNT(*) FROM clip_items ci WHERE ci.scene_id = s.id) as clip_count,
-            GROUP_CONCAT(st.tag, '|') as tags_concat
+            (SELECT STRING_AGG(st.tag, '|') FROM scene_tags st WHERE st.scene_id = s.id) as tags_concat
         {scenes_from}
-        LEFT JOIN scene_tags st ON st.scene_id = s.id
         {where_clause}
-        GROUP BY s.id
         ORDER BY {
             "s.start_frame ASC, s.video_id, s.id" if sort == "frames_asc"
             else "s.start_frame DESC, s.video_id, s.id" if sort == "frames_desc"
@@ -641,7 +573,7 @@ def get_scenes():
             'duration': duration,
             'frame_count': (d.get('end_frame') or 0) - (d.get('start_frame') or 0),
             'preview_path': preview_path,
-            'caption_finished_at': (d['caption_finished_at'].replace(' ', 'T') + 'Z') if d.get('caption_finished_at') else None,
+            'caption_finished_at': (d['caption_finished_at'].isoformat() if hasattr(d['caption_finished_at'], 'isoformat') else d['caption_finished_at'].replace(' ', 'T') + 'Z') if d.get('caption_finished_at') else None,
             'rating': d.get('rating'),
             'blurhash': d.get('blurhash'),
             'clip_count': d.get('clip_count') or 0,
@@ -673,7 +605,7 @@ def api_stats():
 def get_caption(scene_id: int):
     """Get caption for a specific scene."""
     conn = get_db_connection()
-    row = conn.execute("SELECT id, caption FROM scenes WHERE id = ?", (scene_id,)).fetchone()
+    row = conn.execute("SELECT id, caption FROM scenes WHERE id = %s", (scene_id,)).fetchone()
     conn.close()
     
     if row is None:
@@ -694,13 +626,13 @@ def update_caption(scene_id: int):
     conn = get_db_connection()
     
     # Check if scene exists
-    row = conn.execute("SELECT id FROM scenes WHERE id = ?", (scene_id,)).fetchone()
+    row = conn.execute("SELECT id FROM scenes WHERE id = %s", (scene_id,)).fetchone()
     if row is None:
         conn.close()
         return jsonify({"error": "Scene not found"}), 404
     
     # Update caption
-    conn.execute("UPDATE scenes SET caption = ? WHERE id = ?", (caption, scene_id))
+    conn.execute("UPDATE scenes SET caption = %s WHERE id = %s", (caption, scene_id))
     conn.commit()
     conn.close()
     
@@ -719,7 +651,7 @@ def get_all_tags():
                JOIN scenes s ON st.scene_id = s.id
                JOIN videos v ON s.video_id = v.id
                LEFT JOIN tag_definitions td ON td.tag = st.tag
-               WHERE v.id = ?
+               WHERE v.id = %s
                ORDER BY st.tag""",
             [int(video_filter)]
         ).fetchall()
@@ -739,7 +671,7 @@ def get_tags(scene_id: int):
     """Get all tags for a scene."""
     conn = get_db_connection()
     rows = conn.execute(
-        "SELECT tag FROM scene_tags WHERE scene_id = ? ORDER BY created_at, tag",
+        "SELECT tag FROM scene_tags WHERE scene_id = %s ORDER BY created_at, tag",
         (scene_id,)
     ).fetchall()
     conn.close()
@@ -757,17 +689,17 @@ def add_tag(scene_id: int):
         return jsonify({"error": "Empty tag"}), 400
 
     conn = get_db_connection()
-    if conn.execute("SELECT id FROM scenes WHERE id = ?", (scene_id,)).fetchone() is None:
+    if conn.execute("SELECT id FROM scenes WHERE id = %s", (scene_id,)).fetchone() is None:
         conn.close()
         return jsonify({"error": "Scene not found"}), 404
 
     conn.execute(
-        "INSERT OR IGNORE INTO scene_tags (scene_id, tag) VALUES (?, ?)",
+        "INSERT OR IGNORE INTO scene_tags (scene_id, tag) VALUES (%s, %s)",
         (scene_id, tag)
     )
     conn.commit()
     rows = conn.execute(
-        "SELECT tag FROM scene_tags WHERE scene_id = ? ORDER BY created_at, tag",
+        "SELECT tag FROM scene_tags WHERE scene_id = %s ORDER BY created_at, tag",
         (scene_id,)
     ).fetchall()
     conn.close()
@@ -789,23 +721,23 @@ def rename_tag():
 
     conn = get_db_connection()
     count = conn.execute(
-        "SELECT COUNT(*) FROM scene_tags WHERE tag = ?", (old_tag,)
-    ).fetchone()[0]
+        "SELECT COUNT(*) AS cnt FROM scene_tags WHERE tag = %s", (old_tag,)
+    ).fetchone()["cnt"]
     # For scenes that already have new_tag, the INSERT is ignored (no duplicate)
     conn.execute(
         "INSERT OR IGNORE INTO scene_tags (scene_id, tag, created_at) "
-        "SELECT scene_id, ?, created_at FROM scene_tags WHERE tag = ?",
+        "SELECT scene_id, %s, created_at FROM scene_tags WHERE tag = %s",
         (new_tag, old_tag)
     )
-    conn.execute("DELETE FROM scene_tags WHERE tag = ?", (old_tag,))
+    conn.execute("DELETE FROM scene_tags WHERE tag = %s", (old_tag,))
     # Migrate description to new tag name
     conn.execute(
         "INSERT INTO tag_definitions (tag, description, display_name) "
-        "SELECT ?, description, display_name FROM tag_definitions WHERE tag = ? "
+        "SELECT %s, description, display_name FROM tag_definitions WHERE tag = %s "
         "ON CONFLICT(tag) DO NOTHING",
         (new_tag, old_tag)
     )
-    conn.execute("DELETE FROM tag_definitions WHERE tag = ?", (old_tag,))
+    conn.execute("DELETE FROM tag_definitions WHERE tag = %s", (old_tag,))
     conn.commit()
     conn.close()
     return jsonify({"updated": count})
@@ -825,7 +757,7 @@ def set_tag_description():
 
     conn = get_db_connection()
     conn.execute(
-        "INSERT INTO tag_definitions (tag, description, display_name) VALUES (?, ?, ?) "
+        "INSERT INTO tag_definitions (tag, description, display_name) VALUES (%s, %s, %s) "
         "ON CONFLICT(tag) DO UPDATE SET description = excluded.description, display_name = excluded.display_name",
         (tag, description, display_name)
     )
@@ -840,7 +772,7 @@ def get_tag_suggestions(scene_id: int):
     conn = get_db_connection()
     
     try:
-        scene = conn.execute("SELECT video_id FROM scenes WHERE id = ?", (scene_id,)).fetchone()
+        scene = conn.execute("SELECT video_id FROM scenes WHERE id = %s", (scene_id,)).fetchone()
         if not scene:
             conn.close()
             return jsonify({"error": "Scene not found"}), 404
@@ -849,13 +781,13 @@ def get_tag_suggestions(scene_id: int):
         tag_scores = {}
         
         existing_tags = [row["tag"] for row in conn.execute(
-            "SELECT tag FROM scene_tags WHERE scene_id = ?", (scene_id,)
+            "SELECT tag FROM scene_tags WHERE scene_id = %s", (scene_id,)
         ).fetchall()]
         
         scene_recent = conn.execute("""
             SELECT tag, created_at
             FROM scene_tags
-            WHERE scene_id = ?
+            WHERE scene_id = %s
             ORDER BY created_at DESC
             LIMIT 50
         """, (scene_id,)).fetchall()
@@ -871,9 +803,9 @@ def get_tag_suggestions(scene_id: int):
             SELECT st2.tag, COUNT(*) as co_occurrence
             FROM scene_tags st1
             JOIN scene_tags st2 ON st1.scene_id = st2.scene_id
-            WHERE st1.scene_id = ?
+            WHERE st1.scene_id = %s
               AND st2.tag != st1.tag
-              AND st2.scene_id != ?
+              AND st2.scene_id != %s
             GROUP BY st2.tag
             ORDER BY co_occurrence DESC
             LIMIT 20
@@ -909,27 +841,36 @@ def get_tag_suggestions(scene_id: int):
             LIMIT 50
         """).fetchall()
         
-        from datetime import datetime
+        from datetime import datetime, timezone
         for row in global_recent:
             tag = row["tag"]
             if tag not in tag_scores:
                 tag_scores[tag] = {"score": 0.0, "sources": set()}
-            last_used_str = row["last_used"]
-            if last_used_str:
-                last_used = datetime.fromisoformat(last_used_str.replace('Z', '+00:00'))
-                days_ago = (datetime.now() - last_used).total_seconds() / 86400
+            last_used = row["last_used"]
+            if last_used:
+                # psycopg2 returns datetime objects; SQLite returned strings
+                if not hasattr(last_used, 'total_seconds'):
+                    if not hasattr(last_used, 'tzinfo'):
+                        last_used = datetime.fromisoformat(str(last_used).replace('Z', '+00:00'))
+                now = datetime.now(timezone.utc)
+                if last_used.tzinfo is None:
+                    last_used = last_used.replace(tzinfo=timezone.utc)
+                days_ago = (now - last_used).total_seconds() / 86400
                 weight = 1.5 - (days_ago * 0.01)
                 tag_scores[tag]["score"] += max(0, weight)
             else:
                 tag_scores[tag]["score"] += 1.5
             tag_scores[tag]["sources"].add("global_recent")
         
+        # Load all tag definitions in one query to avoid N+1
+        tag_defs = {
+            r["tag"]: r for r in conn.execute(
+                "SELECT tag, description, display_name FROM tag_definitions"
+            ).fetchall()
+        }
         tag_list = []
         for tag, data in tag_scores.items():
-            desc_row = conn.execute(
-                "SELECT description, display_name FROM tag_definitions WHERE tag = ?",
-                (tag,)
-            ).fetchone()
+            desc_row = tag_defs.get(tag)
             tag_list.append({
                 "tag": tag,
                 "score": round(data["score"], 2),
@@ -952,12 +893,12 @@ def remove_tag(scene_id: int, tag: str):
     """Remove a tag from a scene."""
     conn = get_db_connection()
     conn.execute(
-        "DELETE FROM scene_tags WHERE scene_id = ? AND tag = ?",
+        "DELETE FROM scene_tags WHERE scene_id = %s AND tag = %s",
         (scene_id, tag)
     )
     conn.commit()
     rows = conn.execute(
-        "SELECT tag FROM scene_tags WHERE scene_id = ? ORDER BY created_at, tag",
+        "SELECT tag FROM scene_tags WHERE scene_id = %s ORDER BY created_at, tag",
         (scene_id,)
     ).fetchall()
     conn.close()
@@ -974,10 +915,10 @@ def set_rating(scene_id: int):
     if rating is not None and rating not in (1, 2, 3):
         return jsonify({"error": "Rating must be 1, 2, 3, or null"}), 400
     conn = get_db_connection()
-    if conn.execute("SELECT id FROM scenes WHERE id = ?", (scene_id,)).fetchone() is None:
+    if conn.execute("SELECT id FROM scenes WHERE id = %s", (scene_id,)).fetchone() is None:
         conn.close()
         return jsonify({"error": "Scene not found"}), 404
-    conn.execute("UPDATE scenes SET rating = ? WHERE id = ?", (rating, scene_id))
+    conn.execute("UPDATE scenes SET rating = %s WHERE id = %s", (rating, scene_id))
     conn.commit()
     conn.close()
     return jsonify({"scene_id": scene_id, "rating": rating})
@@ -987,18 +928,20 @@ def set_rating(scene_id: int):
 def get_videos():
     """Return all videos with full metadata and scene/caption counts."""
     conn = get_db_connection()
-    rows = conn.execute("SELECT * FROM videos ORDER BY path").fetchall()
+    rows = conn.execute("""
+        SELECT v.*,
+               COUNT(s.id) as scene_count,
+               SUM(CASE WHEN s.caption IS NOT NULL AND s.caption != ''
+                        AND substr(s.caption, 1, 2) != '__' THEN 1 ELSE 0 END) as captioned
+        FROM videos v
+        LEFT JOIN scenes s ON s.video_id = v.id
+        GROUP BY v.id
+        ORDER BY v.path
+    """).fetchall()
+    conn.close()
     result = []
     for r in rows:
         v = dict(r)
-        counts = conn.execute(
-            """SELECT
-                COUNT(*) as scene_count,
-                SUM(CASE WHEN caption IS NOT NULL AND caption != '' AND substr(caption, 1, 2) != '__' THEN 1 ELSE 0 END) as captioned
-               FROM scenes WHERE video_id = ?""",
-            (v["id"],)
-        ).fetchone()
-        # Use custom name if set, otherwise fallback to filename
         display_name = v.get("name") or Path(v["path"]).name
         result.append({
             "id": v["id"],
@@ -1013,10 +956,9 @@ def get_videos():
             "frame_offset": v.get("frame_offset") or 0,
             "prompt": v.get("prompt") or "",
             "indexed_at": v.get("indexed_at"),
-            "scene_count": counts["scene_count"] or 0,
-            "captioned": counts["captioned"] or 0,
+            "scene_count": v.get("scene_count") or 0,
+            "captioned": v.get("captioned") or 0,
         })
-    conn.close()
     return jsonify({"videos": result})
 
 
@@ -1042,7 +984,7 @@ def set_prompt(video_id: int):
     data = request.get_json()
     prompt = (data.get("prompt") or "").strip() or None
     conn = get_db_connection()
-    conn.execute("UPDATE videos SET prompt = ? WHERE id = ?", (prompt, video_id))
+    conn.execute("UPDATE videos SET prompt = %s WHERE id = %s", (prompt, video_id))
     conn.commit()
     conn.close()
     return jsonify({"video_id": video_id, "prompt": prompt or ""})
@@ -1056,7 +998,7 @@ def set_video_name(video_id: int):
         return jsonify({"error": "Missing name field"}), 400
     name = data["name"].strip() or None
     conn = get_db_connection()
-    conn.execute("UPDATE videos SET name = ? WHERE id = ?", (name, video_id))
+    conn.execute("UPDATE videos SET name = %s WHERE id = %s", (name, video_id))
     conn.commit()
     conn.close()
     return jsonify({"video_id": video_id, "name": name or ""})
@@ -1073,16 +1015,16 @@ def update_bucket(scene_id: int):
     offset_frames = int(data['offset_frames'])
 
     conn = get_db_connection()
-    bucket = conn.execute("SELECT * FROM buckets WHERE scene_id = ?", (scene_id,)).fetchone()
+    bucket = conn.execute("SELECT * FROM buckets WHERE scene_id = %s", (scene_id,)).fetchone()
     if not bucket:
         conn.close()
         return jsonify({"error": "Bucket not found"}), 404
 
     video = conn.execute("""
         SELECT v.fps, v.frame_offset FROM videos v
-        JOIN scenes s ON s.video_id = v.id WHERE s.id = ?
+        JOIN scenes s ON s.video_id = v.id WHERE s.id = %s
     """, (scene_id,)).fetchone()
-    scene = conn.execute("SELECT start_frame, end_frame, start_time, end_time FROM scenes WHERE id = ?", (scene_id,)).fetchone()
+    scene = conn.execute("SELECT start_frame, end_frame, start_time, end_time FROM scenes WHERE id = %s", (scene_id,)).fetchone()
     conn.close()
 
     if not video or not scene:
@@ -1113,21 +1055,21 @@ def update_bucket(scene_id: int):
     conn = get_db_connection()
     conn.execute("""
         UPDATE buckets SET
-            frame_count = ?,
-            optimal_offset_frames = ?,
-            start_frame = ?,
-            end_frame = ?,
-            start_time = ?,
-            end_time = ?,
-            duration = ?,
-            optimal_duration = ?,
+            frame_count = %s,
+            optimal_offset_frames = %s,
+            start_frame = %s,
+            end_frame = %s,
+            start_time = %s,
+            end_time = %s,
+            duration = %s,
+            optimal_duration = %s,
             bucket_timestamp = CURRENT_TIMESTAMP
-        WHERE scene_id = ?
+        WHERE scene_id = %s
     """, (frame_count, offset_frames, new_start_frame, new_end_frame,
           new_start_time, new_end_time, new_duration, new_duration, scene_id))
     conn.commit()
-    saved = conn.execute("SELECT * FROM buckets WHERE scene_id = ?", (scene_id,)).fetchone()
-    scene_fc = conn.execute("SELECT start_frame, end_frame FROM scenes WHERE id = ?", (scene_id,)).fetchone()
+    saved = conn.execute("SELECT * FROM buckets WHERE scene_id = %s", (scene_id,)).fetchone()
+    scene_fc = conn.execute("SELECT start_frame, end_frame FROM scenes WHERE id = %s", (scene_id,)).fetchone()
     conn.close()
 
     result = dict(saved)
@@ -1140,15 +1082,15 @@ def get_bucket_data(scene_id: int):
     """Get bucket data for a scene."""
     conn = get_db_connection()
 
-    bucket = conn.execute("SELECT * FROM buckets WHERE scene_id = ?", (scene_id,)).fetchone()
+    bucket = conn.execute("SELECT * FROM buckets WHERE scene_id = %s", (scene_id,)).fetchone()
     if not bucket:
         conn.close()
         return jsonify({"bucket": None})
 
     result = dict(bucket)
 
-    scene = conn.execute("SELECT start_frame, end_frame, start_time, end_time FROM scenes WHERE id = ?", (scene_id,)).fetchone()
-    fps = conn.execute("SELECT v.fps FROM videos v JOIN scenes s ON s.video_id = v.id WHERE s.id = ?", (scene_id,)).fetchone()
+    scene = conn.execute("SELECT start_frame, end_frame, start_time, end_time FROM scenes WHERE id = %s", (scene_id,)).fetchone()
+    fps = conn.execute("SELECT v.fps FROM videos v JOIN scenes s ON s.video_id = v.id WHERE s.id = %s", (scene_id,)).fetchone()
     if scene:
         if scene["start_frame"] is not None and scene["end_frame"] is not None:
             result["scene_frame_count"] = scene["end_frame"] - scene["start_frame"]
@@ -1167,7 +1109,7 @@ def serve_bucket_clip(scene_id: int):
     # Look up bucket + video info from DB
     conn = get_db_connection()
     bucket_row = conn.execute("""
-        SELECT * FROM buckets WHERE scene_id = ?
+        SELECT * FROM buckets WHERE scene_id = %s
     """, (scene_id,)).fetchone()
     
     if not bucket_row:
@@ -1181,7 +1123,7 @@ def serve_bucket_clip(scene_id: int):
         SELECT v.path as video_path, v.fps, v.frame_offset
         FROM videos v
         JOIN buckets b ON b.video_id = v.id
-        WHERE b.scene_id = ?
+        WHERE b.scene_id = %s
     """, (scene_id,)).fetchone()
     
     if not video_row:
@@ -1244,7 +1186,7 @@ def serve_bucket_waveform(scene_id: int):
     # Get bucket data
     conn = get_db_connection()
     bucket = conn.execute("""
-        SELECT * FROM buckets WHERE scene_id = ?
+        SELECT * FROM buckets WHERE scene_id = %s
     """, (scene_id,)).fetchone()
     
     if not bucket:
@@ -1256,7 +1198,7 @@ def serve_bucket_waveform(scene_id: int):
         SELECT v.path as video_path, v.fps, v.frame_offset
         FROM videos v
         JOIN buckets b ON b.video_id = v.id
-        WHERE b.scene_id = ?
+        WHERE b.scene_id = %s
     """, (scene_id,)).fetchone()
     
     if not video_row:
@@ -1290,7 +1232,7 @@ def get_clips():
                COUNT(ci.id) as item_count
         FROM clips c
         LEFT JOIN clip_items ci ON ci.clip_id = c.id
-        GROUP BY c.id
+        GROUP BY c.id, c.name, c.caption_prompt, c.created_at
         ORDER BY c.created_at DESC
     """).fetchall()
     conn.close()
@@ -1307,9 +1249,9 @@ def create_clip():
     if not name:
         return jsonify({"error": "Empty name"}), 400
     conn = get_db_connection()
-    cur = conn.execute("INSERT INTO clips (name) VALUES (?)", (name,))
+    cur = conn.execute("INSERT INTO clips (name) VALUES (%s) RETURNING *", (name,))
     conn.commit()
-    row = conn.execute("SELECT * FROM clips WHERE id = ?", (cur.lastrowid,)).fetchone()
+    row = cur.fetchone()
     conn.close()
     return jsonify({"clip": dict(row)}), 201
 
@@ -1328,16 +1270,16 @@ def update_clip(clip_id: int):
     if has_name and not name:
         return jsonify({"error": "Empty name"}), 400
     conn = get_db_connection()
-    if conn.execute("SELECT id FROM clips WHERE id = ?", (clip_id,)).fetchone() is None:
+    if conn.execute("SELECT id FROM clips WHERE id = %s", (clip_id,)).fetchone() is None:
         conn.close()
         return jsonify({"error": "Collection not found"}), 404
     if has_name:
-        conn.execute("UPDATE clips SET name = ? WHERE id = ?", (name, clip_id))
+        conn.execute("UPDATE clips SET name = %s WHERE id = %s", (name, clip_id))
     if has_prompt:
         prompt_val = data['caption_prompt'].strip() if data['caption_prompt'] else None
-        conn.execute("UPDATE clips SET caption_prompt = ? WHERE id = ?", (prompt_val, clip_id))
+        conn.execute("UPDATE clips SET caption_prompt = %s WHERE id = %s", (prompt_val, clip_id))
     conn.commit()
-    row = conn.execute("SELECT c.id, c.name, c.caption_prompt, c.created_at FROM clips c WHERE c.id = ?", (clip_id,)).fetchone()
+    row = conn.execute("SELECT c.id, c.name, c.caption_prompt, c.created_at FROM clips c WHERE c.id = %s", (clip_id,)).fetchone()
     conn.close()
     return jsonify({"clip": dict(row)})
 
@@ -1346,11 +1288,11 @@ def update_clip(clip_id: int):
 def delete_clip(clip_id: int):
     """Delete a clip and all its items."""
     conn = get_db_connection()
-    if conn.execute("SELECT id FROM clips WHERE id = ?", (clip_id,)).fetchone() is None:
+    if conn.execute("SELECT id FROM clips WHERE id = %s", (clip_id,)).fetchone() is None:
         conn.close()
         return jsonify({"error": "Collection not found"}), 404
-    conn.execute("DELETE FROM clip_items WHERE clip_id = ?", (clip_id,))
-    conn.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
+    conn.execute("DELETE FROM clip_items WHERE clip_id = %s", (clip_id,))
+    conn.execute("DELETE FROM clips WHERE id = %s", (clip_id,))
     conn.commit()
     conn.close()
     return jsonify({"success": True})
@@ -1363,7 +1305,7 @@ def export_clip(clip_id: int):
     import tempfile
 
     conn = get_db_connection()
-    coll = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+    coll = conn.execute("SELECT * FROM clips WHERE id = %s", (clip_id,)).fetchone()
     if not coll:
         conn.close()
         return jsonify({"error": "Collection not found"}), 404
@@ -1375,7 +1317,7 @@ def export_clip(clip_id: int):
         FROM clip_items ci
         JOIN videos v ON ci.video_id = v.id
         JOIN scenes s ON ci.scene_id = s.id
-        WHERE ci.clip_id = ?
+        WHERE ci.clip_id = %s
         ORDER BY ci.created_at ASC
     """, (clip_id,)).fetchall()
     conn.close()
@@ -1447,25 +1389,29 @@ def export_clip(clip_id: int):
 @app.route('/api/clips/<int:clip_id>/items', methods=['GET'])
 def get_clip_items(clip_id: int):
     """Get all items in a clip with scene/video metadata."""
+    sort = request.args.get('sort', '')
+    order_by = (
+        "ci.start_frame ASC" if sort == "frames_asc"
+        else "ci.start_frame DESC" if sort == "frames_desc"
+        else "ci.created_at ASC"
+    )
     conn = get_db_connection()
-    if conn.execute("SELECT id FROM clips WHERE id = ?", (clip_id,)).fetchone() is None:
+    if conn.execute("SELECT id FROM clips WHERE id = %s", (clip_id,)).fetchone() is None:
         conn.close()
         return jsonify({"error": "Collection not found"}), 404
-    rows = conn.execute("""
+    rows = conn.execute(f"""
         SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame, ci.created_at,
                ci.caption as item_caption,
                v.path as video_path, v.fps, v.frame_offset,
                COALESCE(v.name, '') as video_name_custom,
                s.caption as scene_caption, s.start_time, s.end_time, s.rating, s.blurhash,
                s.start_frame as scene_start_frame, s.end_frame as scene_end_frame,
-               GROUP_CONCAT(st.tag, '|') as tags_concat
+               (SELECT STRING_AGG(st.tag, '|') FROM scene_tags st WHERE st.scene_id = s.id) as tags_concat
         FROM clip_items ci
         JOIN videos v ON ci.video_id = v.id
         JOIN scenes s ON ci.scene_id = s.id
-        LEFT JOIN scene_tags st ON st.scene_id = s.id
-        WHERE ci.clip_id = ?
-        GROUP BY ci.id
-        ORDER BY ci.created_at ASC
+        WHERE ci.clip_id = %s
+        ORDER BY {order_by}
     """, (clip_id,)).fetchall()
     conn.close()
     items = []
@@ -1510,16 +1456,16 @@ def add_clip_item(clip_id: int):
     scene_id = int(data['scene_id'])
 
     conn = get_db_connection()
-    if conn.execute("SELECT id FROM clips WHERE id = ?", (clip_id,)).fetchone() is None:
+    if conn.execute("SELECT id FROM clips WHERE id = %s", (clip_id,)).fetchone() is None:
         conn.close()
         return jsonify({"error": "Collection not found"}), 404
 
-    bucket = conn.execute("SELECT * FROM buckets WHERE scene_id = ?", (scene_id,)).fetchone()
+    bucket = conn.execute("SELECT * FROM buckets WHERE scene_id = %s", (scene_id,)).fetchone()
     if not bucket:
         conn.close()
         return jsonify({"error": "No bucket found for this scene."}), 400
 
-    scene = conn.execute("SELECT video_id FROM scenes WHERE id = ?", (scene_id,)).fetchone()
+    scene = conn.execute("SELECT video_id FROM scenes WHERE id = %s", (scene_id,)).fetchone()
     if not scene:
         conn.close()
         return jsonify({"error": "Scene not found"}), 404
@@ -1531,19 +1477,20 @@ def add_clip_item(clip_id: int):
     try:
         cur = conn.execute("""
             INSERT INTO clip_items (clip_id, scene_id, video_id, start_frame, end_frame)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
         """, (clip_id, scene_id, video_id, start_frame, end_frame))
         conn.commit()
-        item_id = cur.lastrowid
+        item_id = cur.fetchone()["id"]
         conn.close()
         return jsonify({
             "item_id": item_id, "clip_id": clip_id,
             "scene_id": scene_id, "video_id": video_id,
             "start_frame": start_frame, "end_frame": end_frame,
         }), 201
-    except sqlite3.IntegrityError:
+    except psycopg2.errors.UniqueViolation:
         existing = conn.execute(
-            "SELECT id FROM clip_items WHERE clip_id = ? AND scene_id = ?",
+            "SELECT id FROM clip_items WHERE clip_id = %s AND scene_id = %s",
             (clip_id, scene_id)
         ).fetchone()
         conn.close()
@@ -1562,14 +1509,14 @@ def update_clip_item(clip_id: int, item_id: int):
         return jsonify({"error": "end_frame must be greater than start_frame"}), 400
     conn = get_db_connection()
     row = conn.execute(
-        "SELECT id FROM clip_items WHERE id = ? AND clip_id = ?",
+        "SELECT id FROM clip_items WHERE id = %s AND clip_id = %s",
         (item_id, clip_id)
     ).fetchone()
     if not row:
         conn.close()
         return jsonify({"error": "Item not found"}), 404
     conn.execute(
-        "UPDATE clip_items SET start_frame = ?, end_frame = ? WHERE id = ?",
+        "UPDATE clip_items SET start_frame = %s, end_frame = %s WHERE id = %s",
         (start_frame, end_frame, item_id)
     )
     conn.commit()
@@ -1587,13 +1534,13 @@ def update_clip_item_caption(clip_id: int, item_id: int):
     caption = data['caption']
     conn = get_db_connection()
     row = conn.execute(
-        "SELECT id FROM clip_items WHERE id = ? AND clip_id = ?",
+        "SELECT id FROM clip_items WHERE id = %s AND clip_id = %s",
         (item_id, clip_id)
     ).fetchone()
     if not row:
         conn.close()
         return jsonify({"error": "Item not found"}), 404
-    conn.execute("UPDATE clip_items SET caption = ? WHERE id = ?", (caption, item_id))
+    conn.execute("UPDATE clip_items SET caption = %s WHERE id = %s", (caption, item_id))
     conn.commit()
     conn.close()
     return jsonify({"item_id": item_id, "caption": caption})
@@ -1604,7 +1551,7 @@ def remove_clip_item(clip_id: int, item_id: int):
     """Remove an item from a clip."""
     conn = get_db_connection()
     conn.execute(
-        "DELETE FROM clip_items WHERE id = ? AND clip_id = ?",
+        "DELETE FROM clip_items WHERE id = %s AND clip_id = %s",
         (item_id, clip_id)
     )
     conn.commit()
@@ -1629,7 +1576,7 @@ def get_scene_clip_items(scene_id: int):
         JOIN clips c ON ci.clip_id = c.id
         JOIN videos v ON ci.video_id = v.id
         JOIN scenes s ON ci.scene_id = s.id
-        WHERE ci.scene_id = ?
+        WHERE ci.scene_id = %s
         ORDER BY c.name ASC, ci.created_at ASC
     """, (scene_id,)).fetchall()
     conn.close()
@@ -1677,7 +1624,7 @@ if __name__ == '__main__':
     print(f"\n{'='*50}")
     print(f"Caption Review Server")
     print(f"{'='*50}")
-    print(f"Database: {DB_PATH}")
+    print(f"Database: {_get_dsn()}")
     print(f"Previews: {DEBUG_SCENES_DIR}")
     print(f"URL: http://{args.host}:{args.port}")
     print(f"{'='*50}\n")

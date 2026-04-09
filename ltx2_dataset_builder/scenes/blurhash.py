@@ -44,7 +44,7 @@ def _compute_blurhash(scene_id: int, video_path: Path, seek_time: float,
 
 
 def compute_all_blurhashes(config: PipelineConfig) -> None:
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     workers = max(1, config.num_workers)
 
     with db._connection() as conn:

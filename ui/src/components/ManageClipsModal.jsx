@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import ClipItemEditor from './ClipItemEditor'
-import SceneCardGrid from './SceneCardGrid'
-import SceneCardSkeleton from './SceneCardSkeleton'
+import SceneCardPanel from './SceneCardPanel'
 
 /** Map a clip item to the shape SceneCard / SceneThumbnail expect */
 function itemToScene(item, clipId) {
@@ -41,10 +40,10 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipName, onC
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState('')
   const [clearingCaptions, setClearingCaptions] = useState(false)
-  const [viewMode, setViewMode] = useState('thumb') // 'card' | 'thumb'
   const [captionPromptDraft, setCaptionPromptDraft] = useState('')
   const [savingPrompt, setSavingPrompt] = useState(false)
   const [detailCollapsed, setDetailCollapsed] = useState(false)
+  const [sort, setSort] = useState('')
 
   useEffect(() => {
     fetchClips()
@@ -59,11 +58,13 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipName, onC
   useEffect(() => {
     if (selectedId == null) { setItems([]); return }
     setLoadingItems(true)
-    fetch(`/api/clips/${selectedId}/items`)
+    const params = new URLSearchParams()
+    if (sort) params.set('sort', sort)
+    fetch(`/api/clips/${selectedId}/items?${params}`)
       .then(r => r.json())
       .then(d => { setItems(d.items || []); setLoadingItems(false) })
       .catch(() => setLoadingItems(false))
-  }, [selectedId])
+  }, [selectedId, sort])
 
   useEffect(() => {
     const col = clips.find(c => c.id === selectedId)
@@ -306,71 +307,44 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipName, onC
                     </button>
                   )}
                 </div>}
-                <div className="clips-items-toolbar">
-                  <div className="view-toggle">
+                <SceneCardPanel
+                  scenes={items.map(item => itemToScene(item, selectedId))}
+                  tagMap={tagMap}
+                  loading={loadingItems}
+                  emptyMessage="No items in this clip."
+                  sort={sort}
+                  onSortChange={setSort}
+                  actions={<>
+                    <span className="toolbar-count">{items.length} items</span>
+                    <div className="header-spacer" />
+                    {exportError && <span className="clip-export-error">{exportError}</span>}
                     <button
-                      className={`view-toggle-btn${viewMode === 'card' ? ' active' : ''}`}
-                      onClick={() => setViewMode('card')}
-                      title="Card view"
-                    >⊟</button>
+                      className="clip-clear-captions-btn"
+                      onClick={clearCaptions}
+                      disabled={clearingCaptions || items.length === 0}
+                      title="Clear captions for all scenes in this clip"
+                    >{clearingCaptions ? 'Clearing…' : 'Clear captions'}</button>
                     <button
-                      className={`view-toggle-btn${viewMode === 'thumb' ? ' active' : ''}`}
-                      onClick={() => setViewMode('thumb')}
-                      title="Thumbnail view"
-                    >⊞</button>
-                  </div>
-                  <span className="clip-count">{items.length} items</span>
-                  <div className="header-spacer" />
-                  {exportError && <span className="clip-export-error">{exportError}</span>}
-                  <button
-                    className="clip-clear-captions-btn"
-                    onClick={clearCaptions}
-                    disabled={clearingCaptions || items.length === 0}
-                    title="Clear captions for all scenes in this clip"
-                  >
-                    {clearingCaptions ? 'Clearing…' : 'Clear captions'}
-                  </button>
-                  <button
-                    className="clip-export-btn"
-                    onClick={exportClip}
-                    disabled={exporting || items.length === 0}
-                    title="Extract clips + captions and download as zip"
-                  >
-                    {exporting ? 'Exporting…' : 'Export zip'}
-                  </button>
-                </div>
-                {loadingItems ? (
-                  <div className="clips-items-scroll">
-                    <div className={viewMode === 'thumb' ? 'scenes-thumbgrid' : 'scenes-grid'}>
-                      {Array.from({ length: 12 }).map((_, i) => (
-                        <SceneCardSkeleton key={i} viewMode={viewMode} />
-                      ))}
-                    </div>
-                  </div>
-                ) : items.length === 0 ? (
-                  <div className="clips-empty">No items in this clip.</div>
-                ) : (
-                  <div className="clips-items-scroll">
-                    <SceneCardGrid
-                      scenes={items.map(item => itemToScene(item, selectedId))}
-                      tagMap={tagMap}
-                      viewMode={viewMode}
-                      onPlay={scene => setEditingItem(items.find(i => i.scene_id === scene.id) ?? null)}
-                      renderOverlay={scene => {
-                        const item = items.find(i => i.scene_id === scene.id)
-                        return (
-                          <div className="clip-item-overlays">
-                            <button
-                              className="clip-item-remove-btn"
-                              title="Remove from clip"
-                              onClick={() => item && removeItem(item.id)}
-                            >✕</button>
-                          </div>
-                        )
-                      }}
-                    />
-                  </div>
-                )}
+                      className="clip-export-btn"
+                      onClick={exportClip}
+                      disabled={exporting || items.length === 0}
+                      title="Extract clips + captions and download as zip"
+                    >{exporting ? 'Exporting…' : 'Export zip'}</button>
+                  </>}
+                  onPlay={scene => setEditingItem(items.find(i => i.scene_id === scene.id) ?? null)}
+                  renderOverlay={scene => {
+                    const item = items.find(i => i.scene_id === scene.id)
+                    return (
+                      <div className="clip-item-overlays">
+                        <button
+                          className="clip-item-remove-btn"
+                          title="Remove from clip"
+                          onClick={() => item && removeItem(item.id)}
+                        >✕</button>
+                      </div>
+                    )
+                  }}
+                />
               </>
             ) : (
               <div className="clips-empty">Select a clip to view its items.</div>

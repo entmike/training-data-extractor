@@ -173,7 +173,7 @@ def render_crop(
     video_name = video_path.stem
     
     # Get frame offset for this video
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     video = db.get_video_by_id(crop["video_id"])
     fps = video.get("fps", 24.0) if video else 24.0
     frame_offset = db.get_frame_offset(crop["video_id"])
@@ -251,7 +251,7 @@ def render_all_crops(
     if crops is None:
         crops = generate_all_crops(config)
     
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     rendered = []
     skipped = 0
     

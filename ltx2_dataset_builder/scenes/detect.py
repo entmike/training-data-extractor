@@ -146,7 +146,7 @@ def detect_and_cache_scenes(
     Returns:
         List of scene dicts
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
 
     # Check cache
     existing_scenes = db.get_scenes(video_id)
@@ -213,7 +213,7 @@ def detect_all_scenes(config: PipelineConfig) -> Dict[int, List[Dict[str, float]
     """
     from tqdm import tqdm
     
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     videos = db.get_all_videos()
     
     all_scenes = {}

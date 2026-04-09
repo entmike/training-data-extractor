@@ -23,7 +23,6 @@ export default function VideosPage({ tagMap, allTags }) {
   const [videos, setVideos] = useState([])
   const [loading, setLoading] = useState(true)
   const [isGridLoading, setIsGridLoading] = useState(false)
-  const [viewMode, setViewMode] = useState('card')
   const [detailCollapsed, setDetailCollapsed] = useState(false)
 
   // Filters
@@ -35,10 +34,19 @@ export default function VideosPage({ tagMap, allTags }) {
   const [framesMode, setFramesMode] = useState('0')
   const [customDraft, setCustomDraft] = useState('')
   const [dropdown, setDropdown] = useState(null)
+  const [videoTags, setVideoTags] = useState([])
   const includeAddRef = useRef(null)
   const excludeAddRef = useRef(null)
 
   const videoId = videoIdParam ? Number(videoIdParam) : null
+
+  useEffect(() => {
+    if (videoId == null) { setVideoTags([]); return }
+    fetch(`/api/tags/all?video=${videoId}`)
+      .then(r => r.json())
+      .then(d => setVideoTags(d.tags || []))
+      .catch(() => setVideoTags([]))
+  }, [videoId])
 
   useEffect(() => {
     fetch('/api/videos')
@@ -85,7 +93,7 @@ export default function VideosPage({ tagMap, allTags }) {
   }
 
   const usedTags = new Set([...activeIncludeTags, ...activeExcludeTags])
-  const availableTags = allTags.filter(t => !usedTags.has(t.tag))
+  const availableTags = videoTags.filter(t => !usedTags.has(t.tag))
 
   return (
     <div className="videos-page">
@@ -120,126 +128,107 @@ export default function VideosPage({ tagMap, allTags }) {
                   <span className="collapse-toggle-btn">{detailCollapsed ? '▸' : '▾'}</span>
                   <span className="detail-panel-title">{selected.name || selected.path}</span>
                 </div>
-                {!detailCollapsed && <VideoDetail video={selected} onSaved={onVideoSaved} />}
+                {!detailCollapsed && (
+                  <>
+                    <VideoDetail video={selected} onSaved={onVideoSaved} />
+                    <div className="tag-filter-bar">
+                      <div className="tag-filter-row">
+                        <span className="tag-filter-label">Show:</span>
+                        {activeIncludeTags.size > 1 && (
+                          <button
+                            className={`mode-toggle mode-toggle--${includeMode}`}
+                            onClick={() => setIncludeMode(m => m === 'and' ? 'or' : 'and')}
+                            disabled={isGridLoading}
+                          >
+                            {includeMode.toUpperCase()}
+                          </button>
+                        )}
+                        {[...activeIncludeTags].map(tag => (
+                          <span key={tag} className="tag-filter-pill tag-filter-pill--include">
+                            {allTags.find(t => t.tag === tag)?.display_name || tag}
+                            <span className="remove-x" onClick={() => setActiveIncludeTags(prev => { const s = new Set(prev); s.delete(tag); return s })}>✕</span>
+                          </span>
+                        ))}
+                        <button ref={includeAddRef} className="tag-filter-add" onClick={() => openDropdown('include', includeAddRef)} disabled={isGridLoading}>+ tag</button>
+                      </div>
+                      <div className="tag-filter-row">
+                        <span className="tag-filter-label">Hide:</span>
+                        {[...activeExcludeTags].map(tag => (
+                          <span key={tag} className="tag-filter-pill tag-filter-pill--exclude">
+                            {allTags.find(t => t.tag === tag)?.display_name || tag}
+                            <span className="remove-x" onClick={() => setActiveExcludeTags(prev => { const s = new Set(prev); s.delete(tag); return s })}>✕</span>
+                          </span>
+                        ))}
+                        <button ref={excludeAddRef} className="tag-filter-add" onClick={() => openDropdown('exclude', excludeAddRef)} disabled={isGridLoading}>+ tag</button>
+                        <div className="header-spacer" />
+                        <div className="min-frames-wrap">
+                          <label>Min frames:</label>
+                          <select
+                            className="min-frames-input"
+                            value={framesMode}
+                            onChange={e => {
+                              const val = e.target.value
+                              setFramesMode(val)
+                              if (val !== 'custom') setMinFrames(Number(val))
+                              else setCustomDraft('')
+                            }}
+                            disabled={isGridLoading}
+                          >
+                            {PRESET_FRAMES.map(n => (
+                              <option key={n} value={String(n)}>{n === 0 ? 'Any' : `${n}f`}</option>
+                            ))}
+                            <option value="custom">Custom…</option>
+                          </select>
+                          {framesMode === 'custom' && (
+                            <input
+                              type="number"
+                              className="min-frames-input"
+                              min="0"
+                              placeholder="frames"
+                              value={customDraft}
+                              onChange={e => setCustomDraft(e.target.value)}
+                              onBlur={e => {
+                                const v = Math.max(0, parseInt(e.target.value) || 0)
+                                setCustomDraft(String(v))
+                                setMinFrames(v)
+                              }}
+                              onKeyDown={e => e.key === 'Enter' && e.target.blur()}
+                              disabled={isGridLoading}
+                              autoFocus
+                            />
+                          )}
+                        </div>
+                        <div className="rating-filter-wrap">
+                          <span className="rating-filter-label">Rating:</span>
+                          <button
+                            className={`rating-filter-btn${ratingFilter.size === 0 ? ' active' : ''}`}
+                            onClick={() => setRatingFilter(new Set())}
+                            disabled={isGridLoading}
+                          >Any</button>
+                          {[
+                            { value: 1,          label: '★' },
+                            { value: 2,          label: '★★' },
+                            { value: 3,          label: '★★★' },
+                            { value: 'unranked', label: 'Unranked' },
+                          ].map(opt => (
+                            <button
+                              key={String(opt.value)}
+                              className={`rating-filter-btn${ratingFilter.has(opt.value) ? ' active' : ''}`}
+                              onClick={() => setRatingFilter(prev => {
+                                const next = new Set(prev)
+                                next.has(opt.value) ? next.delete(opt.value) : next.add(opt.value)
+                                return next
+                              })}
+                              disabled={isGridLoading}
+                            >{opt.label}</button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
               <div className="videos-scenes-panel">
-                {/* Toolbar: view toggle + count */}
-                <div className="videos-scenes-toolbar">
-                  <div className="view-toggle">
-                    <button
-                      className={`view-toggle-btn${viewMode === 'card' ? ' active' : ''}`}
-                      onClick={() => setViewMode('card')}
-                      title="Card view"
-                    >⊟</button>
-                    <button
-                      className={`view-toggle-btn${viewMode === 'thumb' ? ' active' : ''}`}
-                      onClick={() => setViewMode('thumb')}
-                      title="Thumbnail view"
-                    >⊞</button>
-                  </div>
-                  <span className="videos-scenes-count">{selected.scene_count} scenes</span>
-                </div>
-
-                {/* Tag / frame / rating filters */}
-                <div className="tag-filter-bar">
-                  <div className="tag-filter-row">
-                    <span className="tag-filter-label">Show:</span>
-                    {activeIncludeTags.size > 1 && (
-                      <button
-                        className={`mode-toggle mode-toggle--${includeMode}`}
-                        onClick={() => setIncludeMode(m => m === 'and' ? 'or' : 'and')}
-                        disabled={isGridLoading}
-                      >
-                        {includeMode.toUpperCase()}
-                      </button>
-                    )}
-                    {[...activeIncludeTags].map(tag => (
-                      <span key={tag} className="tag-filter-pill tag-filter-pill--include">
-                        {allTags.find(t => t.tag === tag)?.display_name || tag}
-                        <span className="remove-x" onClick={() => setActiveIncludeTags(prev => { const s = new Set(prev); s.delete(tag); return s })}>✕</span>
-                      </span>
-                    ))}
-                    <button ref={includeAddRef} className="tag-filter-add" onClick={() => openDropdown('include', includeAddRef)} disabled={isGridLoading}>+ tag</button>
-                  </div>
-
-                  <div className="tag-filter-row">
-                    <span className="tag-filter-label">Hide:</span>
-                    {[...activeExcludeTags].map(tag => (
-                      <span key={tag} className="tag-filter-pill tag-filter-pill--exclude">
-                        {allTags.find(t => t.tag === tag)?.display_name || tag}
-                        <span className="remove-x" onClick={() => setActiveExcludeTags(prev => { const s = new Set(prev); s.delete(tag); return s })}>✕</span>
-                      </span>
-                    ))}
-                    <button ref={excludeAddRef} className="tag-filter-add" onClick={() => openDropdown('exclude', excludeAddRef)} disabled={isGridLoading}>+ tag</button>
-
-                    <div className="header-spacer" />
-
-                    <div className="min-frames-wrap">
-                      <label>Min frames:</label>
-                      <select
-                        className="min-frames-input"
-                        value={framesMode}
-                        onChange={e => {
-                          const val = e.target.value
-                          setFramesMode(val)
-                          if (val !== 'custom') setMinFrames(Number(val))
-                          else setCustomDraft('')
-                        }}
-                        disabled={isGridLoading}
-                      >
-                        {PRESET_FRAMES.map(n => (
-                          <option key={n} value={String(n)}>{n === 0 ? 'Any' : `${n}f`}</option>
-                        ))}
-                        <option value="custom">Custom…</option>
-                      </select>
-                      {framesMode === 'custom' && (
-                        <input
-                          type="number"
-                          className="min-frames-input"
-                          min="0"
-                          placeholder="frames"
-                          value={customDraft}
-                          onChange={e => setCustomDraft(e.target.value)}
-                          onBlur={e => {
-                            const v = Math.max(0, parseInt(e.target.value) || 0)
-                            setCustomDraft(String(v))
-                            setMinFrames(v)
-                          }}
-                          onKeyDown={e => e.key === 'Enter' && e.target.blur()}
-                          disabled={isGridLoading}
-                          autoFocus
-                        />
-                      )}
-                    </div>
-
-                    <div className="rating-filter-wrap">
-                      <span className="rating-filter-label">Rating:</span>
-                      <button
-                        className={`rating-filter-btn${ratingFilter.size === 0 ? ' active' : ''}`}
-                        onClick={() => setRatingFilter(new Set())}
-                        disabled={isGridLoading}
-                      >Any</button>
-                      {[
-                        { value: 1,          label: '★' },
-                        { value: 2,          label: '★★' },
-                        { value: 3,          label: '★★★' },
-                        { value: 'unranked', label: 'Unranked' },
-                      ].map(opt => (
-                        <button
-                          key={String(opt.value)}
-                          className={`rating-filter-btn${ratingFilter.has(opt.value) ? ' active' : ''}`}
-                          onClick={() => setRatingFilter(prev => {
-                            const next = new Set(prev)
-                            next.has(opt.value) ? next.delete(opt.value) : next.add(opt.value)
-                            return next
-                          })}
-                          disabled={isGridLoading}
-                        >{opt.label}</button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
                 <SceneGrid
                   videoFilter={String(selected.id)}
                   activeIncludeTags={activeIncludeTags}
@@ -247,9 +236,9 @@ export default function VideosPage({ tagMap, allTags }) {
                   includeMode={includeMode}
                   minFrames={minFrames}
                   ratingFilter={ratingFilter}
-                  viewMode={viewMode}
                   tagMap={tagMap}
                   onLoadingChange={setIsGridLoading}
+                  totalCount={selected.scene_count}
                 />
               </div>
             </>

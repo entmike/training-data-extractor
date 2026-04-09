@@ -132,7 +132,7 @@ def generate_all_crops(
     Returns:
         List of all crop specifications
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     
     if candidates is None:
         candidates = db.get_candidates(status="accepted")

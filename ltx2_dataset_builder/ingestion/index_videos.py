@@ -96,7 +96,7 @@ def index_videos(config: PipelineConfig) -> List[dict]:
         List of indexed video metadata
     """
     config.ensure_dirs()
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     
     # Find all video files
     video_paths = list(find_videos(config.source_dir, config.video_extensions))
@@ -136,5 +136,5 @@ def get_indexed_videos(config: PipelineConfig) -> List[dict]:
     Returns:
         List of video metadata
     """
-    db = Database(config.db_path)
+    db = Database(config.dsn)
     return db.get_all_videos()
