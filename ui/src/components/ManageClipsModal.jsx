@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import ClipItemEditor from './ClipItemEditor'
 import SceneCardPanel from './SceneCardPanel'
 
@@ -37,7 +38,7 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipName, onC
   const [renamingId, setRenamingId] = useState(null)
   const [renameDraft, setRenameDraft] = useState('')
   const [editingItem, setEditingItem] = useState(null)
-  const [exporting, setExporting] = useState(false)
+  const [exportProgress, setExportProgress] = useState(null) // null | { done, total }
   const [exportError, setExportError] = useState('')
   const [clearingCaptions, setClearingCaptions] = useState(false)
   const [captionPromptDraft, setCaptionPromptDraft] = useState('')
@@ -78,9 +79,9 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipName, onC
       const d = await r.json()
       const cols = d.clips || []
       setClips(cols)
-      if (cols.length > 0 && selectedId == null) {
-        const match = initialClipName ? cols.find(c => c.name === initialClipName) : null
-        setSelectedId(match ? match.id : cols[0].id)
+      if (cols.length > 0 && selectedId == null && initialClipName) {
+        const match = cols.find(c => c.name === initialClipName)
+        if (match) setSelectedId(match.id)
       }
     }
     setLoadingClips(false)
@@ -177,27 +178,34 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipName, onC
     setClearingCaptions(false)
   }
 
-  async function exportClip() {
-    setExporting(true); setExportError('')
-    try {
-      const r = await fetch(`/api/clips/${selectedId}/export`, { method: 'POST' })
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}))
-        throw new Error(d.error || 'Export failed')
+  function exportClip() {
+    setExportError('')
+    setExportProgress({ done: 0, total: items.length })
+    const es = new EventSource(`/api/clips/${selectedId}/export/stream`)
+    es.onmessage = e => {
+      const msg = JSON.parse(e.data)
+      if (msg.error) {
+        es.close()
+        setExportProgress(null)
+        setExportError(msg.error)
+      } else if (msg.token) {
+        es.close()
+        setExportProgress(null)
+        const a = document.createElement('a')
+        a.href = `/api/clips/export/download/${msg.token}`
+        a.download = `${selectedCol.name}.zip`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+      } else if (msg.done != null) {
+        setExportProgress({ done: msg.done, total: msg.total })
       }
-      const blob = await r.blob()
-      const url  = URL.createObjectURL(blob)
-      const a    = document.createElement('a')
-      a.href     = url
-      a.download = `${selectedCol.name}.zip`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-    } catch (e) {
-      setExportError(e.message)
     }
-    setExporting(false)
+    es.onerror = () => {
+      es.close()
+      setExportProgress(null)
+      setExportError('Export failed')
+    }
   }
 
   const selectedCol = clips.find(c => c.id === selectedId)
@@ -327,9 +335,9 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipName, onC
                     <button
                       className="clip-export-btn"
                       onClick={exportClip}
-                      disabled={exporting || items.length === 0}
+                      disabled={exportProgress != null || items.length === 0}
                       title="Extract clips + captions and download as zip"
-                    >{exporting ? 'Exporting…' : 'Export zip'}</button>
+                    >Export zip</button>
                   </>}
                   onPlay={scene => setEditingItem(items.find(i => i.scene_id === scene.id) ?? null)}
                   renderOverlay={scene => {
@@ -361,6 +369,30 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipName, onC
         onSaved={updated => { handleItemSaved(updated); setEditingItem(prev => ({ ...prev, ...updated })) }}
       />
     )}
+    {exportProgress != null && createPortal(
+      <ExportProgressModal
+        done={exportProgress.done}
+        total={exportProgress.total}
+        clipName={selectedCol?.name}
+      />,
+      document.body
+    )}
     </>
+  )
+}
+
+function ExportProgressModal({ done, total, clipName }) {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0
+  return (
+    <div className="export-progress-overlay">
+      <div className="export-progress-box">
+        <div className="export-progress-title">Exporting "{clipName}"</div>
+        <div className="export-progress-count">{done} / {total} clips</div>
+        <div className="export-progress-bar-wrap">
+          <div className="export-progress-bar" style={{ width: `${pct}%` }} />
+        </div>
+        <div className="export-progress-pct">{pct}%</div>
+      </div>
+    </div>
   )
 }

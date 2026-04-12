@@ -87,7 +87,7 @@ html, body {
   100% { background-position:  200% 0; }
 }
 .skeleton {
-  background: linear-gradient(90deg, var(--border-subtle) 25%, var(--surface-2, #2a2a2a) 50%, var(--border-subtle) 75%);
+  background: linear-gradient(90deg, #1a0a2e 0%, #2a1150 25%, #4a2060 50%, #2a1150 75%, #1a0a2e 100%);
   background-size: 200% 100%;
   animation: shimmer 1.4s infinite;
   border-radius: 3px;
@@ -962,6 +962,17 @@ html, body {
   white-space: pre-wrap;
 }
 
+/* ── Tags page ───────────────────────────────────────── */
+.tags-page {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 32px;
+}
+.tags-page-body {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
 /* ── Manage Tags modal ───────────────────────────────── */
 .modal-overlay {
   position: fixed;
@@ -1757,6 +1768,53 @@ html, body {
   font-size: 12px;
   color: var(--red);
 }
+
+/* ── Export progress modal ───────────────────────────── */
+.export-progress-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+.export-progress-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 28px 36px;
+  min-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.export-progress-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-heading);
+}
+.export-progress-count {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.export-progress-bar-wrap {
+  height: 8px;
+  background: var(--bg-hover);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.export-progress-bar {
+  height: 100%;
+  background: var(--green);
+  border-radius: 4px;
+  transition: width 0.2s ease;
+}
+.export-progress-pct {
+  font-size: 13px;
+  color: var(--text-dim);
+  text-align: right;
+}
 .clip-prompt-section {
   padding: 4px 12px 8px;
   background: var(--bg2);
@@ -1863,7 +1921,7 @@ html, body {
 
 /* Shared shimmer style for all skeleton fill elements */
 .scs-img, .scs-star, .scs-caption, .scs-tag-pill, .scene-thumb-skeleton {
-  background: linear-gradient(90deg, var(--border-subtle) 25%, var(--surface-2, #2a2a2a) 50%, var(--border-subtle) 75%);
+  background: linear-gradient(90deg, #1a0a2e 0%, #2a1150 25%, #4a2060 50%, #2a1150 75%, #1a0a2e 100%);
   background-size: 200% 100%;
   animation: shimmer 1.4s infinite;
 }

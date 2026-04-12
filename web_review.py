@@ -145,12 +145,12 @@ def index():
     return send_from_directory(UI_DIST, 'index.html')
 
 
-@app.route('/videos', strict_slashes=False)
-@app.route('/videos/<path:_>')
-@app.route('/clips', strict_slashes=False)
-@app.route('/clips/<path:_>')
-def spa_routes(_=''):
-    """Serve the SPA for client-side routes."""
+@app.errorhandler(404)
+def spa_fallback(e):
+    """Serve the SPA for client-side routes; let asset/API 404s through."""
+    path = request.path
+    if path.startswith('/api/') or path.startswith('/assets/') or '.' in path.rsplit('/', 1)[-1]:
+        return jsonify({"error": "Not found"}), 404
     return send_from_directory(UI_DIST, 'index.html')
 
 
@@ -657,13 +657,15 @@ def get_all_tags():
         ).fetchall()
     else:
         rows = conn.execute(
-            """SELECT st.tag, COALESCE(td.description, '') as description, COALESCE(td.display_name, '') as display_name
-               FROM (SELECT DISTINCT tag FROM scene_tags) st
+            """SELECT st.tag, COALESCE(td.description, '') as description, COALESCE(td.display_name, '') as display_name,
+                      COUNT(st.scene_id) as scene_count
+               FROM scene_tags st
                LEFT JOIN tag_definitions td ON td.tag = st.tag
+               GROUP BY st.tag, td.description, td.display_name
                ORDER BY st.tag"""
         ).fetchall()
     conn.close()
-    return jsonify({"tags": [{"tag": r["tag"], "description": r["description"], "display_name": r["display_name"]} for r in rows]})
+    return jsonify({"tags": [{"tag": r["tag"], "description": r["description"], "display_name": r["display_name"], "scene_count": r.get("scene_count")} for r in rows]})
 
 
 @app.route('/api/tags/<int:scene_id>', methods=['GET'])
@@ -694,7 +696,7 @@ def add_tag(scene_id: int):
         return jsonify({"error": "Scene not found"}), 404
 
     conn.execute(
-        "INSERT OR IGNORE INTO scene_tags (scene_id, tag) VALUES (%s, %s)",
+        "INSERT INTO scene_tags (scene_id, tag) VALUES (%s, %s) ON CONFLICT DO NOTHING",
         (scene_id, tag)
     )
     conn.commit()
@@ -725,8 +727,8 @@ def rename_tag():
     ).fetchone()["cnt"]
     # For scenes that already have new_tag, the INSERT is ignored (no duplicate)
     conn.execute(
-        "INSERT OR IGNORE INTO scene_tags (scene_id, tag, created_at) "
-        "SELECT scene_id, %s, created_at FROM scene_tags WHERE tag = %s",
+        "INSERT INTO scene_tags (scene_id, tag, created_at) "
+        "SELECT scene_id, %s, created_at FROM scene_tags WHERE tag = %s ON CONFLICT DO NOTHING",
         (new_tag, old_tag)
     )
     conn.execute("DELETE FROM scene_tags WHERE tag = %s", (old_tag,))
@@ -1298,11 +1300,72 @@ def delete_clip(clip_id: int):
     return jsonify({"success": True})
 
 
-@app.route('/api/clips/<int:clip_id>/export', methods=['POST'])
-def export_clip(clip_id: int):
-    """Extract all clip items as MP4 clips + caption .txt files, return as a zip."""
-    import zipfile
-    import tempfile
+def _is_hdr_video(video_path: Path) -> bool:
+    """Return True if the video stream uses an HDR transfer characteristic or 10-bit pixel format."""
+    try:
+        result = subprocess.run(
+            [
+                'ffprobe', '-v', 'quiet', '-print_format', 'json',
+                '-show_streams', '-select_streams', 'v:0', str(video_path),
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return False
+        import json as _json
+        streams = _json.loads(result.stdout).get('streams', [])
+        if not streams:
+            return False
+        s = streams[0]
+        transfer = s.get('color_transfer', '')
+        pix_fmt  = s.get('pix_fmt', '')
+        # HDR transfers: smpte2084 (PQ/HDR10), arib-std-b67 (HLG)
+        hdr_transfers = {'smpte2084', 'arib-std-b67', 'smpte428', 'bt2020-10', 'bt2020-12'}
+        if transfer in hdr_transfers:
+            return True
+        # 10-bit pixel formats are a strong indicator even without explicit transfer metadata
+        if '10le' in pix_fmt or '10be' in pix_fmt or '12le' in pix_fmt or '12be' in pix_fmt:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _build_export_cmd(video_file: Path, start_time: float, duration: float,
+                      out_path: Path, tonemap: bool) -> list:
+    vf = (
+        'zscale=transfer=linear:npl=100,format=gbrpf32le,'
+        'zscale=primaries=bt709,tonemap=tonemap=hable:desat=0,'
+        'zscale=transfer=bt709:matrix=bt709:range=tv,'
+        'format=yuv420p'
+        if tonemap else 'format=yuv420p'
+    )
+    return [
+        'ffmpeg', '-y',
+        '-ss', f'{start_time:.6f}',
+        '-i', str(video_file),
+        '-t', f'{duration:.6f}',
+        '-vf', vf,
+        '-c:v', 'libx264',
+        '-preset', 'fast',
+        '-crf', '18',
+        '-pix_fmt', 'yuv420p',
+        '-ac', '2',
+        '-c:a', 'aac',
+        '-movflags', '+faststart',
+        '-f', 'mp4',
+        str(out_path),
+    ]
+
+
+# token → (zip_bytes, filename) for pending downloads
+_export_store: dict = {}
+
+
+@app.route('/api/clips/<int:clip_id>/export/stream')
+def export_clip_stream(clip_id: int):
+    """SSE stream: encodes items one-by-one, emits progress, stores zip, sends download token."""
+    import zipfile, tempfile, secrets, json as _json
 
     conn = get_db_connection()
     coll = conn.execute("SELECT * FROM clips WHERE id = %s", (clip_id,)).fetchone()
@@ -1313,7 +1376,7 @@ def export_clip(clip_id: int):
     rows = conn.execute("""
         SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame,
                v.path as video_path, v.fps, v.frame_offset,
-               s.caption
+               COALESCE(NULLIF(ci.caption, ''), s.caption) AS caption
         FROM clip_items ci
         JOIN videos v ON ci.video_id = v.id
         JOIN scenes s ON ci.scene_id = s.id
@@ -1323,66 +1386,78 @@ def export_clip(clip_id: int):
     conn.close()
 
     if not rows:
-        return jsonify({"error": "Collection is empty"}), 400
+        def _err():
+            yield "data: " + _json.dumps({"error": "Collection is empty"}) + "\n\n"
+        return Response(_err(), mimetype='text/event-stream')
 
     clip_slug = re.sub(r'[^\w\-]', '_', coll['name']).strip('_')
+    total = len(rows)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmpdir_path = Path(tmpdir)
-        zip_buf = io.BytesIO()
+    def generate():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            zip_buf = io.BytesIO()
+            hdr_cache: dict = {}
 
-        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for i, row in enumerate(rows):
-                item = dict(row)
-                fps = item['fps'] or 24.0
-                frame_offset = item['frame_offset'] or 0
-                video_file = Path(item['video_path'])
+            with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for i, row in enumerate(rows):
+                    item = dict(row)
+                    fps = item['fps'] or 24.0
+                    frame_offset = item['frame_offset'] or 0
+                    video_file = Path(item['video_path'])
 
-                if not video_file.exists():
-                    continue
+                    stem = f"{i + 1:04d}_scene{item['scene_id']}"
+                    mp4_name = f"{stem}.mp4"
+                    txt_name = f"{stem}.txt"
+                    mp4_path = tmpdir_path / mp4_name
 
-                stem = f"{i + 1:04d}_scene{item['scene_id']}"
-                mp4_name = f"{stem}.mp4"
-                txt_name = f"{stem}.txt"
-                mp4_path = tmpdir_path / mp4_name
+                    if video_file.exists():
+                        start_time = max(0.0, (item['start_frame'] + frame_offset + 1) / fps)
+                        duration   = (item['end_frame'] - item['start_frame']) / fps
 
-                start_time = max(0.0, (item['start_frame'] + frame_offset + 1) / fps)
-                duration   = (item['end_frame'] - item['start_frame']) / fps
+                        if duration > 0:
+                            vf_key = str(video_file)
+                            if vf_key not in hdr_cache:
+                                hdr_cache[vf_key] = _is_hdr_video(video_file)
+                            is_hdr = hdr_cache[vf_key]
+                            ok = False
+                            if is_hdr:
+                                cmd = _build_export_cmd(video_file, start_time, duration, mp4_path, tonemap=True)
+                                result = subprocess.run(cmd, stderr=subprocess.DEVNULL)
+                                ok = result.returncode == 0 and mp4_path.exists()
+                            if not ok:
+                                cmd = _build_export_cmd(video_file, start_time, duration, mp4_path, tonemap=False)
+                                result = subprocess.run(cmd, stderr=subprocess.DEVNULL)
+                                ok = result.returncode == 0 and mp4_path.exists()
+                            if ok:
+                                zf.write(mp4_path, mp4_name)
 
-                if duration <= 0:
-                    continue
+                    caption = (item.get('caption') or '').strip()
+                    if caption and not caption.startswith('__'):
+                        zf.writestr(txt_name, caption)
 
-                cmd = [
-                    'ffmpeg', '-y',
-                    '-ss', f'{start_time:.6f}',
-                    '-i', str(video_file),
-                    '-t', f'{duration:.6f}',
-                    '-c:v', 'libx264',
-                    '-preset', 'fast',
-                    '-crf', '18',
-                    '-pix_fmt', 'yuv420p',
-                    '-ac', '2',
-                    '-c:a', 'aac',
-                    '-movflags', '+faststart',
-                    '-f', 'mp4',
-                    str(mp4_path),
-                ]
-                result = subprocess.run(cmd, stderr=subprocess.DEVNULL)
-                if result.returncode == 0 and mp4_path.exists():
-                    zf.write(mp4_path, mp4_name)
+                    yield "data: " + _json.dumps({"done": i + 1, "total": total}) + "\n\n"
 
-                caption = (item.get('caption') or '').strip()
-                if caption and not caption.startswith('__'):
-                    zf.writestr(txt_name, caption)
+            token = secrets.token_hex(16)
+            _export_store[token] = (zip_buf.getvalue(), f'{clip_slug}.zip')
+            yield "data: " + _json.dumps({"token": token}) + "\n\n"
 
-        zip_data = zip_buf.getvalue()
+    return Response(generate(), mimetype='text/event-stream',
+                    headers={'X-Accel-Buffering': 'no', 'Cache-Control': 'no-cache'})
 
-    zip_io = io.BytesIO(zip_data)
+
+@app.route('/api/clips/export/download/<token>')
+def export_clip_download(token: str):
+    """Serve the pre-built zip for a given export token (one-time)."""
+    entry = _export_store.pop(token, None)
+    if not entry:
+        return jsonify({"error": "Invalid or expired token"}), 404
+    zip_bytes, filename = entry
     return send_file(
-        zip_io,
+        io.BytesIO(zip_bytes),
         mimetype='application/zip',
         as_attachment=True,
-        download_name=f'{clip_slug}.zip',
+        download_name=filename,
     )
 
 

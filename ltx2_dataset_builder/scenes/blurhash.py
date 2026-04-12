@@ -84,7 +84,7 @@ def compute_all_blurhashes(config: PipelineConfig) -> None:
                 errors += 1
             else:
                 with db._connection() as conn:
-                    conn.execute("UPDATE scenes SET blurhash = ? WHERE id = ?", (bh, scene_id))
+                    conn.execute("UPDATE scenes SET blurhash = %s WHERE id = %s", (bh, scene_id))
                     conn.commit()
             done += 1
             if done % 100 == 0 or done == total:

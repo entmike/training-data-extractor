@@ -306,7 +306,7 @@ def _pick_next_scene(db: Database, video_id: Optional[int]) -> Optional[Dict[str
                        COUNT(st.tag) AS tag_count
                 FROM scenes s
                 LEFT JOIN scene_tags st ON st.scene_id = s.id
-                WHERE s.video_id = ?
+                WHERE s.video_id = %s
                   AND (s.caption IS NULL OR s.caption = '' OR s.caption = '__empty__' OR substr(s.caption, 1, 9) = '__error__')
                 GROUP BY s.id
                 ORDER BY tag_count DESC, s.start_time
@@ -363,7 +363,7 @@ def _retrofit_caption_metadata(db: Database) -> None:
                           COALESCE(td.display_name, '') as display_name
                    FROM scene_tags st
                    LEFT JOIN tag_definitions td ON td.tag = st.tag
-                   WHERE st.scene_id = ?
+                   WHERE st.scene_id = %s
                    ORDER BY st.created_at, st.tag""",
                 (scene_id,)
             ).fetchall()
@@ -377,10 +377,10 @@ def _retrofit_caption_metadata(db: Database) -> None:
         with db._connection() as conn:
             conn.execute(
                 """UPDATE scenes
-                   SET caption_started_at = ?,
-                       caption_finished_at = ?,
-                       caption_prompt = ?
-                   WHERE id = ?""",
+                   SET caption_started_at = %s,
+                       caption_finished_at = %s,
+                       caption_prompt = %s
+                   WHERE id = %s""",
                 (now, now, prompt, scene_id)
             )
             conn.commit()
@@ -403,7 +403,7 @@ def _get_scene_prep_args(db: Database, scene: Dict[str, Any]):
                       COALESCE(td.display_name, '') as display_name
                FROM scene_tags st
                LEFT JOIN tag_definitions td ON td.tag = st.tag
-               WHERE st.scene_id = ?
+               WHERE st.scene_id = %s
                ORDER BY st.created_at, st.tag""",
             (scene["id"],)
         ).fetchall()
@@ -437,14 +437,12 @@ def _pick_next_clip_item(db: Database) -> Optional[Dict[str, Any]]:
             """
             SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame,
                    s.start_time, s.end_time,
-                   COUNT(st.tag) AS tag_count,
+                   (SELECT COUNT(*) FROM scene_tags st WHERE st.scene_id = ci.scene_id) AS tag_count,
                    c.caption_prompt AS clip_caption_prompt
             FROM clip_items ci
             JOIN scenes s ON s.id = ci.scene_id
             JOIN clips c ON c.id = ci.clip_id
-            LEFT JOIN scene_tags st ON st.scene_id = ci.scene_id
             WHERE ci.caption IS NULL OR ci.caption = ''
-            GROUP BY ci.id
             ORDER BY tag_count DESC, ci.created_at
             LIMIT 1
             """
@@ -492,7 +490,7 @@ def _get_clip_item_prep_args(db: Database, item: Dict[str, Any]):
                       COALESCE(td.display_name, '') as display_name
                FROM scene_tags st
                LEFT JOIN tag_definitions td ON td.tag = st.tag
-               WHERE st.scene_id = ?
+               WHERE st.scene_id = %s
                ORDER BY st.created_at, st.tag""",
             (scene_id,)
         ).fetchall()
@@ -631,7 +629,11 @@ def caption_all_scenes(
             logger.error(f"Prefetch failed for {_log_label(work_item)}: {prefetch_result['error']}")
             _save_caption(work_item, f"__error__: {prefetch_result['error']}",
                           started_at=_now_utc(), finished_at=_now_utc())
-            break
+            work_item = _pick_next_work_item(db, video_id)
+            if work_item is None:
+                break
+            prefetch_thread = _launch_prefetch(work_item)
+            continue
 
         inputs      = prefetch_result["inputs"]
         tmpdir      = prefetch_result["tmpdir"]
@@ -645,8 +647,11 @@ def caption_all_scenes(
             logger.error(f"Failed to caption {_log_label(work_item)}: {e}")
             _save_caption(work_item, f"__error__: {e}",
                           started_at=started_at, finished_at=_now_utc())
-            tmpdir.cleanup()
-            break
+            work_item = _pick_next_work_item(db, video_id)
+            if work_item is None:
+                break
+            prefetch_thread = _launch_prefetch(work_item)
+            continue
         finally:
             tmpdir.cleanup()
 

@@ -5,6 +5,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 const ROUTE_TITLES = [
   [/^\/videos/, 'Videos'],
   [/^\/clips/,  'Clips'],
+  [/^\/tags/,   'Tags'],
 ]
 
 export default function Header({ isLoading, onManageTags, onManageVideos }) {

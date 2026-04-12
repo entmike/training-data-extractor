@@ -10,7 +10,7 @@ import ViewToggle from './ViewToggle'
  */
 const SORTS = [['', 'Default'], ['frames_asc', 'Start ↑'], ['frames_desc', 'Start ↓']]
 
-export default function SceneCardPanel({ scenes, tagMap, loading, emptyMessage = 'No items.', onPlay, renderOverlay, defaultViewMode = 'thumb', sort = '', onSortChange, actions }) {
+export default function SceneCardPanel({ scenes, tagMap, loading, emptyMessage = 'No items.', onPlay, renderOverlay, defaultViewMode = 'card', sort = '', onSortChange, actions }) {
   const [viewMode, setViewMode] = useState(defaultViewMode)
 
   return (

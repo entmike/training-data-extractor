@@ -3,16 +3,15 @@ import { Routes, Route, Navigate, useParams, useNavigate } from 'react-router-do
 import { AppContext } from './context'
 import Header from './components/Header'
 import VideoPlayerModal from './components/VideoPlayerModal'
-import ManageTagsModal from './components/ManageTagsModal'
 import ManageClipsModal from './components/ManageClipsModal'
 import VideosPage from './components/VideosPage'
+import TagsPage from './components/TagsPage'
 
 export default function App() {
   const navigate = useNavigate()
   const [allTags, setAllTags] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [player, setPlayer] = useState(null)
-  const [showManageTags, setShowManageTags] = useState(false)
 
   const tagMap = Object.fromEntries(allTags.map(t => [t.tag, t]))
 
@@ -30,11 +29,11 @@ export default function App() {
 
   const sharedProps = {
     isLoading,
-    onManageTags: () => setShowManageTags(true),
+    onManageTags: () => navigate('/tags'),
     onManageVideos: () => navigate('/videos'),
   }
 
-  const videoLayout = child => (
+  const pageLayout = child => (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Header {...sharedProps} />
       {child}
@@ -45,16 +44,14 @@ export default function App() {
     <AppContext.Provider value={{ tagMap, openPlayer, refreshTags: fetchTags }}>
       <Routes>
         <Route path="/" element={<Navigate to="/videos" replace />} />
-        <Route path="/videos" element={videoLayout(<VideosPage tagMap={tagMap} allTags={allTags} />)} />
-        <Route path="/videos/:videoId" element={videoLayout(<VideosPage tagMap={tagMap} allTags={allTags} />)} />
+        <Route path="/videos" element={pageLayout(<VideosPage tagMap={tagMap} allTags={allTags} />)} />
+        <Route path="/videos/:videoId" element={pageLayout(<VideosPage tagMap={tagMap} allTags={allTags} />)} />
         <Route path="/clips/:clipName" element={<ClipsPage tagMap={tagMap} headerProps={sharedProps} />} />
         <Route path="/clips" element={<ClipsPage tagMap={tagMap} headerProps={sharedProps} />} />
+        <Route path="/tags" element={pageLayout(<TagsPage />)} />
       </Routes>
 
       {player && <VideoPlayerModal player={player} onClose={closePlayer} />}
-      {showManageTags && (
-        <ManageTagsModal onClose={() => { setShowManageTags(false); fetchTags() }} />
-      )}
     </AppContext.Provider>
   )
 }

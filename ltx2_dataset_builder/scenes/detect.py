@@ -174,7 +174,7 @@ def detect_and_cache_scenes(
         scene_id, bh = fut.result()
         if bh:
             with db._connection() as conn:
-                conn.execute("UPDATE scenes SET blurhash = ? WHERE id = ?", (bh, scene_id))
+                conn.execute("UPDATE scenes SET blurhash = %s WHERE id = %s", (bh, scene_id))
                 conn.commit()
 
     with ThreadPoolExecutor(max_workers=workers) as pool:

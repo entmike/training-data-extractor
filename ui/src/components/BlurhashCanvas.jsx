@@ -1,8 +1,10 @@
 import { useEffect, useRef } from 'react'
 import { decode } from 'blurhash'
 
+const BLURHASH_ENABLED = false
+
 export function blurhashToDataURL(hash) {
-  if (!hash) return null
+  if (!BLURHASH_ENABLED || !hash) return null
   const W = 256, H = 144
   const pixels = decode(hash, W, H)
   const canvas = document.createElement('canvas')
@@ -19,7 +21,7 @@ export default function BlurhashCanvas({ hash, className }) {
   const canvasRef = useRef(null)
 
   useEffect(() => {
-    if (!hash || !canvasRef.current) return
+    if (!BLURHASH_ENABLED || !hash || !canvasRef.current) return
     const W = 256, H = 144
     const pixels = decode(hash, W, H)
     const ctx = canvasRef.current.getContext('2d')
@@ -28,6 +30,6 @@ export default function BlurhashCanvas({ hash, className }) {
     ctx.putImageData(img, 0, 0)
   }, [hash])
 
-  if (!hash) return null
+  if (!BLURHASH_ENABLED || !hash) return null
   return <canvas ref={canvasRef} width={256} height={144} className={className} />
 }
