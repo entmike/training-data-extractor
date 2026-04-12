@@ -1,221 +1,216 @@
 # LTX-2 Character LoRA Training Data Builder
 
-Automated end-to-end training data extraction for LTX-2 character LoRA training using movie sources.
+Automated end-to-end training data extraction for LTX-2 character LoRA training from movie sources. Includes a web-based review UI for browsing, tagging, captioning, and curating scenes.
 
 ## Features
 
 - **Automated Pipeline**: Transform movie files into high-quality training samples
 - **Scene Detection**: Automatic scene boundary detection using PySceneDetect
-- **Face Detection**: InsightFace-based face detection and identity clustering
+- **VLM Captioning**: Scene and clip captioning with Qwen3-Omni
+- **Speech-Aware Bucketing**: Auto-detect optimal crop windows prioritising speech content
+- **Face Detection**: InsightFace-based face detection and filtering
 - **Multi-Crop Views**: Generate face, half-body, and full-frame crops
-- **Bucket Rendering**: Output 1024 resolution, 121-frame training buckets
-- **Deterministic**: Same input + config = identical output
-- **Caching**: Avoid recomputation of expensive operations
+- **Bucket Rendering**: 1024px resolution, 121-frame training buckets
+- **Web Review UI**: Browse scenes, manage tags, curate clips, export zip datasets
+- **HDR Support**: Auto tone-maps HDR (PQ/HLG) sources to SDR on export
+
+## Requirements
+
+- Python 3.10+
+- FFmpeg (must be in PATH)
+- CUDA-capable GPU (required for Qwen3-Omni captioning)
+- Docker (for PostgreSQL)
+- Node.js 18+ (for the UI dev server)
 
 ## Installation
 
-### Prerequisites
-
-- Python 3.9+
-- FFmpeg (must be in PATH)
-- CUDA-capable GPU (recommended)
-
-### Install from source
-
 ```bash
-# Clone the repository
 git clone <repo-url>
-cd ltx2-dataset-builder
+cd training-data-extractor
 
-# Install the package
+# Create virtualenv and install
+python -m venv .venv
+source .venv/bin/activate
 pip install -e .
 
-# Or install with development dependencies
-pip install -e ".[dev]"
-
-# For CPU-only (no GPU):
-pip install -e ".[cpu]"
+# Install UI dependencies
+cd ui && npm install && cd ..
 ```
 
 ### System Dependencies
 
-Install FFmpeg if not already present:
-
 ```bash
 # Ubuntu/Debian
-sudo apt-get install ffmpeg
-
-# macOS
-brew install ffmpeg
-
-# Or download from https://ffmpeg.org/download.html
+sudo apt-get install ffmpeg docker-compose
 ```
 
-## Quick Start
+## Database Setup
 
-### Basic Usage
+PostgreSQL runs in Docker:
 
 ```bash
-# Run full pipeline
-ltx2-build --token austin_powers_person --source /mnt/nas/movies
-
-# Specify output directory
-ltx2-build --token austin_powers_person --source /mnt/nas/movies --output ./dataset
+docker compose up -d
 ```
 
-### Using Configuration File
+Connection string: `postgresql://ltx2:ltx2@localhost:5432/ltx2`
+
+On first run the schema is created automatically. To migrate from a SQLite backup:
 
 ```bash
-# Generate default config
+python migrate_sqlite_to_pg.py
+```
+
+## Starting the Dev Environment
+
+```bash
+./restart.sh
+```
+
+This starts two persistent tmux sessions:
+
+| Session | Command | URL |
+|---------|---------|-----|
+| `backend` | Flask API | http://localhost:5000 |
+| `vite` | Vite dev server (hot reload) | http://localhost:5173 |
+
+Access the UI at **http://localhost:5173**.
+
+```bash
+# Attach to logs
+tmux attach -t backend
+tmux attach -t vite
+```
+
+## Running the Pipeline
+
+### Using a config file (recommended)
+
+```bash
+# Generate a default config
 ltx2-build --generate-config config.yaml
 
-# Edit config.yaml as needed, then run
+# Run the full pipeline
 ltx2-build --config config.yaml
 ```
 
-### Running Individual Steps
+### Running individual steps
 
 ```bash
-# Index videos only
-ltx2-build --config config.yaml --step index
-
-# Detect scenes
-ltx2-build --config config.yaml --step scenes
-
-# Show statistics
-ltx2-build --config config.yaml --step stats
+ltx2-build --config config.yaml --step <step>
 ```
 
-## Pipeline Steps
+### Pipeline steps (in order)
 
-1. **Video Ingestion** (`index`)
-   - Recursively scan folder for video files
-   - Extract metadata (duration, FPS, resolution)
-   - Compute file hashes for reproducibility
+| Step | Description |
+|------|-------------|
+| `index` | Scan `./vids`, hash files, store metadata |
+| `scenes` | Detect scene cuts, write to DB incrementally |
+| `captions` | Caption scenes with Qwen3-Omni VLM |
+| `buckets` | Auto-detect optimal speech-prioritised crop windows |
+| `candidates` | Split scenes into fixed-length clips |
+| `quality` | Filter clips by quality score |
+| `faces` | Filter clips by InsightFace detection |
+| `crops` | Generate face / half-body / full-frame crop specs |
+| `render` | Render 1024px, 121-frame PNG buckets |
+| `manifest` | Write `manifest.jsonl` and caption `.txt` files |
+| `stats` | Print dataset statistics |
 
-2. **Scene Detection** (`scenes`)
-   - Detect scene boundaries using PySceneDetect
-   - Filter by minimum duration threshold
-   - Cache results for reuse
+### Useful utilities
 
-3. **Candidate Generation** (`candidates`)
-   - Split scenes into fixed-length clips
-   - Apply duration constraints (2-8 seconds)
-   - Generate overlapping clips for coverage
+```bash
+# List indexed videos with metadata
+ltx2-build --config config.yaml --list-videos
 
-4. **Face Filtering** (`faces`)
-   - Run InsightFace detection on sampled frames
-   - Filter clips by face presence threshold
-   - Cache embeddings for identity clustering
+# Set frame offset for codec timing compensation
+ltx2-build --config config.yaml --set-frame-offset 2 --video my-movie.mkv
 
-5. **Crop Generation** (`crops`)
-   - Generate face, half-body, and full-frame crops
-   - Smooth bounding boxes across frames
-   - Apply stable crop regions
-
-6. **Bucket Rendering** (`render`)
-   - Render frames at target resolution (1024)
-   - Output exact frame count (121)
-   - Pad or trim to match exactly
-
-7. **Manifest Generation** (`manifest`)
-   - Generate `manifest.jsonl` for LTX-2
-   - Write caption files
-   - Output statistics
-
-## Output Structure
-
-```
-dataset/
-├── manifest.jsonl
-├── samples/
-│   └── austin_powers_person/
-│       ├── clip_000001_face/
-│       │   ├── 000000.png
-│       │   ├── 000001.png
-│       │   └── ... (121 frames)
-│       ├── clip_000001_face.txt  (caption)
-│       ├── clip_000001_half_body/
-│       │   └── ...
-│       └── clip_000002_face/
-│           └── ...
-└── .cache/
-    └── index.db  (SQLite database)
+# Set display name for a video
+ltx2-build --config config.yaml --set-name "My Movie" --video my-movie.mkv
 ```
 
 ## Configuration
 
-### Key Settings
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `token` | - | Character identifier |
-| `render.resolution` | 1024 | Output resolution |
-| `render.frame_count` | 121 | Frames per bucket |
-| `render.fps` | 24 | Output FPS |
-| `scene.min_duration` | 2.0 | Minimum scene duration (seconds) |
-| `scene.max_duration` | 8.0 | Maximum scene duration (seconds) |
-| `face.min_face_presence` | 0.5 | Required face detection ratio |
-
-### Example Config
-
 ```yaml
-token: austin_powers_person
-source_dir: /mnt/nas/movies
-output_dir: ./dataset
-cache_dir: ./.cache
+source_dir: vids
+output_dir: dataset
+cache_dir: .cache
+pg_dsn: postgresql://ltx2:ltx2@localhost:5432/ltx2
+token: character_person
 
 scene:
   min_duration: 2.0
   max_duration: 8.0
-  threshold: 27.0
+  threshold: 3.0
 
 face:
   min_face_presence: 0.5
   min_face_size: 64
   detection_threshold: 0.5
+  embedding_model: buffalo_l
 
 render:
   resolution: 1024
   frame_count: 121
   fps: 24
   output_format: png
+
+bucket:
+  speech_weight: 0.7
+  visual_weight: 0.3
+  min_frames: 24
+  max_frames: 144
 ```
 
-## Hardware Requirements
+## Web Review UI
 
-- **Recommended GPU**: RTX 6000 Pro Blackwell (96GB VRAM) or similar
-- **Minimum GPU**: Any CUDA-capable GPU with 8GB+ VRAM
-- **CPU**: Multi-core processor for parallel preprocessing
-- **Storage**: Fast NVMe SSD for output, NAS acceptable for source
+The UI runs at **http://localhost:5173** (dev) or **http://localhost:5000** (production build).
 
-## Troubleshooting
+### Pages
 
-### FFmpeg not found
+- **Videos** — Browse scenes per video, filter by tag/rating/frames, play clips
+- **Clips** — Curated clip collections; export as zip with captions (HDR→SDR auto tone-mapped)
+- **Tags** — Manage tags: rename, set display names and captioner descriptions, browse tagged scenes
 
-Ensure FFmpeg is installed and in your PATH:
+### Exporting clips
 
-```bash
-ffmpeg -version
+Select a clip collection and click **Export zip**. The export streams progress in real time. HDR source videos are automatically tone-mapped to SDR using `zscale` + `tonemap=hable`. Falls back to plain encode if tone-mapping fails.
+
+## Output Structure
+
+```
+dataset/
+├── manifest.jsonl
+└── samples/
+    └── character_person/
+        ├── clip_000001_face/
+        │   ├── 000000.png
+        │   └── ... (121 frames)
+        ├── clip_000001_face.txt   (caption)
+        ├── clip_000001_half_body/
+        └── ...
 ```
 
-### InsightFace model download
+## Key Source Files
 
-InsightFace models are downloaded automatically on first run. If you have network issues, download manually:
+| File | Description |
+|------|-------------|
+| `web_review.py` | Flask backend — API + built UI |
+| `restart.sh` | Start backend + Vite in tmux |
+| `docker-compose.yml` | PostgreSQL container |
+| `migrate_sqlite_to_pg.py` | One-time SQLite → PostgreSQL migration |
+| `config.yaml` | Active pipeline config |
+| `ltx2_dataset_builder/cli.py` | Pipeline entry point |
+| `ltx2_dataset_builder/utils/io.py` | `Database` class (all DB operations) |
+| `ltx2_dataset_builder/captions/generate.py` | Qwen3-Omni captioning |
+| `ltx2_dataset_builder/buckets/detect.py` | Speech-aware bucket detection |
 
-```python
-from insightface.app import FaceAnalysis
-app = FaceAnalysis(name="buffalo_l")
-app.prepare(ctx_id=0)
-```
+## Notes
 
-### Out of memory
-
-Reduce batch size or use CPU for face detection:
-
-```bash
-pip install onnxruntime  # CPU-only
-```
+- Each pipeline step is idempotent — re-running skips already-processed items
+- Scene detection flushes to DB every ~10s, so killing mid-run won't lose progress
+- Sentinel caption values: `__skip__`, `__empty__`, `__error__: <msg>`
+- All SQL uses `%s` placeholders (psycopg2 / PostgreSQL)
+- Face embeddings use `buffalo_l`, downloaded automatically to `~/.insightface/` on first run
 
 ## License
 
