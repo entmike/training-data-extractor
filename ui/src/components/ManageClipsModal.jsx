@@ -8,6 +8,7 @@ function itemToScene(item, clipId) {
   return {
     id: item.scene_id,
     preview_path: null,
+    previewUrl: `/clip_item_preview/${item.id}`,
     blurhash: item.blurhash,
     video_path: item.video_path,
     start_frame: item.start_frame,

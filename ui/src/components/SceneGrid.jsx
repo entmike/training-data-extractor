@@ -37,6 +37,20 @@ export default function SceneGrid({ videoFilter, activeIncludeTags, activeExclud
     loadingRef.current = false
   }, [filterKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Reload when a scene is split via the modal
+  useEffect(() => {
+    function onSceneSplit() {
+      fetchGenRef.current += 1
+      setScenes([])
+      hasMoreRef.current = true
+      setIsEmpty(false)
+      pageRef.current = 1
+      loadingRef.current = false
+    }
+    window.addEventListener('scene-split', onSceneSplit)
+    return () => window.removeEventListener('scene-split', onSceneSplit)
+  }, [])
+
   // Callback so SceneCard can report tag changes back (keeps card state in sync; no longer
   // used for filtering since filtering is server-side, but still needed for SceneCard display)
   const handleTagsChange = useCallback((id, tags) => {

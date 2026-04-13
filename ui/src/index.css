@@ -1251,6 +1251,99 @@ html, body {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.video-detail-label--danger { color: #c0392b; }
+
+/* Delete video button */
+.delete-video-btn {
+  padding: 5px 14px;
+  border-radius: 5px;
+  border: 1px solid #c0392b;
+  background: transparent;
+  color: #e74c3c;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.delete-video-btn:hover { background: rgba(192,57,43,0.12); }
+
+/* Delete confirmation modal */
+.delete-video-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 3000;
+}
+.delete-video-modal {
+  background: var(--bg-card, #1e1e1e);
+  border: 1px solid #c0392b44;
+  border-radius: 10px;
+  padding: 28px 32px;
+  max-width: 460px;
+  width: 90%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.delete-video-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #e74c3c;
+}
+.delete-video-body {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.delete-video-body strong { color: var(--text-primary); }
+.delete-video-input {
+  padding: 7px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border, #333);
+  background: var(--bg-input, #111);
+  color: var(--text-primary);
+  font-size: 13px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.delete-video-input:focus { outline: none; border-color: #e74c3c88; }
+.delete-video-error { margin: 0; font-size: 12px; color: #e74c3c; }
+.delete-video-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+.delete-video-cancel {
+  padding: 7px 18px;
+  border-radius: 5px;
+  border: 1px solid var(--border, #333);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.delete-video-cancel:hover:not(:disabled) { background: var(--bg-secondary, #2a2a2a); }
+.delete-video-confirm {
+  padding: 7px 18px;
+  border-radius: 5px;
+  border: none;
+  background: #c0392b;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.delete-video-confirm:disabled { opacity: 0.4; cursor: default; }
+.delete-video-confirm:hover:not(:disabled) { background: #e74c3c; }
+.video-detail-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 1;
+}
 .video-detail-label-hint {
   font-size: 10px;
   color: var(--text-dim);
@@ -1495,6 +1588,39 @@ html, body {
   letter-spacing: 0.02em;
 }
 .vc-frame-info strong { color: var(--text-secondary); font-weight: 600; }
+
+/* ── Scene split prompt ───────────────────────── */
+.scene-split-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px 24px;
+  text-align: center;
+  color: var(--text-secondary);
+  min-height: 160px;
+}
+.scene-split-prompt p { margin: 0; line-height: 1.5; }
+.scene-split-prompt strong { color: var(--text-primary); }
+.scene-split-done { color: var(--text-primary); font-size: 15px; }
+.scene-split-actions { display: flex; gap: 10px; margin-top: 4px; }
+.scene-split-btn {
+  padding: 7px 18px;
+  border-radius: 6px;
+  border: none;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.scene-split-btn:disabled { opacity: 0.5; cursor: default; }
+.scene-split-btn--confirm { background: var(--accent, #4a9eff); color: #fff; }
+.scene-split-btn--confirm:hover:not(:disabled) { opacity: 0.85; }
+.scene-split-btn--cancel  { background: var(--bg-secondary, #333); color: var(--text-secondary); }
+.scene-split-btn--cancel:hover:not(:disabled) { opacity: 0.75; }
+.scene-split-btn--close   { background: var(--bg-secondary, #333); color: var(--text-primary); }
+.scene-split-btn--close:hover { opacity: 0.75; }
 
 /* ── Clip picker (portal dropdown) ────────────── */
 .clip-picker {

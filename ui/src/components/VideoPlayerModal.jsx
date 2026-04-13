@@ -61,6 +61,10 @@ export default function VideoPlayerModal({ player, onClose }) {
   const [muted,       setMuted]       = useState(false)
   const [waveformUrl, setWaveformUrl] = useState(null)
 
+  // ── Split state ────────────────────────────────────────
+  const [splitting,    setSplitting]    = useState(false)
+  const [splitResult,  setSplitResult]  = useState(null)  // { count } on success
+
   // ── Caption / tag state ────────────────────────────────
   const rawCaption = (player.caption && !player.caption.startsWith('__')) ? player.caption : ''
   const [caption,      setCaption]      = useState(rawCaption)
@@ -252,7 +256,8 @@ export default function VideoPlayerModal({ player, onClose }) {
     setVideoDur(vid.duration)
     if (!playEntireSceneRef.current && bucketOffsetRef.current > 0)
       vid.currentTime = bucketOffsetRef.current
-    vid.play().catch(() => {})
+    if (Math.round(duration * fps) <= 600)
+      vid.play().catch(() => {})
   }
 
   async function togglePlay() {
@@ -465,6 +470,22 @@ export default function VideoPlayerModal({ player, onClose }) {
     setCreatingColl(false)
   }
 
+  // ── Split scene ────────────────────────────────────────
+  async function splitScene() {
+    setSplitting(true)
+    try {
+      const r = await fetch(`/api/scenes/${sceneId}/split`, { method: 'POST' })
+      const data = await r.json()
+      if (!r.ok) throw new Error(data.error || 'Split failed')
+      setSplitResult({ count: data.segment_count })
+      window.dispatchEvent(new CustomEvent('scene-split'))
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setSplitting(false)
+    }
+  }
+
   // ── Derived display values ─────────────────────────────
   const showBucketMode = !!bucketData && !playEntireScene
   const bucketRelTime  = showBucketMode ? Math.max(0, currentTime - bucketOffset) : 0
@@ -486,132 +507,164 @@ export default function VideoPlayerModal({ player, onClose }) {
           <button className="modal-close-btn" onClick={onClose}>&times;</button>
         </div>
 
-        {/* Video */}
-        <div className="modal-video-wrap">
-          <video
-            ref={videoRef}
-            src={`/clip/${sceneId}`}
-            loop
-            muted={muted}
-            onPlay={handlePlay}
-            onPause={handlePause}
-            onEnded={handleEnded}
-            onLoadedMetadata={handleLoadedMeta}
-            onClick={togglePlay}
-            className="modal-video"
-          />
-        </div>
-
-        {/* Controls */}
-        <div className="video-controls">
-          {/* Play/Pause */}
-          <button className="vc-btn" onClick={togglePlay} title={playing ? 'Pause' : 'Play'}>
-            {playing
-              ? <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>
-              : <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-            }
-          </button>
-
-          {/* Time */}
-          <span className="vc-time">
-            {fmtSecs(currentTime)} / {fmtSecs(videoDur)}
-          </span>
-
-          {/* Seek bar */}
-          <div className="vc-seek-wrap" ref={seekWrapRef}>
-            {waveformUrl && (
-              <img src={waveformUrl} className="vc-waveform-img" alt="" aria-hidden="true"
-                onError={() => setWaveformUrl(null)} />
+        {/* Video — hidden when scene exceeds 600 frames */}
+        {sceneFrameCount > 600 ? (
+          <div className="scene-split-prompt">
+            {splitResult ? (
+              <>
+                <p className="scene-split-done">
+                  Split into <strong>{splitResult.count}</strong> scenes of up to 600 frames each.
+                </p>
+                <button className="scene-split-btn scene-split-btn--close" onClick={onClose}>Close</button>
+              </>
+            ) : (
+              <>
+                <p>
+                  This scene is <strong>{sceneFrameCount} frames</strong> ({duration.toFixed(1)}s) — over the 600-frame limit.
+                </p>
+                <p>
+                  Split into <strong>{Math.ceil(sceneFrameCount / 600)}</strong> segments of up to 600 frames each?
+                </p>
+                <div className="scene-split-actions">
+                  <button className="scene-split-btn scene-split-btn--confirm" onClick={splitScene} disabled={splitting}>
+                    {splitting ? 'Splitting…' : 'Split Scene'}
+                  </button>
+                  <button className="scene-split-btn scene-split-btn--cancel" onClick={onClose} disabled={splitting}>
+                    Cancel
+                  </button>
+                </div>
+              </>
             )}
-            {/* Green bucket window — drag body to reposition, handles to resize */}
-            {bucketData && duration > 0 && bucketDuration > 0 && (() => {
-              const leftPct  = (bucketOffset   / duration) * 100
-              const widthPct = (bucketDuration / duration) * 100
+          </div>
+        ) : (
+          <>
+            <div className="modal-video-wrap">
+              <video
+                ref={videoRef}
+                src={`/clip/${sceneId}`}
+                loop
+                muted={muted}
+                onPlay={handlePlay}
+                onPause={handlePause}
+                onEnded={handleEnded}
+                onLoadedMetadata={handleLoadedMeta}
+                onClick={togglePlay}
+                className="modal-video"
+              />
+            </div>
+
+            {/* Controls */}
+            <div className="video-controls">
+              {/* Play/Pause */}
+              <button className="vc-btn" onClick={togglePlay} title={playing ? 'Pause' : 'Play'}>
+                {playing
+                  ? <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>
+                  : <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                }
+              </button>
+
+              {/* Time */}
+              <span className="vc-time">
+                {fmtSecs(currentTime)} / {fmtSecs(videoDur)}
+              </span>
+
+              {/* Seek bar */}
+              <div className="vc-seek-wrap" ref={seekWrapRef}>
+                {waveformUrl && (
+                  <img src={waveformUrl} className="vc-waveform-img" alt="" aria-hidden="true"
+                    onError={() => setWaveformUrl(null)} />
+                )}
+                {/* Green bucket window — drag body to reposition, handles to resize */}
+                {bucketData && duration > 0 && bucketDuration > 0 && (() => {
+                  const leftPct  = (bucketOffset   / duration) * 100
+                  const widthPct = (bucketDuration / duration) * 100
+                  return (
+                    <>
+                      <div
+                        className="vc-bucket-window"
+                        style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                        onMouseDown={handleBucketWindowMouseDown}
+                        title="Drag to reposition bucket window"
+                      />
+                      <div
+                        className="vc-bucket-handle vc-bucket-handle--start"
+                        style={{ left: `${leftPct}%` }}
+                        onMouseDown={e => startBucketDrag(e, 'start')}
+                        title="Drag to resize start"
+                      />
+                      <div
+                        className="vc-bucket-handle vc-bucket-handle--end"
+                        style={{ left: `${leftPct + widthPct}%` }}
+                        onMouseDown={e => startBucketDrag(e, 'end')}
+                        title="Drag to resize end"
+                      />
+                    </>
+                  )
+                })()}
+                <input
+                  type="range"
+                  className="vc-seek"
+                  min={0}
+                  max={duration || 1}
+                  step={0.033}
+                  value={currentTime}
+                  onMouseDown={handleSeekStart}
+                  onTouchStart={handleSeekStart}
+                  onChange={handleSeekInput}
+                  onMouseUp={handleSeekCommit}
+                  onTouchEnd={handleSeekCommit}
+                />
+              </div>
+
+              {/* VU meter */}
+              <canvas ref={canvasRef} className="vc-vu" width={72} height={16} />
+
+              {/* Mute */}
+              <button className="vc-btn" onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'}>
+                {muted
+                  ? <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 12A4.5 4.5 0 0014 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0021 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06A8.99 8.99 0 0017.73 18l1.28 1.27L20 18l-16-16-1.73 1.73zm9.73.73L9.13 8.6 12 11.47V4.73z"/></svg>
+                  : <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77 0-4.28-2.99-7.86-7-8.77z"/></svg>
+                }
+              </button>
+
+              {/* Volume */}
+              <input
+                type="range" className="vc-volume" min={0} max={1} step={0.05}
+                value={muted ? 0 : volume} onChange={handleVolumeChange}
+              />
+            </div>
+
+            {/* Frame info */}
+            {showBucketMode ? (() => {
+              const bucketFrame  = Math.round(bucketRelTime * fps)
+              const bucketFrames = Math.round(bucketDuration * fps)
+              const absFrame     = sceneStartF + frameOffset + 1 + offsetFramesCurrent + bucketFrame
               return (
-                <>
-                  <div
-                    className="vc-bucket-window"
-                    style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
-                    onMouseDown={handleBucketWindowMouseDown}
-                    title="Drag to reposition bucket window"
-                  />
-                  <div
-                    className="vc-bucket-handle vc-bucket-handle--start"
-                    style={{ left: `${leftPct}%` }}
-                    onMouseDown={e => startBucketDrag(e, 'start')}
-                    title="Drag to resize start"
-                  />
-                  <div
-                    className="vc-bucket-handle vc-bucket-handle--end"
-                    style={{ left: `${leftPct + widthPct}%` }}
-                    onMouseDown={e => startBucketDrag(e, 'end')}
-                    title="Drag to resize end"
-                  />
-                </>
+                <div className="vc-frame-info">
+                  bucket frame <strong>{bucketFrame}</strong> / {bucketFrames}
+                  &nbsp;&nbsp;·&nbsp;&nbsp;
+                  source frame <strong>{absFrame}</strong>
+                  &nbsp;&nbsp;·&nbsp;&nbsp;
+                  offset <strong>{offsetFramesCurrent}f</strong>
+                  {bucketData.speech_start_frame && (
+                    <>&nbsp;&nbsp;·&nbsp;&nbsp;speech {bucketData.speech_start_frame}–{bucketData.speech_end_frame}</>
+                  )}
+                </div>
+              )
+            })() : (() => {
+              const clipFrame   = Math.round(currentTime * fps)
+              const totalFrames = Math.round(videoDur * fps)
+              const absFrame    = sceneStartF + frameOffset + 1 + clipFrame
+              return (
+                <div className="vc-frame-info">
+                  frame <strong>{clipFrame}</strong> / {totalFrames}
+                  &nbsp;&nbsp;·&nbsp;&nbsp;
+                  source frame <strong>{absFrame}</strong>
+                </div>
               )
             })()}
-            <input
-              type="range"
-              className="vc-seek"
-              min={0}
-              max={duration || 1}
-              step={0.033}
-              value={currentTime}
-              onMouseDown={handleSeekStart}
-              onTouchStart={handleSeekStart}
-              onChange={handleSeekInput}
-              onMouseUp={handleSeekCommit}
-              onTouchEnd={handleSeekCommit}
-            />
-          </div>
-
-          {/* VU meter */}
-          <canvas ref={canvasRef} className="vc-vu" width={72} height={16} />
-
-          {/* Mute */}
-          <button className="vc-btn" onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'}>
-            {muted
-              ? <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 12A4.5 4.5 0 0014 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0021 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06A8.99 8.99 0 0017.73 18l1.28 1.27L20 18l-16-16-1.73 1.73zm9.73.73L9.13 8.6 12 11.47V4.73z"/></svg>
-              : <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77 0-4.28-2.99-7.86-7-8.77z"/></svg>
-            }
-          </button>
-
-          {/* Volume */}
-          <input
-            type="range" className="vc-volume" min={0} max={1} step={0.05}
-            value={muted ? 0 : volume} onChange={handleVolumeChange}
-          />
-        </div>
-
-        {/* Frame info */}
-        {showBucketMode ? (() => {
-          const bucketFrame  = Math.round(bucketRelTime * fps)
-          const bucketFrames = Math.round(bucketDuration * fps)
-          const absFrame     = sceneStartF + frameOffset + 1 + offsetFramesCurrent + bucketFrame
-          return (
-            <div className="vc-frame-info">
-              bucket frame <strong>{bucketFrame}</strong> / {bucketFrames}
-              &nbsp;&nbsp;·&nbsp;&nbsp;
-              source frame <strong>{absFrame}</strong>
-              &nbsp;&nbsp;·&nbsp;&nbsp;
-              offset <strong>{offsetFramesCurrent}f</strong>
-              {bucketData.speech_start_frame && (
-                <>&nbsp;&nbsp;·&nbsp;&nbsp;speech {bucketData.speech_start_frame}–{bucketData.speech_end_frame}</>
-              )}
-            </div>
-          )
-        })() : (() => {
-          const clipFrame   = Math.round(currentTime * fps)
-          const totalFrames = Math.round(videoDur * fps)
-          const absFrame    = sceneStartF + frameOffset + 1 + clipFrame
-          return (
-            <div className="vc-frame-info">
-              frame <strong>{clipFrame}</strong> / {totalFrames}
-              &nbsp;&nbsp;·&nbsp;&nbsp;
-              source frame <strong>{absFrame}</strong>
-            </div>
-          )
-        })()}
+          </>
+        )}
 
         {/* Meta */}
         <div className="video-modal-meta">

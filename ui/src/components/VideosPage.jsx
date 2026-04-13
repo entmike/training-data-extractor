@@ -75,6 +75,13 @@ export default function VideosPage({ tagMap, allTags }) {
     setVideos(vs => vs.map(v => v.id === updatedVideo.id ? { ...v, ...updatedVideo } : v))
   }
 
+  function onVideoDeleted(deletedId) {
+    const remaining = videos.filter(v => v.id !== deletedId)
+    setVideos(remaining)
+    if (remaining.length > 0) navigate(`/videos/${remaining[0].id}`, { replace: true })
+    else navigate('/videos', { replace: true })
+  }
+
   function openDropdown(mode, ref) {
     const rect = ref.current.getBoundingClientRect()
     setDropdown({ mode, pos: { top: rect.bottom + window.scrollY + 4, left: rect.left + window.scrollX } })
@@ -130,7 +137,7 @@ export default function VideosPage({ tagMap, allTags }) {
                 </div>
                 {!detailCollapsed && (
                   <>
-                    <VideoDetail video={selected} onSaved={onVideoSaved} />
+                    <VideoDetail video={selected} onSaved={onVideoSaved} onDeleted={onVideoDeleted} />
                     <div className="tag-filter-bar">
                       <div className="tag-filter-row">
                         <span className="tag-filter-label">Show:</span>
@@ -261,13 +268,17 @@ export default function VideosPage({ tagMap, allTags }) {
   )
 }
 
-function VideoDetail({ video, onSaved }) {
+function VideoDetail({ video, onSaved, onDeleted }) {
   const [name, setName]     = useState(video.name || '')
   const [prompt, setPrompt] = useState(video.prompt || '')
   const [savedName,   setSavedName]   = useState(video.name || '')
   const [savedPrompt, setSavedPrompt] = useState(video.prompt || '')
   const [nameStatus,   setNameStatus]   = useState('')
   const [promptStatus, setPromptStatus] = useState('')
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const [deleteConfirm,   setDeleteConfirm]   = useState('')
+  const [deleting,        setDeleting]        = useState(false)
+  const [deleteError,     setDeleteError]     = useState('')
 
   useEffect(() => {
     setName(video.name || '')
@@ -276,6 +287,9 @@ function VideoDetail({ video, onSaved }) {
     setSavedPrompt(video.prompt || '')
     setNameStatus('')
     setPromptStatus('')
+    setShowDeleteModal(false)
+    setDeleteConfirm('')
+    setDeleteError('')
   }, [video.id])
 
   const pct = video.scene_count > 0
@@ -311,6 +325,24 @@ function VideoDetail({ video, onSaved }) {
       setPromptStatus('✓ Saved')
       setTimeout(() => setPromptStatus(''), 3000)
     } catch { setPromptStatus('Error') }
+  }
+
+  const confirmTitle = video.name || video.path.split('/').pop().replace(/\.[^.]+$/, '')
+  const deleteReady  = deleteConfirm === confirmTitle
+
+  async function doDelete() {
+    if (!deleteReady) return
+    setDeleting(true)
+    setDeleteError('')
+    try {
+      const r = await fetch(`/api/videos/${video.id}`, { method: 'DELETE' })
+      const data = await r.json()
+      if (!r.ok) throw new Error(data.error || 'Delete failed')
+      onDeleted(video.id)
+    } catch (err) {
+      setDeleteError(err.message)
+      setDeleting(false)
+    }
   }
 
   return (
@@ -391,7 +423,58 @@ function VideoDetail({ video, onSaved }) {
             )}
           </div>
         </div>
+
+        <div className="video-detail-field video-detail-field--full">
+          <label className="video-detail-label">Export</label>
+          <div className="video-detail-input-row">
+            <span className="video-detail-hint">Download scenes, tags, and clips for this video as a zip file.</span>
+            <a
+              className="save-btn"
+              href={`/api/videos/${video.id}/export`}
+              download
+            >Export DB</a>
+          </div>
+        </div>
+
+        <div className="video-detail-field video-detail-field--full">
+          <label className="video-detail-label video-detail-label--danger">Danger zone</label>
+          <div className="video-detail-input-row">
+            <span className="video-detail-hint">Remove this video and all its scenes, tags, and clips from the database. The source file is not deleted.</span>
+            <button className="delete-video-btn" onClick={() => setShowDeleteModal(true)}>Delete Video</button>
+          </div>
+        </div>
       </div>
+
+      {showDeleteModal && createPortal(
+        <div className="delete-video-overlay" onClick={e => { if (e.target === e.currentTarget) setShowDeleteModal(false) }}>
+          <div className="delete-video-modal">
+            <h3 className="delete-video-title">Delete video from database?</h3>
+            <p className="delete-video-body">
+              This will permanently remove <strong>{confirmTitle}</strong> and all its scenes, tags, buckets, and clip memberships from the database.
+              The source video file will not be touched.
+            </p>
+            <p className="delete-video-body">
+              Type <strong>{confirmTitle}</strong> to confirm:
+            </p>
+            <input
+              className="delete-video-input"
+              value={deleteConfirm}
+              onChange={e => { setDeleteConfirm(e.target.value); setDeleteError('') }}
+              placeholder={confirmTitle}
+              autoFocus
+              onKeyDown={e => e.key === 'Enter' && deleteReady && doDelete()}
+            />
+            {deleteError && <p className="delete-video-error">{deleteError}</p>}
+            <div className="delete-video-actions">
+              <button className="delete-video-cancel" onClick={() => { setShowDeleteModal(false); setDeleteConfirm('') }} disabled={deleting}>Cancel</button>
+              <button className="delete-video-confirm" onClick={doDelete} disabled={!deleteReady || deleting}>
+                {deleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   )
 }

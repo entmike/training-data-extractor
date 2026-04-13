@@ -129,7 +129,8 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
     const vid = videoRef.current; if (!vid) return
     setVideoDur(vid.duration)
     vid.currentTime = startOffRef.current / fps
-    vid.play().catch(() => {})
+    if (sceneFrames <= 600)
+      vid.play().catch(() => {})
   }
 
   async function togglePlay() {

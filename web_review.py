@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Web frontend for reviewing scene captions."""
 
+import io
+import json
 import os
 import re
 import subprocess
-import io
+import zipfile
 from pathlib import Path
 from typing import Optional
 import psycopg2
@@ -164,6 +166,44 @@ def serve_ui_assets(filename):
 def preview(filename):
     """Serve preview images."""
     return send_from_directory(DEBUG_SCENES_DIR, filename)
+
+
+@app.route('/clip_item_preview/<int:item_id>')
+def clip_item_preview(item_id: int):
+    """Generate and serve a preview image for a clip item using its own frame range."""
+    conn = get_db_connection()
+    row = conn.execute("""
+        SELECT ci.start_frame, ci.end_frame,
+               v.path as video_path, v.fps, v.frame_offset
+        FROM clip_items ci
+        JOIN videos v ON ci.video_id = v.id
+        WHERE ci.id = %s
+    """, (item_id,)).fetchone()
+    conn.close()
+
+    if row is None:
+        return jsonify({"error": "Clip item not found"}), 404
+
+    cache_path = DEBUG_SCENES_DIR / f"clip_item_{item_id}.jpg"
+    if cache_path.exists():
+        return send_file(cache_path, mimetype='image/jpeg')
+
+    preview_bytes = generate_scene_preview(
+        video_path=Path(row["video_path"]),
+        start_frame=row["start_frame"],
+        end_frame=row["end_frame"],
+        fps=row["fps"] or 24.0,
+        frame_offset=row["frame_offset"] or 0,
+    )
+
+    if preview_bytes is None:
+        return jsonify({"error": "Failed to generate preview"}), 500
+
+    DEBUG_SCENES_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path.write_bytes(preview_bytes)
+
+    return Response(preview_bytes, mimetype='image/jpeg',
+                    headers={'Cache-Control': 'max-age=3600'})
 
 
 @app.route('/scene_preview/<int:scene_id>')
@@ -907,6 +947,87 @@ def remove_tag(scene_id: int, tag: str):
     return jsonify({"scene_id": scene_id, "tags": [r["tag"] for r in rows]})
 
 
+@app.route('/api/scenes/<int:scene_id>/split', methods=['POST'])
+def split_scene(scene_id: int):
+    """Split a long scene into segments of up to 600 frames each."""
+    conn = get_db_connection()
+    row = conn.execute("""
+        SELECT s.video_id, s.start_frame, s.end_frame, s.rating, v.fps
+        FROM scenes s JOIN videos v ON s.video_id = v.id
+        WHERE s.id = %s
+    """, (scene_id,)).fetchone()
+
+    if not row:
+        conn.close()
+        return jsonify({"error": "Scene not found"}), 404
+
+    start_frame = row['start_frame']
+    end_frame   = row['end_frame']
+    video_id    = row['video_id']
+    fps         = row['fps'] or 24.0
+    rating      = row['rating']
+    total_frames = end_frame - start_frame
+
+    if total_frames <= 600:
+        conn.close()
+        return jsonify({"error": "Scene is not longer than 600 frames"}), 400
+
+    # Build segment boundaries
+    segments = []
+    f = start_frame
+    while f < end_frame:
+        seg_end = min(f + 600, end_frame)
+        segments.append((f, seg_end))
+        f = seg_end
+
+    # Update original row to be the first segment
+    seg0_s, seg0_e = segments[0]
+    seg0_start_t, seg0_end_t = seg0_s / fps, seg0_e / fps
+    seg0_dur = seg0_end_t - seg0_start_t
+    conn.execute("""
+        UPDATE scenes SET start_frame = %s, end_frame = %s, start_time = %s, end_time = %s, duration = %s
+        WHERE id = %s
+    """, (seg0_s, seg0_e, seg0_start_t, seg0_end_t, seg0_dur, scene_id))
+
+    # Update existing bucket for first segment (if any)
+    conn.execute("""
+        UPDATE buckets SET start_frame = %s, end_frame = %s, frame_count = %s,
+                           start_time = %s, end_time = %s, duration = %s,
+                           optimal_offset_frames = 0, optimal_duration = %s
+        WHERE scene_id = %s
+    """, (seg0_s, seg0_e, seg0_e - seg0_s, seg0_start_t, seg0_end_t, seg0_dur, seg0_dur, scene_id))
+
+    # Insert remaining segments + their default buckets
+    new_ids = [scene_id]
+    for seg_s, seg_e in segments[1:]:
+        seg_start_t = seg_s / fps
+        seg_end_t   = seg_e / fps
+        seg_dur     = seg_end_t - seg_start_t
+        seg_frames  = seg_e - seg_s
+        cur = conn.execute("""
+            INSERT INTO scenes (video_id, start_time, end_time, duration, start_frame, end_frame, rating)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (video_id, seg_start_t, seg_end_t, seg_dur, seg_s, seg_e, rating))
+        inserted = cur.fetchone()
+        if inserted:
+            new_scene_id = inserted['id']
+            new_ids.append(new_scene_id)
+            conn.execute("""
+                INSERT INTO buckets
+                    (video_id, scene_id, start_time, end_time, duration,
+                     start_frame, end_frame, frame_count,
+                     optimal_offset_frames, optimal_duration)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0, %s)
+                ON CONFLICT (video_id, start_frame, end_frame) DO NOTHING
+            """, (video_id, new_scene_id, seg_start_t, seg_end_t, seg_dur,
+                  seg_s, seg_e, seg_frames, seg_dur))
+
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "scene_ids": new_ids, "segment_count": len(segments)})
+
+
 @app.route('/api/rating/<int:scene_id>', methods=['PUT'])
 def set_rating(scene_id: int):
     """Set or clear the star rating (1-3) for a scene."""
@@ -1005,6 +1126,150 @@ def set_video_name(video_id: int):
     conn.close()
     return jsonify({"video_id": video_id, "name": name or ""})
 
+
+
+@app.route('/api/videos/<int:video_id>', methods=['DELETE'])
+def delete_video(video_id: int):
+    """Delete a video and all associated DB rows and cache files (not the source file)."""
+    conn = get_db_connection()
+
+    video = conn.execute(
+        "SELECT id, path FROM videos WHERE id = %s", (video_id,)
+    ).fetchone()
+    if not video:
+        conn.close()
+        return jsonify({"error": "Video not found"}), 404
+
+    video_stem = Path(video["path"]).stem
+
+    # Collect IDs needed for cache deletion before removing rows
+    scene_rows = conn.execute(
+        "SELECT id FROM scenes WHERE video_id = %s", (video_id,)
+    ).fetchall()
+    scene_ids = [r["id"] for r in scene_rows]
+
+    item_ids = []
+    if scene_ids:
+        ph = ",".join(["%s"] * len(scene_ids))
+        item_rows = conn.execute(
+            f"SELECT id FROM clip_items WHERE scene_id IN ({ph})", scene_ids
+        ).fetchall()
+        item_ids = [r["id"] for r in item_rows]
+
+    # ── DB deletion (order matters for FK constraints) ────────
+    if scene_ids:
+        ph = ",".join(["%s"] * len(scene_ids))
+        candidate_rows = conn.execute(
+            f"SELECT id FROM candidates WHERE video_id = %s", (video_id,)
+        ).fetchall()
+        candidate_ids = [r["id"] for r in candidate_rows]
+        if candidate_ids:
+            cph = ",".join(["%s"] * len(candidate_ids))
+            conn.execute(f"DELETE FROM samples WHERE candidate_id IN ({cph})", candidate_ids)
+    conn.execute("DELETE FROM candidates     WHERE video_id = %s", (video_id,))
+    conn.execute("DELETE FROM buckets        WHERE video_id = %s", (video_id,))
+    conn.execute("DELETE FROM face_detections WHERE video_id = %s", (video_id,))
+    conn.execute("DELETE FROM embeddings     WHERE video_id = %s", (video_id,))
+    conn.execute("DELETE FROM scenes         WHERE video_id = %s", (video_id,))
+    # Delete clips that now have no items
+    conn.execute("""
+        DELETE FROM clips WHERE id NOT IN (SELECT DISTINCT clip_id FROM clip_items)
+    """)
+    conn.execute("DELETE FROM videos WHERE id = %s", (video_id,))
+    conn.commit()
+    conn.close()
+
+    # ── Cache file deletion ───────────────────────────────────
+    deleted_files = 0
+    for scene_id in scene_ids:
+        for path in [
+            DEBUG_SCENES_DIR / f"scene_{scene_id}.jpg",
+            WAVEFORMS_DIR    / f"{video_stem}_{scene_id}.png",
+            CLIPS_DIR        / f"{video_stem}_{scene_id}.mp4",
+            CLIPS_DIR        / f"{video_stem}_bucket_{scene_id}.mp4",
+        ]:
+            if path.exists():
+                path.unlink()
+                deleted_files += 1
+    for item_id in item_ids:
+        path = DEBUG_SCENES_DIR / f"clip_item_{item_id}.jpg"
+        if path.exists():
+            path.unlink()
+            deleted_files += 1
+
+    return jsonify({
+        "success": True,
+        "video_id": video_id,
+        "scenes_deleted": len(scene_ids),
+        "cache_files_deleted": deleted_files,
+    })
+
+
+@app.route('/api/videos/<int:video_id>/export', methods=['GET'])
+def export_video_db(video_id: int):
+    """Export scenes, tags, and clips for a video as a downloadable zip."""
+    conn = get_db_connection()
+
+    video = conn.execute(
+        "SELECT id, path, name FROM videos WHERE id = %s", (video_id,)
+    ).fetchone()
+    if not video:
+        conn.close()
+        return jsonify({"error": "Video not found"}), 404
+
+    video_stem = Path(video["path"]).stem
+
+    # ── Scenes ───────────────────────────────────────────────
+    scene_rows = conn.execute("""
+        SELECT id, video_id, start_time, end_time, duration,
+               start_frame, end_frame, caption, rating, blurhash
+        FROM scenes
+        WHERE video_id = %s
+        ORDER BY start_frame
+    """, (video_id,)).fetchall()
+    scenes = [dict(r) for r in scene_rows]
+    scene_ids = [s["id"] for s in scenes]
+
+    # ── Scene tags ────────────────────────────────────────────
+    scene_tags = []
+    if scene_ids:
+        ph = ",".join(["%s"] * len(scene_ids))
+        tag_rows = conn.execute(
+            f"SELECT scene_id, tag FROM scene_tags WHERE scene_id IN ({ph}) ORDER BY scene_id, tag",
+            scene_ids
+        ).fetchall()
+        scene_tags = [dict(r) for r in tag_rows]
+
+    # ── Clip items (with clip name) ───────────────────────────
+    clips_data = []
+    if scene_ids:
+        ph = ",".join(["%s"] * len(scene_ids))
+        item_rows = conn.execute(f"""
+            SELECT c.id as clip_id, c.name as clip_name,
+                   ci.id as item_id, ci.scene_id, ci.start_frame, ci.end_frame,
+                   ci.caption
+            FROM clip_items ci
+            JOIN clips c ON ci.clip_id = c.id
+            WHERE ci.scene_id IN ({ph})
+            ORDER BY c.name, ci.start_frame
+        """, scene_ids).fetchall()
+        clips_data = [dict(r) for r in item_rows]
+
+    conn.close()
+
+    # ── Build zip in memory ───────────────────────────────────
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("scenes.json",     json.dumps(scenes,     indent=2, default=str))
+        zf.writestr("scene_tags.json", json.dumps(scene_tags, indent=2, default=str))
+        zf.writestr("clips.json",      json.dumps(clips_data, indent=2, default=str))
+    buf.seek(0)
+
+    return Response(
+        buf.read(),
+        mimetype="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{video_stem}_db_export.zip"'},
+    )
 
 
 @app.route('/api/bucket/<int:scene_id>', methods=['PUT'])

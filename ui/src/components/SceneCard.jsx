@@ -58,9 +58,10 @@ export default function SceneCard({ scene: initialScene, tagMap, visible, onTags
       setClipLoading(false)
     }
   }
-  const imgSrc = initialScene.preview_path
-    ? `/preview/${initialScene.preview_path}`
-    : `/scene_preview/${initialScene.id}`
+  const imgSrc = initialScene.previewUrl
+    ?? (initialScene.preview_path
+      ? `/preview/${initialScene.preview_path}`
+      : `/scene_preview/${initialScene.id}`)
 
   function handleCaptionChange(val) {
     setCaption(val)
