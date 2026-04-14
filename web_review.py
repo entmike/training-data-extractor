@@ -32,8 +32,11 @@ if _env_file.exists():
             _k, _, _v = _line.partition('=')
             os.environ.setdefault(_k.strip(), _v.strip())
 
-# Load config.yaml
-CONFIG_PATH = _HERE / "config.yaml"
+# Load config — honour LTX_CONFIG env var, fall back to config.yaml
+_cfg_env = os.environ.get("LTX_CONFIG")
+CONFIG_PATH = Path(_cfg_env) if _cfg_env else _HERE / "config.yaml"
+if not CONFIG_PATH.is_absolute():
+    CONFIG_PATH = _HERE / CONFIG_PATH
 if CONFIG_PATH.exists():
     with open(CONFIG_PATH) as f:
         config = yaml.safe_load(f)
@@ -45,9 +48,10 @@ def _resolve(p: str) -> Path:
     return path if path.is_absolute() else _HERE / path
 
 OUTPUT_DIR       = _resolve(config.get("output_dir", "./dataset"))
-DEBUG_SCENES_DIR = _HERE / ".cache/previews"
-WAVEFORMS_DIR    = _HERE / ".cache/waveforms"
-CLIPS_DIR        = _HERE / ".cache/clips"
+_CACHE_DIR       = _resolve(config.get("cache_dir", ".cache"))
+DEBUG_SCENES_DIR = _CACHE_DIR / "previews"
+WAVEFORMS_DIR    = _CACHE_DIR / "waveforms"
+CLIPS_DIR        = _CACHE_DIR / "clips"
 
 # ── PostgreSQL connection pool ────────────────────────────────────────────────
 
@@ -206,16 +210,14 @@ def clip_item_preview(item_id: int):
                     headers={'Cache-Control': 'max-age=3600'})
 
 
-@app.route('/scene_preview/<int:scene_id>')
-def scene_preview(scene_id: int):
-    """
-    Generate and serve a preview image for a scene on-the-fly.
-    
-    Falls back to static preview if it exists, otherwise generates dynamically.
-    """
+_PREVIEW_SIZES = {
+    'thumb': 300,   # ~900px composite — compact grid thumbnails
+    'card':  640,   # ~1920px composite — scene card previews
+}
+
+def _serve_scene_preview(scene_id: int, size: Optional[str]) -> Response:
+    """Shared logic for all scene_preview routes."""
     conn = get_db_connection()
-    
-    # Get scene and video info
     row = conn.execute("""
         SELECT s.*, v.path as video_path, v.fps, v.frame_offset
         FROM scenes s
@@ -223,49 +225,57 @@ def scene_preview(scene_id: int):
         WHERE s.id = %s
     """, (scene_id,)).fetchone()
     conn.close()
-    
+
     if row is None:
         return jsonify({"error": "Scene not found"}), 404
-    
+
     video_path = Path(row["video_path"])
     fps = row["fps"] or 24.0
     frame_offset = row["frame_offset"] or 0
-    
-    # Get frame numbers
+
     start_frame = row["start_frame"]
     end_frame = row["end_frame"]
-    
-    # Fall back to calculating from timestamps if frames not stored
     if start_frame is None or end_frame is None:
         start_frame = int(row["start_time"] * fps)
         end_frame = int(row["end_time"] * fps)
-    
-    # Serve from cache if available
-    cache_path = DEBUG_SCENES_DIR / f"scene_{scene_id}.jpg"
+
+    frame_width = _PREVIEW_SIZES.get(size) if size else None
+    suffix = f"_{size}" if size else ""
+    cache_path = DEBUG_SCENES_DIR / f"scene_{scene_id}{suffix}.jpg"
+
     if cache_path.exists():
         return send_file(cache_path, mimetype='image/jpeg')
 
-    # Generate preview
     preview_bytes = generate_scene_preview(
         video_path=video_path,
         start_frame=start_frame,
         end_frame=end_frame,
         fps=fps,
         frame_offset=frame_offset,
+        frame_width=frame_width,
     )
 
     if preview_bytes is None:
         return jsonify({"error": "Failed to generate preview"}), 500
 
-    # Cache to disk
     DEBUG_SCENES_DIR.mkdir(parents=True, exist_ok=True)
     cache_path.write_bytes(preview_bytes)
 
-    return Response(
-        preview_bytes,
-        mimetype='image/jpeg',
-        headers={'Cache-Control': 'max-age=3600'}
-    )
+    return Response(preview_bytes, mimetype='image/jpeg',
+                    headers={'Cache-Control': 'max-age=3600'})
+
+
+@app.route('/scene_preview/<int:scene_id>')
+def scene_preview(scene_id: int):
+    return _serve_scene_preview(scene_id, None)
+
+@app.route('/scene_preview/<int:scene_id>/thumb')
+def scene_preview_thumb(scene_id: int):
+    return _serve_scene_preview(scene_id, 'thumb')
+
+@app.route('/scene_preview/<int:scene_id>/card')
+def scene_preview_card(scene_id: int):
+    return _serve_scene_preview(scene_id, 'card')
 
 
 @app.route('/clip/<int:scene_id>')
@@ -569,7 +579,7 @@ def get_scenes():
     offset = (page - 1) * limit
     
     base_query = f"""
-        SELECT s.*, v.path as video_path, v.fps, v.frame_offset,
+        SELECT s.*, v.path as video_path, v.fps, v.frame_offset, v.duration as video_duration,
             (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
             (SELECT COUNT(*) FROM clip_items ci WHERE ci.scene_id = s.id) as clip_count,
             (SELECT STRING_AGG(st.tag, '|') FROM scene_tags st WHERE st.scene_id = s.id) as tags_concat
@@ -617,6 +627,7 @@ def get_scenes():
             'rating': d.get('rating'),
             'blurhash': d.get('blurhash'),
             'clip_count': d.get('clip_count') or 0,
+            'video_total_frames': round((d.get('video_duration') or 0) * (d.get('fps') or 24.0)),
         })
 
     return jsonify({
@@ -625,6 +636,25 @@ def get_scenes():
         'has_more': offset + limit < total,
         'total': total,
     })
+
+
+@app.route('/api/cache/previews', methods=['GET'])
+def cache_previews_size():
+    """Return total size and file count of the preview cache."""
+    files = list(DEBUG_SCENES_DIR.glob('*.jpg')) if DEBUG_SCENES_DIR.exists() else []
+    total = sum(f.stat().st_size for f in files)
+    return jsonify({'file_count': len(files), 'size_bytes': total})
+
+
+@app.route('/api/cache/previews', methods=['DELETE'])
+def cache_previews_clear():
+    """Delete all cached preview images."""
+    files = list(DEBUG_SCENES_DIR.glob('*.jpg')) if DEBUG_SCENES_DIR.exists() else []
+    freed = 0
+    for f in files:
+        freed += f.stat().st_size
+        f.unlink(missing_ok=True)
+    return jsonify({'deleted': len(files), 'freed_bytes': freed})
 
 
 @app.route('/api/stats')
@@ -1028,6 +1058,114 @@ def split_scene(scene_id: int):
     return jsonify({"success": True, "scene_ids": new_ids, "segment_count": len(segments)})
 
 
+@app.route('/api/scenes/<int:scene_id>/boundary', methods=['PUT'])
+def update_scene_boundary(scene_id: int):
+    """Adjust start_frame or end_frame by 1 frame; mirror change to the adjacent scene."""
+    data = request.get_json()
+    field = data.get('field')   # 'start_frame' | 'end_frame'
+    new_value = data.get('value')
+
+    if field not in ('start_frame', 'end_frame') or not isinstance(new_value, int):
+        return jsonify({'error': 'Invalid field or value'}), 400
+
+    conn = get_db_connection()
+
+    row = conn.execute("""
+        SELECT s.id, s.video_id, s.start_frame, s.end_frame,
+               v.fps, v.duration AS video_duration
+        FROM scenes s
+        JOIN videos v ON s.video_id = v.id
+        WHERE s.id = %s
+    """, (scene_id,)).fetchone()
+
+    if not row:
+        conn.close()
+        return jsonify({'error': 'Scene not found'}), 404
+
+    scene = dict(row)
+    fps = scene['fps'] or 24.0
+    video_total_frames = round((scene['video_duration'] or 0) * fps)
+    cur_start = scene['start_frame'] or 0
+    cur_end   = scene['end_frame']   or 0
+
+    if field == 'start_frame':
+        if new_value < 0:
+            conn.close()
+            return jsonify({'error': 'start_frame cannot be below 0'}), 400
+        if new_value >= cur_end:
+            conn.close()
+            return jsonify({'error': 'start_frame must be less than end_frame'}), 400
+    else:
+        if new_value <= cur_start:
+            conn.close()
+            return jsonify({'error': 'end_frame must be greater than start_frame'}), 400
+        if video_total_frames > 0 and new_value > video_total_frames:
+            conn.close()
+            return jsonify({'error': 'end_frame exceeds video length'}), 400
+
+    # Find the scene that shares the boundary being moved
+    adjacent = None
+    if field == 'start_frame':
+        # Previous scene ends where this one starts
+        adj_row = conn.execute("""
+            SELECT id, start_frame, end_frame FROM scenes
+            WHERE video_id = %s AND end_frame = %s AND id != %s
+        """, (scene['video_id'], cur_start, scene_id)).fetchone()
+        if adj_row:
+            adjacent = dict(adj_row)
+            if new_value <= adjacent['start_frame']:
+                conn.close()
+                return jsonify({'error': 'Adjacent scene would have no frames'}), 400
+    else:
+        # Next scene starts where this one ends
+        adj_row = conn.execute("""
+            SELECT id, start_frame, end_frame FROM scenes
+            WHERE video_id = %s AND start_frame = %s AND id != %s
+        """, (scene['video_id'], cur_end, scene_id)).fetchone()
+        if adj_row:
+            adjacent = dict(adj_row)
+            if new_value >= adjacent['end_frame']:
+                conn.close()
+                return jsonify({'error': 'Adjacent scene would have no frames'}), 400
+
+    new_start = new_value if field == 'start_frame' else cur_start
+    new_end   = new_value if field == 'end_frame'   else cur_end
+
+    conn.execute("""
+        UPDATE scenes
+        SET start_frame = %s, end_frame = %s,
+            start_time = %s, end_time = %s, duration = %s
+        WHERE id = %s
+    """, (new_start, new_end, new_start / fps, new_end / fps,
+          (new_end - new_start) / fps, scene_id))
+
+    adj_result = None
+    if adjacent:
+        if field == 'start_frame':
+            adj_new_start = adjacent['start_frame']
+            adj_new_end   = new_value
+        else:
+            adj_new_start = new_value
+            adj_new_end   = adjacent['end_frame']
+        conn.execute("""
+            UPDATE scenes
+            SET start_frame = %s, end_frame = %s,
+                start_time = %s, end_time = %s, duration = %s
+            WHERE id = %s
+        """, (adj_new_start, adj_new_end,
+              adj_new_start / fps, adj_new_end / fps,
+              (adj_new_end - adj_new_start) / fps, adjacent['id']))
+        adj_result = {'id': adjacent['id'], 'start_frame': adj_new_start, 'end_frame': adj_new_end}
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        'scene': {'id': scene_id, 'start_frame': new_start, 'end_frame': new_end},
+        'adjacent': adj_result,
+    })
+
+
 @app.route('/api/rating/<int:scene_id>', methods=['PUT'])
 def set_rating(scene_id: int):
     """Set or clear the star rating (1-3) for a scene."""
@@ -1207,16 +1345,19 @@ def delete_video(video_id: int):
 
 @app.route('/api/videos/<int:video_id>/export', methods=['GET'])
 def export_video_db(video_id: int):
-    """Export scenes, tags, and clips for a video as a downloadable zip."""
+    """Export video metadata, scenes, tags, and clips as a downloadable zip."""
     conn = get_db_connection()
 
-    video = conn.execute(
-        "SELECT id, path, name FROM videos WHERE id = %s", (video_id,)
-    ).fetchone()
+    video = conn.execute("""
+        SELECT id, path, name, hash, duration, fps, width, height, codec,
+               frame_offset, prompt
+        FROM videos WHERE id = %s
+    """, (video_id,)).fetchone()
     if not video:
         conn.close()
         return jsonify({"error": "Video not found"}), 404
 
+    video_meta = dict(video)
     video_stem = Path(video["path"]).stem
 
     # ── Scenes ───────────────────────────────────────────────
@@ -1260,9 +1401,10 @@ def export_video_db(video_id: int):
     # ── Build zip in memory ───────────────────────────────────
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("scenes.json",     json.dumps(scenes,     indent=2, default=str))
-        zf.writestr("scene_tags.json", json.dumps(scene_tags, indent=2, default=str))
-        zf.writestr("clips.json",      json.dumps(clips_data, indent=2, default=str))
+        zf.writestr("video.json",      json.dumps(video_meta,  indent=2, default=str))
+        zf.writestr("scenes.json",     json.dumps(scenes,      indent=2, default=str))
+        zf.writestr("scene_tags.json", json.dumps(scene_tags,  indent=2, default=str))
+        zf.writestr("clips.json",      json.dumps(clips_data,  indent=2, default=str))
     buf.seek(0)
 
     return Response(
@@ -1270,6 +1412,144 @@ def export_video_db(video_id: int):
         mimetype="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{video_stem}_db_export.zip"'},
     )
+
+
+@app.route('/api/videos/import', methods=['POST'])
+def import_video_db():
+    """Import a zip export as a brand-new video entry (creates video + scenes)."""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+
+    f = request.files['file']
+    if not f.filename.lower().endswith('.zip'):
+        return jsonify({'error': 'File must be a .zip'}), 400
+
+    try:
+        raw = f.read()
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            names = zf.namelist()
+            has_video_json = 'video.json' in names
+            video_meta  = json.loads(zf.read('video.json')) if has_video_json else None
+            scenes_data = json.loads(zf.read('scenes.json'))      if 'scenes.json'     in names else []
+            tags_data   = json.loads(zf.read('scene_tags.json'))  if 'scene_tags.json' in names else []
+            clips_data  = json.loads(zf.read('clips.json'))       if 'clips.json'      in names else []
+    except Exception as e:
+        return jsonify({'error': f'Failed to read zip: {e}'}), 400
+
+    conn = get_db_connection()
+
+    if not has_video_json:
+        # No video metadata — ask the client to pick an existing video
+        video_id_param = request.form.get('video_id')
+        if not video_id_param:
+            conn.close()
+            return jsonify({'needs_video_selection': True}), 422
+        try:
+            video_id = int(video_id_param)
+        except ValueError:
+            conn.close()
+            return jsonify({'error': 'Invalid video_id'}), 400
+        if not conn.execute("SELECT 1 FROM videos WHERE id = %s", (video_id,)).fetchone():
+            conn.close()
+            return jsonify({'error': 'Video not found'}), 404
+    else:
+        # Resolve path — append suffix if already taken by a different hash
+        orig_path = video_meta['path']
+        orig_hash = video_meta['hash']
+
+        existing_by_hash = conn.execute(
+            "SELECT id FROM videos WHERE hash = %s", (orig_hash,)
+        ).fetchone()
+        if existing_by_hash:
+            conn.close()
+            return jsonify({'error': 'A video with this file hash already exists in the database'}), 409
+
+        path = orig_path
+        if conn.execute("SELECT 1 FROM videos WHERE path = %s", (path,)).fetchone():
+            stem, ext = (path.rsplit('.', 1) + [''])[:2]
+            suffix = 1
+            while conn.execute("SELECT 1 FROM videos WHERE path = %s",
+                               (f"{stem}_import{suffix}.{ext}" if ext else f"{stem}_import{suffix}",)).fetchone():
+                suffix += 1
+            path = f"{stem}_import{suffix}.{ext}" if ext else f"{stem}_import{suffix}"
+
+        cur = conn.execute("""
+            INSERT INTO videos (path, hash, duration, fps, width, height, codec, frame_offset, name, prompt)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (
+            path, orig_hash,
+            video_meta.get('duration'), video_meta.get('fps'),
+            video_meta.get('width'),    video_meta.get('height'),
+            video_meta.get('codec'),    video_meta.get('frame_offset', 0),
+            video_meta.get('name'),     video_meta.get('prompt'),
+        ))
+        video_id = cur.fetchone()['id']
+
+    stats = {'scenes_created': 0, 'tags_added': 0, 'clip_items_added': 0}
+    id_map = {}  # exported scene id → new scene id
+
+    for scene in scenes_data:
+        try:
+            ins = conn.execute("""
+                INSERT INTO scenes
+                    (video_id, start_time, end_time, duration,
+                     start_frame, end_frame, caption, rating, blurhash)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (video_id, start_time, end_time) DO UPDATE
+                    SET caption  = EXCLUDED.caption,
+                        rating   = EXCLUDED.rating,
+                        blurhash = EXCLUDED.blurhash
+                RETURNING id
+            """, (
+                video_id,
+                scene['start_time'], scene['end_time'], scene['duration'],
+                scene.get('start_frame'), scene.get('end_frame'),
+                scene.get('caption'), scene.get('rating'), scene.get('blurhash'),
+            ))
+            new_id = ins.fetchone()['id']
+            id_map[scene['id']] = new_id
+            stats['scenes_created'] += 1
+        except Exception:
+            pass
+
+    for entry in tags_data:
+        old_id = entry.get('scene_id')
+        tag = (entry.get('tag') or '').strip()
+        if not tag or old_id not in id_map:
+            continue
+        cur_id = id_map[old_id]
+        if not conn.execute("SELECT 1 FROM scene_tags WHERE scene_id = %s AND tag = %s",
+                            (cur_id, tag)).fetchone():
+            conn.execute("INSERT INTO scene_tags (scene_id, tag) VALUES (%s, %s)", (cur_id, tag))
+            stats['tags_added'] += 1
+
+    for item in clips_data:
+        old_id    = item.get('scene_id')
+        clip_name = (item.get('clip_name') or '').strip()
+        if not clip_name or old_id not in id_map:
+            continue
+        cur_scene_id = id_map[old_id]
+
+        clip_row = conn.execute("SELECT id FROM clips WHERE name = %s", (clip_name,)).fetchone()
+        clip_id  = clip_row['id'] if clip_row else conn.execute(
+            "INSERT INTO clips (name) VALUES (%s) RETURNING id", (clip_name,)
+        ).fetchone()['id']
+
+        if not conn.execute("SELECT 1 FROM clip_items WHERE clip_id = %s AND scene_id = %s",
+                            (clip_id, cur_scene_id)).fetchone():
+            conn.execute(
+                "INSERT INTO clip_items (clip_id, scene_id, video_id, start_frame, end_frame, caption)"
+                " VALUES (%s, %s, %s, %s, %s, %s)",
+                (clip_id, cur_scene_id, video_id,
+                 item.get('start_frame', 0), item.get('end_frame', 0),
+                 item.get('caption', '')),
+            )
+            stats['clip_items_added'] += 1
+
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'video_id': video_id, 'stats': stats})
 
 
 @app.route('/api/bucket/<int:scene_id>', methods=['PUT'])

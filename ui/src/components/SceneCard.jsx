@@ -61,7 +61,7 @@ export default function SceneCard({ scene: initialScene, tagMap, visible, onTags
   const imgSrc = initialScene.previewUrl
     ?? (initialScene.preview_path
       ? `/preview/${initialScene.preview_path}`
-      : `/scene_preview/${initialScene.id}`)
+      : `/scene_preview/${initialScene.id}/card`)
 
   function handleCaptionChange(val) {
     setCaption(val)
@@ -144,6 +144,7 @@ export default function SceneCard({ scene: initialScene, tagMap, visible, onTags
       videoPath: initialScene.video_path,
       startFrame: initialScene.start_frame,
       endFrame: initialScene.end_frame,
+      videoTotalFrames: initialScene.video_total_frames || 0,
       startTime: initialScene.start_time,
       endTime: initialScene.end_time,
       fps: initialScene.fps,

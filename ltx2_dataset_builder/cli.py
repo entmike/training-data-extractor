@@ -200,6 +200,11 @@ def run_step(config: PipelineConfig, step: str) -> None:
         logger.info("Running: Compute scene blurhashes")
         compute_all_blurhashes(config)
 
+    elif step == "precache":
+        from .utils.precache import precache_previews
+        logger.info("Running: Pre-cache scene preview images")
+        precache_previews(config)
+
     elif step == "debug-scenes":
         from .utils.debug import generate_scene_previews
         logger.info("Running: Generate scene preview images")
@@ -212,7 +217,7 @@ def run_step(config: PipelineConfig, step: str) -> None:
         
     else:
         logger.error(f"Unknown step: {step}")
-        logger.info("Available steps: index, scenes, captions, buckets, candidates, quality, faces, crops, render, manifest, stats, debug-scenes, debug-candidates")
+        logger.info("Available steps: index, scenes, captions, buckets, candidates, quality, faces, crops, render, manifest, stats, precache, debug-scenes, debug-candidates")
 
 
 def main() -> int:
@@ -271,7 +276,7 @@ Examples:
     parser.add_argument(
         "--step",
         type=str,
-        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "debug-scenes", "debug-candidates"],
+        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "debug-scenes", "debug-candidates"],
         help="Run a specific pipeline step"
     )
     

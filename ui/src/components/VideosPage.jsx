@@ -24,6 +24,12 @@ export default function VideosPage({ tagMap, allTags }) {
   const [loading, setLoading] = useState(true)
   const [isGridLoading, setIsGridLoading] = useState(false)
   const [detailCollapsed, setDetailCollapsed] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState(null)  // null | { videoId, stats } | { error }
+  const importFileRef = useRef(null)
+  const [pendingImportFile, setPendingImportFile] = useState(null)  // File awaiting video selection
+  const [videoPickModalOpen, setVideoPickModalOpen] = useState(false)
+  const [videoPickId, setVideoPickId] = useState(null)
 
   // Filters
   const [activeIncludeTags, setActiveIncludeTags] = useState(new Set())
@@ -82,6 +88,51 @@ export default function VideosPage({ tagMap, allTags }) {
     else navigate('/videos', { replace: true })
   }
 
+  async function doImport(file, videoId = null) {
+    setImporting(true)
+    setImportResult(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      if (videoId != null) fd.append('video_id', videoId)
+      const r = await fetch('/api/videos/import', { method: 'POST', body: fd })
+      const d = await r.json()
+      if (r.status === 422 && d.needs_video_selection) {
+        // Zip has no video.json — ask user to pick a video
+        setPendingImportFile(file)
+        setVideoPickId(videos[0]?.id ?? null)
+        setVideoPickModalOpen(true)
+        return
+      }
+      if (!r.ok) { setImportResult({ error: d.error || 'Import failed' }); return }
+      const listRes = await fetch('/api/videos')
+      const listData = await listRes.json()
+      const vids = (listData.videos || []).slice().sort((a, b) =>
+        (a.name || a.path).localeCompare(b.name || b.path)
+      )
+      setVideos(vids)
+      setImportResult({ videoId: d.video_id, stats: d.stats })
+      navigate(`/videos/${d.video_id}`, { replace: true })
+    } catch { setImportResult({ error: 'Request failed' }) }
+    finally { setImporting(false) }
+  }
+
+  async function handleImport(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    await doImport(file)
+  }
+
+  async function handleVideoPickConfirm() {
+    const file = pendingImportFile
+    const vid = videoPickId
+    setVideoPickModalOpen(false)
+    setPendingImportFile(null)
+    if (!file || !vid) return
+    await doImport(file, vid)
+  }
+
   function openDropdown(mode, ref) {
     const rect = ref.current.getBoundingClientRect()
     setDropdown({ mode, pos: { top: rect.bottom + window.scrollY + 4, left: rect.left + window.scrollX } })
@@ -118,12 +169,37 @@ export default function VideosPage({ tagMap, allTags }) {
             <div
               key={v.id}
               className={`video-sidebar-item${v.id === videoId ? ' video-sidebar-item--active' : ''}`}
-              onClick={() => navigate(`/videos/${v.id}`)}
+              onClick={() => { setImportResult(null); navigate(`/videos/${v.id}`) }}
             >
               <span className="video-sidebar-name">{v.name}</span>
               <span className="video-sidebar-count">{v.scene_count}</span>
             </div>
           ))}
+
+          {/* Import from zip */}
+          <div className="sidebar-import-zone">
+            <input
+              ref={importFileRef}
+              type="file"
+              accept=".zip"
+              style={{ display: 'none' }}
+              onChange={handleImport}
+            />
+            <button
+              className="sidebar-import-btn"
+              disabled={importing}
+              onClick={() => { setImportResult(null); importFileRef.current?.click() }}
+            >{importing ? 'Importing…' : '+ Import from zip'}</button>
+            {importResult && (
+              importResult.error
+                ? <div className="import-result import-result--error">{importResult.error}</div>
+                : <div className="import-result import-result--ok">
+                    {importResult.stats.scenes_created} scenes
+                    &nbsp;·&nbsp;{importResult.stats.tags_added} tags
+                    &nbsp;·&nbsp;{importResult.stats.clip_items_added} clips
+                  </div>
+            )}
+          </div>
         </div>
 
         {/* Right panel */}
@@ -262,6 +338,31 @@ export default function VideosPage({ tagMap, allTags }) {
           onSelect={handleTagSelect}
           onClose={() => setDropdown(null)}
         />,
+        document.body
+      )}
+
+      {videoPickModalOpen && createPortal(
+        <div className="modal-overlay" onClick={() => setVideoPickModalOpen(false)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()}>
+            <div className="modal-title">Select video for import</div>
+            <p className="modal-body-text">
+              This zip has no <code>video.json</code>. Which video do these scenes belong to?
+            </p>
+            <select
+              className="modal-video-select"
+              value={videoPickId ?? ''}
+              onChange={e => setVideoPickId(Number(e.target.value))}
+            >
+              {videos.map(v => (
+                <option key={v.id} value={v.id}>{v.name || v.path}</option>
+              ))}
+            </select>
+            <div className="modal-actions">
+              <button className="modal-btn modal-btn--cancel" onClick={() => setVideoPickModalOpen(false)}>Cancel</button>
+              <button className="modal-btn modal-btn--confirm" disabled={!videoPickId} onClick={handleVideoPickConfirm}>Import</button>
+            </div>
+          </div>
+        </div>,
         document.body
       )}
     </div>

@@ -8,7 +8,7 @@ export default function SceneThumbnail({ scene, tagMap, onPlay }) {
 
   const imgSrc = scene.preview_path
     ? `/preview/${scene.preview_path}`
-    : `/scene_preview/${scene.id}`
+    : `/scene_preview/${scene.id}/thumb`
 
   function playVideo() {
     if (onPlay) { onPlay(); return }
@@ -17,6 +17,7 @@ export default function SceneThumbnail({ scene, tagMap, onPlay }) {
       videoPath: scene.video_path,
       startFrame: scene.start_frame,
       endFrame: scene.end_frame,
+      videoTotalFrames: scene.video_total_frames || 0,
       startTime: scene.start_time,
       endTime: scene.end_time,
       fps: scene.fps,

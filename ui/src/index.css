@@ -187,6 +187,10 @@ html, body {
   cursor: pointer;
 }
 .manage-menu-item:hover { background: rgba(139,166,247,0.1); color: var(--text); }
+.manage-menu-item:disabled { opacity: .5; cursor: not-allowed; }
+.manage-menu-sep { height: 1px; background: var(--border); margin: 4px 0; }
+.manage-menu-item--danger { color: #f87171; }
+.manage-menu-item--danger:hover { background: rgba(248,113,113,0.12); color: #fca5a5; }
 
 /* ── Tag filter bar ──────────────────────────────────── */
 .tag-filter-bar {
@@ -999,6 +1003,25 @@ html, body {
   gap: 12px;
 }
 
+.modal-title { font-size: 15px; font-weight: 600; color: var(--text-heading); }
+.modal-body-text { font-size: 13px; color: var(--text-dim); margin: 0; }
+.modal-body-text code { color: var(--text); background: var(--bg-hover); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+.modal-video-select {
+  width: 100%;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.modal-btn { padding: 6px 16px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; border: none; }
+.modal-btn--cancel { background: var(--bg-hover); color: var(--text-dim); }
+.modal-btn--cancel:hover { color: var(--text); }
+.modal-btn--confirm { background: var(--accent); color: #fff; }
+.modal-btn--confirm:disabled { opacity: .45; cursor: not-allowed; }
+
 .modal-header {
   display: flex;
   justify-content: space-between;
@@ -1171,6 +1194,8 @@ html, body {
   border-right: 1px solid var(--border);
   overflow-y: auto;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
 }
 .video-sidebar-item {
   display: flex;
@@ -1187,6 +1212,28 @@ html, body {
   border-left-color: var(--blue);
 }
 .video-sidebar-item--skeleton { pointer-events: none; }
+.sidebar-import-zone {
+  padding: 10px 10px 12px;
+  border-top: 1px solid var(--border);
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sidebar-import-btn {
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 12px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+  text-align: center;
+}
+.sidebar-import-btn:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
+.sidebar-import-btn:disabled { opacity: .5; cursor: default; }
 .video-sidebar-name {
   flex: 1;
   overflow: hidden;
@@ -1344,6 +1391,15 @@ html, body {
   color: var(--text-muted);
   flex: 1;
 }
+.import-result {
+  font-size: 11px;
+  margin-top: 6px;
+  padding: 5px 10px;
+  border-radius: 5px;
+}
+.import-result--ok  { background: rgba(34,197,94,.1); color: #86efac; }
+.import-result--error { background: rgba(248,81,73,.1); color: #f85149; }
+.import-warn { color: #fbbf24; }
 .video-detail-label-hint {
   font-size: 10px;
   color: var(--text-dim);
@@ -1588,6 +1644,54 @@ html, body {
   letter-spacing: 0.02em;
 }
 .vc-frame-info strong { color: var(--text-secondary); font-weight: 600; }
+
+/* ── Scene boundary adjusters ─────────────────────── */
+.scene-boundary-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.scene-boundary-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.scene-boundary-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 28px;
+  text-align: right;
+}
+.scene-boundary-value {
+  font-size: 12px;
+  font-family: monospace;
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 52px;
+  text-align: center;
+}
+.sba-btn {
+  padding: 2px 7px;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+.sba-btn:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
+.sba-btn:disabled { opacity: .35; cursor: default; }
+.scene-boundary-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+}
+.scene-boundary-error {
+  font-size: 11px;
+  color: var(--red, #f85149);
+}
 
 /* ── Scene split prompt ───────────────────────── */
 .scene-split-prompt {

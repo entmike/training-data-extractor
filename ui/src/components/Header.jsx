@@ -2,6 +2,13 @@ import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate, useLocation } from 'react-router-dom'
 
+function fmtBytes(b) {
+  if (b < 1024) return `${b} B`
+  if (b < 1024 ** 2) return `${(b / 1024).toFixed(1)} KB`
+  if (b < 1024 ** 3) return `${(b / 1024 ** 2).toFixed(1)} MB`
+  return `${(b / 1024 ** 3).toFixed(2)} GB`
+}
+
 const ROUTE_TITLES = [
   [/^\/videos/, 'Videos'],
   [/^\/clips/,  'Clips'],
@@ -30,8 +37,57 @@ export default function Header({ isLoading, onManageTags, onManageVideos }) {
   )
 }
 
+function ClearCacheModal({ sizeLabel, onConfirm, onCancel }) {
+  const [typed, setTyped] = useState('')
+  const inputRef = useRef(null)
+
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  function onKey(e) {
+    if (e.key === 'Escape') onCancel()
+    if (e.key === 'Enter' && typed === sizeLabel) onConfirm()
+  }
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-box" style={{ maxWidth: 380 }} onClick={e => e.stopPropagation()}>
+        <div className="modal-title">Clear preview cache?</div>
+        <p className="modal-body-text">
+          This will delete all cached preview images ({sizeLabel}). They will be regenerated on demand.
+        </p>
+        <p className="modal-body-text">
+          Type <code>{sizeLabel}</code> to confirm:
+        </p>
+        <input
+          ref={inputRef}
+          className="modal-video-select"
+          value={typed}
+          onChange={e => setTyped(e.target.value)}
+          onKeyDown={onKey}
+          placeholder={sizeLabel}
+          spellCheck={false}
+        />
+        <div className="modal-actions">
+          <button className="modal-btn modal-btn--cancel" onClick={onCancel}>Cancel</button>
+          <button
+            className="modal-btn modal-btn--confirm"
+            style={{ background: typed === sizeLabel ? '#ef4444' : undefined }}
+            disabled={typed !== sizeLabel}
+            onClick={onConfirm}
+          >
+            Clear Cache
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 function ManageMenu({ onManageTags, onManageVideos, onManageClips, disabled }) {
   const [open, setOpen] = useState(false)
+  const [cacheSize, setCacheSize] = useState(null)  // null = unknown, false = clearing
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const btnRef = useRef(null)
   const dropdownRef = useRef(null)
 
@@ -45,6 +101,31 @@ function ManageMenu({ onManageTags, onManageVideos, onManageClips, disabled }) {
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
   }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    setCacheSize(null)
+    fetch('/api/cache/previews')
+      .then(r => r.json())
+      .then(d => setCacheSize(d.size_bytes ?? 0))
+      .catch(() => setCacheSize(0))
+  }, [open])
+
+  function openConfirm() {
+    setOpen(false)
+    setConfirmOpen(true)
+  }
+
+  async function clearCache() {
+    setConfirmOpen(false)
+    setCacheSize(false)
+    await fetch('/api/cache/previews', { method: 'DELETE' })
+    setCacheSize(0)
+  }
+
+  const cacheSizeLabel = cacheSize === null ? '…'
+    : cacheSize === false ? 'Clearing…'
+    : fmtBytes(cacheSize)
 
   const items = [
     { label: 'Tags', action: onManageTags },
@@ -80,8 +161,24 @@ function ManageMenu({ onManageTags, onManageVideos, onManageClips, disabled }) {
               {label}
             </button>
           ))}
+          <div className="manage-menu-sep" />
+          <button
+            className="manage-menu-item manage-menu-item--danger"
+            disabled={cacheSize === null || cacheSize === false || cacheSize === 0}
+            onClick={openConfirm}
+          >
+            Clear Cache ({cacheSizeLabel})
+          </button>
         </div>,
         document.body
+      )}
+
+      {confirmOpen && cacheSize > 0 && (
+        <ClearCacheModal
+          sizeLabel={fmtBytes(cacheSize)}
+          onConfirm={clearCache}
+          onCancel={() => setConfirmOpen(false)}
+        />
       )}
     </div>
   )

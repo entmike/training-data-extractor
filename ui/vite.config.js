@@ -1,6 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const flaskPort = process.env.FLASK_PORT || 5000
+const backend = `http://localhost:${flaskPort}`
+
 export default defineConfig({
   plugins: [react()],
   appType: 'spa',
@@ -8,13 +11,13 @@ export default defineConfig({
     host: '0.0.0.0',
     allowedHosts: ['trainer'],
     proxy: {
-      '/api': 'http://localhost:5000',
-      '/preview': 'http://localhost:5000',
-      '/scene_preview': 'http://localhost:5000',
-      '/clip': 'http://localhost:5000',
-      '/bucket_clip': 'http://localhost:5000',
-      '/bucket_waveform': 'http://localhost:5000',
-      '/waveform': 'http://localhost:5000',
+      '/api': backend,
+      '/preview': backend,
+      '/scene_preview': backend,
+      '/clip': backend,
+      '/bucket_clip': backend,
+      '/bucket_waveform': backend,
+      '/waveform': backend,
     },
   },
   build: {

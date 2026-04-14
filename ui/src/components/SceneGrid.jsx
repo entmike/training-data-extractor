@@ -105,7 +105,7 @@ export default function SceneGrid({ videoFilter, activeIncludeTags, activeExclud
     if (!el) return
     const obs = new IntersectionObserver(entries => {
       if (entries[0].isIntersecting) loadNext()
-    }, { rootMargin: '400px' })
+    }, { rootMargin: '1200px' })
     obs.observe(el)
     return () => obs.disconnect()
   }, [loadNext])

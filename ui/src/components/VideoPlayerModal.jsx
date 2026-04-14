@@ -17,7 +17,7 @@ export default function VideoPlayerModal({ player, onClose }) {
   const mouseDownOnOverlay = useRef(false)
 
   const { tagMap, refreshTags } = useContext(AppContext)
-  const { sceneId, videoPath, startTime, endTime, fps = 24, frameOffset = 0, startFrame } = player
+  const { sceneId, videoPath, startTime, endTime, fps = 24, frameOffset = 0, startFrame, endFrame: initialEndFrame, videoTotalFrames = 0 } = player
 
   const duration = endTime - startTime
   const title = `${videoPath?.split('/').pop()?.replace(/\.[^.]+$/, '') ?? ''} — ${formatTime(startTime)} (${duration.toFixed(1)}s)`
@@ -64,6 +64,12 @@ export default function VideoPlayerModal({ player, onClose }) {
   // ── Split state ────────────────────────────────────────
   const [splitting,    setSplitting]    = useState(false)
   const [splitResult,  setSplitResult]  = useState(null)  // { count } on success
+
+  // ── Scene boundary state ───────────────────────────────
+  const [localStartFrame, setLocalStartFrame] = useState(startFrame ?? 0)
+  const [localEndFrame,   setLocalEndFrame]   = useState(initialEndFrame ?? 0)
+  const [adjustingBound,  setAdjustingBound]  = useState(false)
+  const [boundaryError,   setBoundaryError]   = useState('')
 
   // ── Caption / tag state ────────────────────────────────
   const rawCaption = (player.caption && !player.caption.startsWith('__')) ? player.caption : ''
@@ -486,6 +492,24 @@ export default function VideoPlayerModal({ player, onClose }) {
     }
   }
 
+  // ── Scene boundary adjustment ──────────────────────────
+  async function adjustBoundary(field, newValue) {
+    setAdjustingBound(true)
+    setBoundaryError('')
+    try {
+      const r = await fetch(`/api/scenes/${sceneId}/boundary`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ field, value: newValue }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setBoundaryError(d.error || 'Failed'); return }
+      if (field === 'start_frame') setLocalStartFrame(d.scene.start_frame)
+      else                          setLocalEndFrame(d.scene.end_frame)
+    } catch { setBoundaryError('Request failed') }
+    finally { setAdjustingBound(false) }
+  }
+
   // ── Derived display values ─────────────────────────────
   const showBucketMode = !!bucketData && !playEntireScene
   const bucketRelTime  = showBucketMode ? Math.max(0, currentTime - bucketOffset) : 0
@@ -705,6 +729,46 @@ export default function VideoPlayerModal({ player, onClose }) {
               </button>
             )}
           </div>
+
+          {/* Scene boundary adjusters */}
+          {localStartFrame != null && localEndFrame != null && (
+            <div className="scene-boundary-row">
+              <div className="scene-boundary-item">
+                <span className="scene-boundary-label">Start</span>
+                <button
+                  className="sba-btn"
+                  disabled={adjustingBound || localStartFrame <= 0}
+                  onClick={() => adjustBoundary('start_frame', localStartFrame - 1)}
+                  title="Decrease start frame by 1"
+                >−1f</button>
+                <span className="scene-boundary-value">{localStartFrame}</span>
+                <button
+                  className="sba-btn"
+                  disabled={adjustingBound || localStartFrame >= localEndFrame - 1}
+                  onClick={() => adjustBoundary('start_frame', localStartFrame + 1)}
+                  title="Increase start frame by 1"
+                >+1f</button>
+              </div>
+              <div className="scene-boundary-sep" />
+              <div className="scene-boundary-item">
+                <span className="scene-boundary-label">End</span>
+                <button
+                  className="sba-btn"
+                  disabled={adjustingBound || localEndFrame <= localStartFrame + 1}
+                  onClick={() => adjustBoundary('end_frame', localEndFrame - 1)}
+                  title="Decrease end frame by 1"
+                >−1f</button>
+                <span className="scene-boundary-value">{localEndFrame}</span>
+                <button
+                  className="sba-btn"
+                  disabled={adjustingBound || (videoTotalFrames > 0 && localEndFrame >= videoTotalFrames)}
+                  onClick={() => adjustBoundary('end_frame', localEndFrame + 1)}
+                  title="Increase end frame by 1"
+                >+1f</button>
+              </div>
+              {boundaryError && <span className="scene-boundary-error">{boundaryError}</span>}
+            </div>
+          )}
 
           {/* Rating */}
           <div className="star-rating">

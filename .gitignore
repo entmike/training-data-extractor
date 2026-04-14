@@ -7,10 +7,14 @@ __pycache__/
 venv/
 
 # Project runtime data
-.cache/
+.cache/*
+.cache-*/
 config.yaml
+config-*.yaml
 vids/
+vids-*/
 dataset/
+db_backups/
 
 # Node
 ui/node_modules/
@@ -26,3 +30,4 @@ ui/dist/
 !ltx2_dataset_builder/VERSION
 
 .env
+.env-*

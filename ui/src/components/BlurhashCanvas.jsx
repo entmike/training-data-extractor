@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { decode } from 'blurhash'
 
-const BLURHASH_ENABLED = false
+const BLURHASH_ENABLED = true
 
 export function blurhashToDataURL(hash) {
   if (!BLURHASH_ENABLED || !hash) return null
