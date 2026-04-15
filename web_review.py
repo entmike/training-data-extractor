@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -215,6 +216,10 @@ _PREVIEW_SIZES = {
     'card':  640,   # ~1920px composite — scene card previews
 }
 
+# Limit concurrent FFmpeg preview generation so we don't saturate all Flask
+# threads and starve API requests when many uncached scenes are visible at once.
+_preview_semaphore = threading.Semaphore(3)
+
 def _serve_scene_preview(scene_id: int, size: Optional[str]) -> Response:
     """Shared logic for all scene_preview routes."""
     conn = get_db_connection()
@@ -246,14 +251,20 @@ def _serve_scene_preview(scene_id: int, size: Optional[str]) -> Response:
     if cache_path.exists():
         return send_file(cache_path, mimetype='image/jpeg')
 
-    preview_bytes = generate_scene_preview(
-        video_path=video_path,
-        start_frame=start_frame,
-        end_frame=end_frame,
-        fps=fps,
-        frame_offset=frame_offset,
-        frame_width=frame_width,
-    )
+    with _preview_semaphore:
+        # Re-check cache after acquiring semaphore — another thread may have
+        # generated it while we were waiting.
+        if cache_path.exists():
+            return send_file(cache_path, mimetype='image/jpeg')
+
+        preview_bytes = generate_scene_preview(
+            video_path=video_path,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            fps=fps,
+            frame_offset=frame_offset,
+            frame_width=frame_width,
+        )
 
     if preview_bytes is None:
         return jsonify({"error": "Failed to generate preview"}), 500
@@ -512,7 +523,7 @@ def get_scenes():
     """Return paginated scene data as JSON for infinite scroll."""
     video_filter = request.args.get('video', '')
     page = max(1, int(request.args.get('page', 1) or 1))
-    limit = min(50, int(request.args.get('limit', 50) or 50))
+    limit = min(500, int(request.args.get('limit', 200) or 200))
 
     include_tags = [t for t in request.args.get('include_tags', '').split(',') if t]
     exclude_tags = [t for t in request.args.get('exclude_tags', '').split(',') if t]
@@ -578,6 +589,11 @@ def get_scenes():
 
     offset = (page - 1) * limit
     
+    order_by = (
+        "s.start_frame ASC, s.video_id, s.id" if sort == "frames_asc"
+        else "s.start_frame DESC, s.video_id, s.id" if sort == "frames_desc"
+        else "s.video_id, s.id"
+    )
     base_query = f"""
         SELECT s.*, v.path as video_path, v.fps, v.frame_offset, v.duration as video_duration,
             (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
@@ -585,16 +601,22 @@ def get_scenes():
             (SELECT STRING_AGG(st.tag, '|') FROM scene_tags st WHERE st.scene_id = s.id) as tags_concat
         {scenes_from}
         {where_clause}
-        ORDER BY {
-            "s.start_frame ASC, s.video_id, s.id" if sort == "frames_asc"
-            else "s.start_frame DESC, s.video_id, s.id" if sort == "frames_desc"
-            else "s.video_id, s.id"
-        }
+        ORDER BY {order_by}
         LIMIT {limit} OFFSET {offset}
     """
     
     rows = conn.execute(base_query, params).fetchall()
     conn.close()
+
+    # Build preview lookup once for all scenes in this batch (avoid per-scene glob)
+    preview_lookup: dict[tuple, str] = {}
+    if DEBUG_SCENES_DIR.exists():
+        for f in DEBUG_SCENES_DIR.iterdir():
+            if f.suffix != '.png':
+                continue
+            m = re.search(r'^(.+)_scene_(\d+)', f.stem)
+            if m:
+                preview_lookup[(m.group(1), int(m.group(2)))] = f.name
 
     scenes = []
     for row in rows:
@@ -606,7 +628,7 @@ def get_scenes():
         t = int(d['start_time'])
         caption = d.get('caption') or ''
         tags_raw = d.get('tags_concat') or ''
-        preview_path = find_preview_for_scene(video_name, scene_idx, d.get('start_frame'))
+        preview_path = preview_lookup.get((video_name, scene_idx))
         scenes.append({
             'id': d['id'],
             'video_name': video_name,
@@ -852,87 +874,76 @@ def get_tag_suggestions(scene_id: int):
         video_id = scene["video_id"]
         tag_scores = {}
         
-        existing_tags = [row["tag"] for row in conn.execute(
+        existing_tags = set(row["tag"] for row in conn.execute(
             "SELECT tag FROM scene_tags WHERE scene_id = %s", (scene_id,)
-        ).fetchall()]
-        
-        scene_recent = conn.execute("""
-            SELECT tag, created_at
-            FROM scene_tags
-            WHERE scene_id = %s
-            ORDER BY created_at DESC
-            LIMIT 50
-        """, (scene_id,)).fetchall()
-        
-        for row in scene_recent:
-            tag = row["tag"]
+        ).fetchall())
+
+        def bump(tag, delta, source):
             if tag not in tag_scores:
                 tag_scores[tag] = {"score": 0.0, "sources": set()}
-            tag_scores[tag]["score"] += 3.0
-            tag_scores[tag]["sources"].add("scene_recent")
-        
-        video_co_occur = conn.execute("""
-            SELECT st2.tag, COUNT(*) as co_occurrence
-            FROM scene_tags st1
-            JOIN scene_tags st2 ON st1.scene_id = st2.scene_id
-            WHERE st1.scene_id = %s
-              AND st2.tag != st1.tag
-              AND st2.scene_id != %s
-            GROUP BY st2.tag
-            ORDER BY co_occurrence DESC
-            LIMIT 20
-        """, (scene_id, scene_id)).fetchall()
-        
-        for row in video_co_occur:
-            tag = row["tag"]
-            if tag not in tag_scores:
-                tag_scores[tag] = {"score": 0.0, "sources": set()}
-            tag_scores[tag]["score"] += 2.5 + (row["co_occurrence"] * 0.5)
-            tag_scores[tag]["sources"].add("video_co_occur")
-        
-        global_popular = conn.execute("""
-            SELECT tag, COUNT(*) as freq
-            FROM scene_tags
-            GROUP BY tag
+            tag_scores[tag]["score"] += delta
+            tag_scores[tag]["sources"].add(source)
+
+        # Tags already on this scene (boost so they stay at top when re-opening dropdown)
+        for tag in existing_tags:
+            bump(tag, 5.0, "scene_existing")
+
+        # Most popular tags within this video — primary signal
+        video_popular = conn.execute("""
+            SELECT st.tag, COUNT(*) AS freq
+            FROM scene_tags st
+            JOIN scenes s ON st.scene_id = s.id
+            WHERE s.video_id = %s AND st.scene_id != %s
+            GROUP BY st.tag
             ORDER BY freq DESC
             LIMIT 50
-        """).fetchall()
-        
-        for row in global_popular:
-            tag = row["tag"]
-            if tag not in tag_scores:
-                tag_scores[tag] = {"score": 0.0, "sources": set()}
-            tag_scores[tag]["score"] += 2.0 + (row["freq"] * 0.1)
-            tag_scores[tag]["sources"].add("global_popular")
-        
-        global_recent = conn.execute("""
-            SELECT tag, MAX(created_at) as last_used
-            FROM scene_tags
-            GROUP BY tag
+        """, (video_id, scene_id)).fetchall()
+
+        for row in video_popular:
+            bump(row["tag"], 3.0 + row["freq"] * 0.3, "video_popular")
+
+        # Tags co-occurring with this scene's tags in the same video — secondary signal
+        if existing_tags:
+            placeholders = ",".join(["%s"] * len(existing_tags))
+            video_co_occur = conn.execute(f"""
+                SELECT st2.tag, COUNT(*) AS co_occurrence
+                FROM scene_tags st1
+                JOIN scene_tags st2 ON st1.scene_id = st2.scene_id
+                JOIN scenes s ON st1.scene_id = s.id
+                WHERE st1.tag IN ({placeholders})
+                  AND st2.tag NOT IN ({placeholders})
+                  AND s.video_id = %s
+                  AND st1.scene_id != %s
+                GROUP BY st2.tag
+                ORDER BY co_occurrence DESC
+                LIMIT 20
+            """, list(existing_tags) + list(existing_tags) + [video_id, scene_id]).fetchall()
+
+            for row in video_co_occur:
+                bump(row["tag"], 2.0 + row["co_occurrence"] * 0.5, "video_co_occur")
+
+        # Recency bonus within this video — most recently tagged scenes in the same video
+        from datetime import datetime, timezone
+        video_recent = conn.execute("""
+            SELECT st.tag, MAX(st.created_at) AS last_used
+            FROM scene_tags st
+            JOIN scenes s ON st.scene_id = s.id
+            WHERE s.video_id = %s AND st.scene_id != %s
+            GROUP BY st.tag
             ORDER BY last_used DESC
             LIMIT 50
-        """).fetchall()
-        
-        from datetime import datetime, timezone
-        for row in global_recent:
-            tag = row["tag"]
-            if tag not in tag_scores:
-                tag_scores[tag] = {"score": 0.0, "sources": set()}
+        """, (video_id, scene_id)).fetchall()
+
+        for row in video_recent:
             last_used = row["last_used"]
             if last_used:
-                # psycopg2 returns datetime objects; SQLite returned strings
-                if not hasattr(last_used, 'total_seconds'):
-                    if not hasattr(last_used, 'tzinfo'):
-                        last_used = datetime.fromisoformat(str(last_used).replace('Z', '+00:00'))
+                if not hasattr(last_used, 'tzinfo'):
+                    last_used = datetime.fromisoformat(str(last_used).replace('Z', '+00:00'))
                 now = datetime.now(timezone.utc)
                 if last_used.tzinfo is None:
                     last_used = last_used.replace(tzinfo=timezone.utc)
                 days_ago = (now - last_used).total_seconds() / 86400
-                weight = 1.5 - (days_ago * 0.01)
-                tag_scores[tag]["score"] += max(0, weight)
-            else:
-                tag_scores[tag]["score"] += 1.5
-            tag_scores[tag]["sources"].add("global_recent")
+                bump(row["tag"], max(0.0, 1.0 - days_ago * 0.02), "video_recent")
         
         # Load all tag definitions in one query to avoid N+1
         tag_defs = {

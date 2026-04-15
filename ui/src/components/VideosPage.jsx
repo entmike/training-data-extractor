@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useContext } from 'react'
+import { useState, useEffect, useRef, useContext, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate, useParams } from 'react-router-dom'
 import { AppContext } from '../context'
@@ -149,6 +149,13 @@ export default function VideosPage({ tagMap, allTags }) {
     }
     setDropdown(null)
   }
+
+  // When a video is selected use video-scoped tags for scene-card suggestions;
+  // fall back to global tagMap only while videoTags hasn't loaded yet.
+  const effectiveTagMap = useMemo(() => {
+    if (!videoId || videoTags.length === 0) return tagMap
+    return Object.fromEntries(videoTags.map(t => [t.tag, t]))
+  }, [videoId, videoTags, tagMap])
 
   const usedTags = new Set([...activeIncludeTags, ...activeExcludeTags])
   const availableTags = videoTags.filter(t => !usedTags.has(t.tag))
@@ -319,7 +326,7 @@ export default function VideosPage({ tagMap, allTags }) {
                   includeMode={includeMode}
                   minFrames={minFrames}
                   ratingFilter={ratingFilter}
-                  tagMap={tagMap}
+                  tagMap={effectiveTagMap}
                   onLoadingChange={setIsGridLoading}
                   totalCount={selected.scene_count}
                 />

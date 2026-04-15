@@ -3,7 +3,7 @@ import SceneCardGrid from './SceneCardGrid'
 import SceneCardSkeleton from './SceneCardSkeleton'
 import ViewToggle from './ViewToggle'
 
-const BATCH_SIZE = 50
+const BATCH_SIZE = 200
 
 export default function SceneGrid({ videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, tagMap, onLoadingChange, totalCount }) {
   const [scenes, setScenes] = useState([])
@@ -16,6 +16,7 @@ export default function SceneGrid({ videoFilter, activeIncludeTags, activeExclud
   const hasMoreRef = useRef(true)
   const pageRef = useRef(1)
   const fetchGenRef = useRef(0)
+  const sentinelVisibleRef = useRef(false)
 
   // filterKey drives scene-list reset: any server-side filter param change resets the list
   const filterKey = [
@@ -77,9 +78,20 @@ export default function SceneGrid({ videoFilter, activeIncludeTags, activeExclud
       const data = await r.json()
       if (fetchGenRef.current !== gen) return
       if (data.scenes.length === 0 && pageRef.current === 1) setIsEmpty(true)
-      setScenes(prev => [...prev, ...data.scenes])
       hasMoreRef.current = data.has_more
       pageRef.current += 1
+
+      // Append in chunks of 50 across animation frames to avoid a large
+      // synchronous render that blocks the main thread.
+      const CHUNK = 50
+      const chunks = []
+      for (let i = 0; i < data.scenes.length; i += CHUNK) chunks.push(data.scenes.slice(i, i + CHUNK))
+      for (let ci = 0; ci < chunks.length; ci++) {
+        if (fetchGenRef.current !== gen) break
+        if (ci > 0) await new Promise(r => requestAnimationFrame(r))
+        if (fetchGenRef.current !== gen) break
+        setScenes(prev => [...prev, ...chunks[ci]])
+      }
     } catch (e) {
       console.error('Failed to load scenes', e)
     } finally {
@@ -87,6 +99,9 @@ export default function SceneGrid({ videoFilter, activeIncludeTags, activeExclud
         loadingRef.current = false
         setIsLoading(false)
         onLoadingChange?.(false)
+        // Re-trigger if sentinel is still in view — the observer won't re-fire
+        // because intersection state didn't change during chunked rendering.
+        if (sentinelVisibleRef.current && hasMoreRef.current) loadNext()
       }
     }
   }, [videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, sort])
@@ -103,9 +118,11 @@ export default function SceneGrid({ videoFilter, activeIncludeTags, activeExclud
   useEffect(() => {
     const el = sentinelRef.current
     if (!el) return
+    const root = el.closest('.videos-scenes-panel') ?? null
     const obs = new IntersectionObserver(entries => {
+      sentinelVisibleRef.current = entries[0].isIntersecting
       if (entries[0].isIntersecting) loadNext()
-    }, { rootMargin: '1200px' })
+    }, { root, rootMargin: '4000px' })
     obs.observe(el)
     return () => obs.disconnect()
   }, [loadNext])

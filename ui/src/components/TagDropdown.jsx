@@ -19,19 +19,22 @@ export default function TagDropdown({ position, suggestions = [], onSelect, onCl
 
   const allSuggestions = [...suggestions, ...fetchedSuggestions]
   
-  // Deduplicate by tag, keeping the one with the highest score
+  // Deduplicate by tag, preferring scored items (from API) over unscored (from prop),
+  // and higher scores over lower scores.
   const deduped = new Map()
   for (const tag of allSuggestions) {
     const existing = deduped.get(tag.tag)
-    if (!existing || (tag.score !== undefined && tag.score > existing.score)) {
+    if (!existing) {
+      deduped.set(tag.tag, tag)
+    } else if (tag.score !== undefined && (existing.score === undefined || tag.score > existing.score)) {
       deduped.set(tag.tag, tag)
     }
   }
-  
-  const filtered = [...deduped.values()].filter(t =>
-    t.tag.includes(query.toLowerCase()) ||
-    (t.display_name || '').toLowerCase().includes(query.toLowerCase())
-  )
+
+  const q = query.toLowerCase()
+  const filtered = [...deduped.values()]
+    .filter(t => t.tag.includes(q) || (t.display_name || '').toLowerCase().includes(q))
+    .sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
 
   // If user typed something not in the list, offer it as a new tag
   const options = query.trim() && !allSuggestions.some(t => t.tag === query.toLowerCase())
