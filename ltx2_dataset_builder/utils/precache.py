@@ -45,7 +45,7 @@ def _generate_one(
     Generate and cache one preview image.
     Returns (scene_id, size, was_generated).
     """
-    cache_path = previews_dir / _cache_filename(scene_id, size)
+    cache_path = previews_dir / video_path.stem / _cache_filename(scene_id, size)
     if cache_path.exists():
         return scene_id, size, False
 

@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef, useContext } from 'react'
+import { useState, useEffect, useRef, useContext, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { AppContext } from '../context'
 import TagDropdown from './TagDropdown'
 import FrameCountStepper from './FrameCountStepper'
+import { blurhashToDataURL } from './BlurhashCanvas'
 
 export default function VideoPlayerModal({ player, onClose }) {
   const videoRef      = useRef(null)
@@ -17,7 +18,8 @@ export default function VideoPlayerModal({ player, onClose }) {
   const mouseDownOnOverlay = useRef(false)
 
   const { tagMap, refreshTags } = useContext(AppContext)
-  const { sceneId, videoPath, startTime, endTime, fps = 24, frameOffset = 0, startFrame, endFrame: initialEndFrame, videoTotalFrames = 0 } = player
+  const { sceneId, videoPath, startTime, endTime, fps = 24, frameOffset = 0, startFrame, endFrame: initialEndFrame, videoTotalFrames = 0, blurhash } = player
+  const blurhashDataUrl = useMemo(() => blurhashToDataURL(blurhash), [blurhash])
 
   const duration = endTime - startTime
   const title = `${videoPath?.split('/').pop()?.replace(/\.[^.]+$/, '') ?? ''} — ${formatTime(startTime)} (${duration.toFixed(1)}s)`
@@ -60,6 +62,7 @@ export default function VideoPlayerModal({ player, onClose }) {
   const [volume,      setVolume]      = useState(1)
   const [muted,       setMuted]       = useState(false)
   const [waveformUrl, setWaveformUrl] = useState(null)
+  const [clipLoading, setClipLoading] = useState(true)
 
   // ── Split state ────────────────────────────────────────
   const [splitting,    setSplitting]    = useState(false)
@@ -571,10 +574,21 @@ export default function VideoPlayerModal({ player, onClose }) {
                 onPlay={handlePlay}
                 onPause={handlePause}
                 onEnded={handleEnded}
-                onLoadedMetadata={handleLoadedMeta}
+                onLoadedMetadata={e => { setClipLoading(false); handleLoadedMeta(e) }}
+                onWaiting={() => setClipLoading(true)}
+                onCanPlay={() => setClipLoading(false)}
                 onClick={togglePlay}
                 className="modal-video"
               />
+              {clipLoading && (
+                <div
+                  className="clip-loading-overlay"
+                  style={blurhashDataUrl ? { backgroundImage: `url(${blurhashDataUrl})`, backgroundSize: '100% 100%' } : undefined}
+                >
+                  <div className="clip-loading-spinner" />
+                  <span className="clip-loading-label">Generating clip…</span>
+                </div>
+              )}
             </div>
 
             {/* Controls */}

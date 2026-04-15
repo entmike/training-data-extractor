@@ -1466,14 +1466,43 @@ html, body {
 
 /* ── Custom video controls ───────────────────────────── */
 .modal-video-wrap {
+  position: relative;
   background: #000;
   border-radius: 8px 8px 0 0;
   line-height: 0;
+  aspect-ratio: 16/9;
+  max-height: 60vh;
+  overflow: hidden;
+}
+.clip-loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(0,0,0,0.75);
+  border-radius: 8px 8px 0 0;
+}
+.clip-loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(255,255,255,0.2);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.clip-loading-label {
+  color: rgba(255,255,255,0.7);
+  font-size: 13px;
 }
 .modal-video {
   width: 100%;
-  max-height: 60vh;
+  height: 100%;
   display: block;
+  object-fit: contain;
 }
 
 .video-controls {

@@ -125,23 +125,25 @@ except Exception as _e:
 
 
 def find_preview_for_scene(video_name: str, scene_idx: int, start_frame: int = None) -> str | None:
-    """Find preview image for a scene."""
+    """Find preview image for a scene. Looks in video-partitioned subdirectory first."""
     if not DEBUG_SCENES_DIR.exists():
         return None
-    
-    # Try to match by video name and scene index
-    pattern = f"{video_name}_scene_{scene_idx:04d}_*.png"
-    matches = list(DEBUG_SCENES_DIR.glob(pattern))
-    if matches:
-        return matches[0].name
-    
-    # Fallback: try looser matching
-    for f in DEBUG_SCENES_DIR.iterdir():
-        if f.suffix == '.png' and video_name in f.stem:
-            # Extract scene number from filename
-            match = re.search(r'scene_(\d+)', f.stem)
-            if match and int(match.group(1)) == scene_idx:
-                return f.name
+
+    subdir = DEBUG_SCENES_DIR / video_name
+    search_dirs = [subdir, DEBUG_SCENES_DIR]  # prefer partitioned, fall back to flat
+    for d in search_dirs:
+        if not d.is_dir():
+            continue
+        pattern = f"{video_name}_scene_{scene_idx:04d}_*.png"
+        matches = list(d.glob(pattern))
+        if matches:
+            rel = matches[0].relative_to(DEBUG_SCENES_DIR)
+            return str(rel)
+        for f in d.iterdir():
+            if f.suffix == '.png' and video_name in f.stem:
+                match = re.search(r'scene_(\d+)', f.stem)
+                if match and int(match.group(1)) == scene_idx:
+                    return str(f.relative_to(DEBUG_SCENES_DIR))
     
     return None
 
@@ -246,7 +248,7 @@ def _serve_scene_preview(scene_id: int, size: Optional[str]) -> Response:
 
     frame_width = _PREVIEW_SIZES.get(size) if size else None
     suffix = f"_{size}" if size else ""
-    cache_path = DEBUG_SCENES_DIR / f"scene_{scene_id}{suffix}.jpg"
+    cache_path = DEBUG_SCENES_DIR / video_path.stem / f"scene_{scene_id}{suffix}.jpg"
 
     if cache_path.exists():
         return send_file(cache_path, mimetype='image/jpeg')
@@ -608,15 +610,24 @@ def get_scenes():
     rows = conn.execute(base_query, params).fetchall()
     conn.close()
 
-    # Build preview lookup once for all scenes in this batch (avoid per-scene glob)
+    # Build preview lookup once for all scenes in this batch (avoid per-scene glob).
+    # Scans video-partitioned subdirectories; falls back to flat legacy files.
     preview_lookup: dict[tuple, str] = {}
     if DEBUG_SCENES_DIR.exists():
-        for f in DEBUG_SCENES_DIR.iterdir():
-            if f.suffix != '.png':
-                continue
-            m = re.search(r'^(.+)_scene_(\d+)', f.stem)
-            if m:
-                preview_lookup[(m.group(1), int(m.group(2)))] = f.name
+        for entry in DEBUG_SCENES_DIR.iterdir():
+            if entry.is_dir():
+                # Partitioned: .cache/previews/{video_name}/{video_name}_scene_N_*.png
+                for f in entry.iterdir():
+                    if f.suffix not in ('.png', '.jpg'):
+                        continue
+                    m = re.search(r'^(.+)_scene_(\d+)', f.stem)
+                    if m:
+                        preview_lookup[(m.group(1), int(m.group(2)))] = str(f.relative_to(DEBUG_SCENES_DIR))
+            elif entry.suffix == '.png':
+                # Legacy flat files
+                m = re.search(r'^(.+)_scene_(\d+)', entry.stem)
+                if m:
+                    preview_lookup[(m.group(1), int(m.group(2)))] = entry.name
 
     scenes = []
     for row in rows:
@@ -662,20 +673,23 @@ def get_scenes():
 
 @app.route('/api/cache/previews', methods=['GET'])
 def cache_previews_size():
-    """Return total size and file count of the preview cache."""
-    files = list(DEBUG_SCENES_DIR.glob('*.jpg')) if DEBUG_SCENES_DIR.exists() else []
+    """Return total size and file count of the preview cache (recursive)."""
+    files = list(DEBUG_SCENES_DIR.rglob('*.jpg')) if DEBUG_SCENES_DIR.exists() else []
     total = sum(f.stat().st_size for f in files)
     return jsonify({'file_count': len(files), 'size_bytes': total})
 
 
 @app.route('/api/cache/previews', methods=['DELETE'])
 def cache_previews_clear():
-    """Delete all cached preview images."""
-    files = list(DEBUG_SCENES_DIR.glob('*.jpg')) if DEBUG_SCENES_DIR.exists() else []
-    freed = 0
+    """Delete all cached preview images (recursive)."""
+    import shutil
+    files = list(DEBUG_SCENES_DIR.rglob('*.jpg')) if DEBUG_SCENES_DIR.exists() else []
+    freed = sum(f.stat().st_size for f in files)
     for f in files:
-        freed += f.stat().st_size
         f.unlink(missing_ok=True)
+    # Remove empty subdirectories
+    for d in [e for e in DEBUG_SCENES_DIR.iterdir() if e.is_dir()]:
+        shutil.rmtree(d, ignore_errors=True)
     return jsonify({'deleted': len(files), 'freed_bytes': freed})
 
 

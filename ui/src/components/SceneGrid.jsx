@@ -114,17 +114,20 @@ export default function SceneGrid({ videoFilter, activeIncludeTags, activeExclud
     loadNext()
   }, [loadNext]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Observe bottom sentinel for infinite scroll (subsequent pages)
+  // Scroll-based trigger for infinite scroll — more reliable than
+  // IntersectionObserver with rootMargin on a non-viewport scroll container.
   useEffect(() => {
-    const el = sentinelRef.current
-    if (!el) return
-    const root = el.closest('.videos-scenes-panel') ?? null
-    const obs = new IntersectionObserver(entries => {
-      sentinelVisibleRef.current = entries[0].isIntersecting
-      if (entries[0].isIntersecting) loadNext()
-    }, { root, rootMargin: '4000px' })
-    obs.observe(el)
-    return () => obs.disconnect()
+    const container = sentinelRef.current?.closest('.videos-scenes-panel')
+    if (!container) return
+    function onScroll() {
+      const { scrollTop, scrollHeight, clientHeight } = container
+      sentinelVisibleRef.current = scrollHeight - scrollTop - clientHeight < 1200
+      if (sentinelVisibleRef.current) loadNext()
+    }
+    container.addEventListener('scroll', onScroll, { passive: true })
+    // Run once immediately in case content already fills less than one page
+    onScroll()
+    return () => container.removeEventListener('scroll', onScroll)
   }, [loadNext])
 
   const isInitialLoad = isLoading && scenes.length === 0
