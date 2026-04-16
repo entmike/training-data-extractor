@@ -1,13 +1,17 @@
 import { useState, useEffect, useContext } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
 import { AppContext } from '../context'
 import SceneGrid from './SceneGrid'
 
 export default function TagsPage() {
+  const { tag: tagParam } = useParams()
+  const navigate = useNavigate()
   const { tagMap, refreshTags } = useContext(AppContext)
   const [tags, setTags] = useState([])
   const [loading, setLoading] = useState(true)
-  const [selectedTag, setSelectedTag] = useState(null)
   const [detailCollapsed, setDetailCollapsed] = useState(false)
+
+  const selectedTag = tagParam ? decodeURIComponent(tagParam) : null
 
   useEffect(() => {
     fetch('/api/tags/all')
@@ -16,13 +20,17 @@ export default function TagsPage() {
         const t = d.tags || []
         setTags(t)
         setLoading(false)
-        if (t.length > 0 && !selectedTag) setSelectedTag(t[0].tag)
+        if (t.length > 0 && !tagParam) navigate(`/tags/${encodeURIComponent(t[0].tag)}`, { replace: true })
       })
   }, [])
 
+  function selectTag(tag) {
+    navigate(`/tags/${encodeURIComponent(tag)}`)
+  }
+
   function handleTagUpdated(oldTag, updated) {
     setTags(prev => prev.map(t => t.tag === oldTag ? { ...t, ...updated } : t))
-    if (selectedTag === oldTag && updated.tag) setSelectedTag(updated.tag)
+    if (selectedTag === oldTag && updated.tag) navigate(`/tags/${encodeURIComponent(updated.tag)}`, { replace: true })
     refreshTags()
   }
 
@@ -45,7 +53,7 @@ export default function TagsPage() {
             <div
               key={t.tag}
               className={`video-sidebar-item${t.tag === selectedTag ? ' video-sidebar-item--active' : ''}`}
-              onClick={() => setSelectedTag(t.tag)}
+              onClick={() => selectTag(t.tag)}
             >
               <span className="video-sidebar-name">{t.display_name || t.tag}</span>
               <span className="video-sidebar-count">{t.scene_count ?? ''}</span>

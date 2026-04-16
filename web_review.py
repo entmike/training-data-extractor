@@ -271,7 +271,7 @@ def _serve_scene_preview(scene_id: int, size: Optional[str]) -> Response:
     if preview_bytes is None:
         return jsonify({"error": "Failed to generate preview"}), 500
 
-    DEBUG_SCENES_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_bytes(preview_bytes)
 
     return Response(preview_bytes, mimetype='image/jpeg',

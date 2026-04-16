@@ -428,9 +428,9 @@ def _get_scene_prep_args(db: Database, scene: Dict[str, Any]):
 
 def _pick_next_clip_item(db: Database) -> Optional[Dict[str, Any]]:
     """
-    Pick the next clip item whose caption is empty.
-    Items that already have a real caption, or that are marked __skip__/__error__,
-    are skipped.
+    Pick the next clip item whose caption is missing or errored.
+    Items with a real caption or marked __skip__ are skipped.
+    __error__ captions are retried (same policy as scenes).
     """
     with db._connection() as conn:
         row = conn.execute(
@@ -442,7 +442,8 @@ def _pick_next_clip_item(db: Database) -> Optional[Dict[str, Any]]:
             FROM clip_items ci
             JOIN scenes s ON s.id = ci.scene_id
             JOIN clips c ON c.id = ci.clip_id
-            WHERE ci.caption IS NULL OR ci.caption = ''
+            WHERE ci.caption IS NULL OR ci.caption = '' OR ci.caption = '__empty__'
+               OR substr(ci.caption, 1, 9) = '__error__'
             ORDER BY tag_count DESC, ci.created_at
             LIMIT 1
             """

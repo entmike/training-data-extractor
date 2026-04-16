@@ -28,7 +28,7 @@ function itemToScene(item, clipId) {
   }
 }
 
-export default function ManageClipsModal({ tagMap, onClose, initialClipName, onClipSelect }) {
+export default function ManageClipsModal({ tagMap, onClose, initialClipId, onClipSelect }) {
   const [clips, setClips] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [items, setItems] = useState([])
@@ -80,8 +80,8 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipName, onC
       const d = await r.json()
       const cols = d.clips || []
       setClips(cols)
-      if (cols.length > 0 && selectedId == null && initialClipName) {
-        const match = cols.find(c => c.name === initialClipName)
+      if (cols.length > 0 && selectedId == null && initialClipId) {
+        const match = cols.find(c => c.id === initialClipId)
         if (match) setSelectedId(match.id)
       }
     }
@@ -90,7 +90,7 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipName, onC
 
   function selectClip(col) {
     setSelectedId(col.id)
-    onClipSelect?.(col.name)
+    onClipSelect?.(col.id)
   }
 
   async function createClip() {

@@ -46,9 +46,10 @@ export default function App() {
         <Route path="/" element={<Navigate to="/videos" replace />} />
         <Route path="/videos" element={pageLayout(<VideosPage tagMap={tagMap} allTags={allTags} />)} />
         <Route path="/videos/:videoId" element={pageLayout(<VideosPage tagMap={tagMap} allTags={allTags} />)} />
-        <Route path="/clips/:clipName" element={<ClipsPage tagMap={tagMap} headerProps={sharedProps} />} />
         <Route path="/clips" element={<ClipsPage tagMap={tagMap} headerProps={sharedProps} />} />
+        <Route path="/clips/:clipId" element={<ClipsPage tagMap={tagMap} headerProps={sharedProps} />} />
         <Route path="/tags" element={pageLayout(<TagsPage />)} />
+        <Route path="/tags/:tag" element={pageLayout(<TagsPage />)} />
       </Routes>
 
       {player && <VideoPlayerModal player={player} onClose={closePlayer} />}
@@ -57,18 +58,18 @@ export default function App() {
 }
 
 function ClipsPage({ tagMap, headerProps }) {
-  const { clipName } = useParams()
+  const { clipId } = useParams()
   const navigate = useNavigate()
-  const decodedName = clipName ? decodeURIComponent(clipName) : null
+  const initialClipId = clipId ? Number(clipId) : null
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Header {...headerProps} videoId={null} />
       <ManageClipsModal
         tagMap={tagMap}
-        initialClipName={decodedName}
+        initialClipId={initialClipId}
         onClose={() => navigate('/')}
-        onClipSelect={name => navigate(`/clips/${encodeURIComponent(name)}`)}
+        onClipSelect={id => navigate(`/clips/${id}`)}
       />
     </div>
   )

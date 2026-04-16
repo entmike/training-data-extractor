@@ -61,7 +61,7 @@ def _generate_one(
     if data is None:
         return scene_id, size, False
 
-    previews_dir.mkdir(parents=True, exist_ok=True)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_bytes(data)
     return scene_id, size, True
 
