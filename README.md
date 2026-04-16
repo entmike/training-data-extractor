@@ -8,7 +8,9 @@ Automated end-to-end training data extraction for LTX-2 character LoRA training 
 - **Scene Detection**: Automatic scene boundary detection using PySceneDetect
 - **VLM Captioning**: Scene and clip captioning with Qwen3-Omni
 - **Speech-Aware Bucketing**: Auto-detect optimal crop windows prioritising speech content
-- **Face Detection**: InsightFace-based face detection and filtering
+- **Face Detection**: InsightFace-based face detection, filtering, and embedding storage
+- **Auto-Tagging**: Face-recognition-based automatic scene tagging using stored reference embeddings
+- **Subtitle Extraction**: Per-scene subtitles extracted from MKV text tracks (SRT/ASS)
 - **Multi-Crop Views**: Generate face, half-body, and full-frame crops
 - **Bucket Rendering**: 1024px resolution, 121-frame training buckets
 - **Web Review UI**: Browse scenes, manage tags, curate clips, export zip datasets
@@ -106,6 +108,7 @@ ltx2-build --config config.yaml --step <step>
 | `index` | Scan `./vids`, hash files, store metadata |
 | `scenes` | Detect scene cuts, write to DB incrementally |
 | `captions` | Caption scenes with Qwen3-Omni VLM |
+| `subtitles` | Extract per-scene subtitles from MKV text tracks (SRT/ASS) |
 | `buckets` | Auto-detect optimal speech-prioritised crop windows |
 | `candidates` | Split scenes into fixed-length clips |
 | `quality` | Filter clips by quality score |
@@ -114,6 +117,7 @@ ltx2-build --config config.yaml --step <step>
 | `render` | Render 1024px, 121-frame PNG buckets |
 | `manifest` | Write `manifest.jsonl` and caption `.txt` files |
 | `stats` | Print dataset statistics |
+| `auto-tag` | Auto-tag scenes via face recognition against stored references |
 
 ### Useful utilities
 
@@ -126,6 +130,18 @@ ltx2-build --config config.yaml --set-frame-offset 2 --video my-movie.mkv
 
 # Set display name for a video
 ltx2-build --config config.yaml --set-name "My Movie" --video my-movie.mkv
+
+# Register a face reference for a tag (frame number within the video)
+ltx2-build --config config.yaml --add-tag-ref deadpool --video deadpool-and-wolverine.mkv --frame 7932
+
+# Auto-tag all videos (only scans videos with at least one confirmed scene for each tag)
+ltx2-build --config config.yaml --step auto-tag
+
+# Auto-tag a single video
+ltx2-build --config config.yaml --step auto-tag --video deadpool-and-wolverine.mkv
+
+# Auto-tag for a specific tag only
+ltx2-build --config config.yaml --step auto-tag --tag deadpool
 ```
 
 ## Configuration
@@ -167,9 +183,9 @@ The UI runs at **http://localhost:5173** (dev) or **http://localhost:5000** (pro
 
 ### Pages
 
-- **Videos** — Browse scenes per video, filter by tag/rating/frames, play clips
+- **Videos** — Browse scenes per video, filter by tag/rating/frames, play clips with waveform seek bar
 - **Clips** — Curated clip collections; export as zip with captions (HDR→SDR auto tone-mapped)
-- **Tags** — Manage tags: rename, set display names and captioner descriptions, browse tagged scenes
+- **Tags** — Manage tags: rename, set display names and captioner descriptions, browse tagged/unverified scenes, manage face reference images
 
 ### Exporting clips
 

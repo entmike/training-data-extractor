@@ -567,6 +567,12 @@ def get_scenes():
         conditions.append("(COALESCE(s.end_frame, 0) - COALESCE(s.start_frame, 0)) >= %s")
         params.append(min_frames)
 
+    # Unconfirmed tag filter — scenes where a specific tag is auto-detected (confirmed=FALSE)
+    unconfirmed_tag = request.args.get('unconfirmed_tag', '')
+    if unconfirmed_tag:
+        conditions.append("EXISTS (SELECT 1 FROM scene_tags st2 WHERE st2.scene_id = s.id AND st2.tag = %s AND st2.confirmed = FALSE)")
+        params.append(unconfirmed_tag)
+
     # Rating filter
     if rating_values:
         rating_parts = []
@@ -600,7 +606,9 @@ def get_scenes():
         SELECT s.*, v.path as video_path, v.fps, v.frame_offset, v.duration as video_duration,
             (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
             (SELECT COUNT(*) FROM clip_items ci WHERE ci.scene_id = s.id) as clip_count,
-            (SELECT STRING_AGG(st.tag, '|') FROM scene_tags st WHERE st.scene_id = s.id) as tags_concat
+            (SELECT COUNT(*) FROM tag_references tr WHERE tr.video_id = s.video_id AND tr.frame_number >= s.start_frame AND tr.frame_number <= s.end_frame) as face_ref_count,
+            (SELECT STRING_AGG(st.tag, '|') FROM scene_tags st WHERE st.scene_id = s.id AND st.confirmed = TRUE) as tags_concat,
+            (SELECT STRING_AGG(st.tag, '|') FROM scene_tags st WHERE st.scene_id = s.id AND st.confirmed = FALSE) as auto_tags_concat
         {scenes_from}
         {where_clause}
         ORDER BY {order_by}
@@ -639,6 +647,7 @@ def get_scenes():
         t = int(d['start_time'])
         caption = d.get('caption') or ''
         tags_raw = d.get('tags_concat') or ''
+        auto_tags_raw = d.get('auto_tags_concat') or ''
         preview_path = preview_lookup.get((video_name, scene_idx))
         scenes.append({
             'id': d['id'],
@@ -652,6 +661,7 @@ def get_scenes():
             'frame_offset': d.get('frame_offset') or 0,
             'caption': caption,
             'tags': [t for t in tags_raw.split('|') if t],
+            'auto_tags': [t for t in auto_tags_raw.split('|') if t],
             'start_time_hms': f"{t//3600:02d}:{(t%3600)//60:02d}:{t%60:02d}",
             'duration': duration,
             'frame_count': (d.get('end_frame') or 0) - (d.get('start_frame') or 0),
@@ -660,6 +670,8 @@ def get_scenes():
             'rating': d.get('rating'),
             'blurhash': d.get('blurhash'),
             'clip_count': d.get('clip_count') or 0,
+            'face_ref_count': d.get('face_ref_count') or 0,
+            'subtitles': d.get('subtitles') or '',
             'video_total_frames': round((d.get('video_duration') or 0) * (d.get('fps') or 24.0)),
         })
 
@@ -764,14 +776,17 @@ def get_all_tags():
     else:
         rows = conn.execute(
             """SELECT st.tag, COALESCE(td.description, '') as description, COALESCE(td.display_name, '') as display_name,
-                      COUNT(st.scene_id) as scene_count
+                      COUNT(st.scene_id) as scene_count,
+                      COALESCE(SUM(s.end_frame - s.start_frame), 0) as total_frames,
+                      (SELECT COUNT(*) FROM tag_references tr WHERE tr.tag = st.tag) as face_ref_count
                FROM scene_tags st
                LEFT JOIN tag_definitions td ON td.tag = st.tag
+               LEFT JOIN scenes s ON s.id = st.scene_id
                GROUP BY st.tag, td.description, td.display_name
                ORDER BY st.tag"""
         ).fetchall()
     conn.close()
-    return jsonify({"tags": [{"tag": r["tag"], "description": r["description"], "display_name": r["display_name"], "scene_count": r.get("scene_count")} for r in rows]})
+    return jsonify({"tags": [{"tag": r["tag"], "description": r["description"], "display_name": r["display_name"], "scene_count": r.get("scene_count"), "total_frames": r.get("total_frames") or 0, "face_ref_count": r.get("face_ref_count") or 0} for r in rows]})
 
 
 @app.route('/api/tags/<int:scene_id>', methods=['GET'])
@@ -802,7 +817,8 @@ def add_tag(scene_id: int):
         return jsonify({"error": "Scene not found"}), 404
 
     conn.execute(
-        "INSERT INTO scene_tags (scene_id, tag) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+        "INSERT INTO scene_tags (scene_id, tag, confirmed) VALUES (%s, %s, TRUE) "
+        "ON CONFLICT (scene_id, tag) DO UPDATE SET confirmed = TRUE",
         (scene_id, tag)
     )
     conn.commit()
@@ -1000,6 +1016,158 @@ def remove_tag(scene_id: int, tag: str):
     ).fetchall()
     conn.close()
     return jsonify({"scene_id": scene_id, "tags": [r["tag"] for r in rows]})
+
+
+@app.route('/api/tags/<int:scene_id>/<path:tag>/confirm', methods=['PUT'])
+def confirm_tag(scene_id: int, tag: str):
+    """Mark an auto-detected tag as confirmed."""
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE scene_tags SET confirmed = TRUE WHERE scene_id = %s AND tag = %s",
+        (scene_id, tag)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"scene_id": scene_id, "tag": tag, "confirmed": True})
+
+
+@app.route('/api/tag-refs', methods=['GET'])
+def list_tag_refs():
+    """List stored tag face references."""
+    tag = request.args.get('tag', '')
+    conn = get_db_connection()
+    if tag:
+        rows = conn.execute(
+            "SELECT id, tag, video_id, frame_number, frame_time, created_at FROM tag_references WHERE tag = %s ORDER BY tag, id",
+            (tag,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, tag, video_id, frame_number, frame_time, created_at FROM tag_references ORDER BY tag, id"
+        ).fetchall()
+    conn.close()
+    return jsonify({"refs": [dict(r) for r in rows]})
+
+
+@app.route('/api/tag-refs', methods=['POST'])
+def add_tag_ref():
+    """Extract a face embedding from a video frame and store as a tag reference."""
+    data = request.get_json()
+    scene_id = data.get('scene_id')
+    tag = (data.get('tag') or '').strip().lower()
+    frame = data.get('frame')
+
+    if not scene_id or not tag or frame is None:
+        return jsonify({'error': 'scene_id, tag, and frame are required'}), 400
+
+    conn = get_db_connection()
+    scene_row = conn.execute(
+        "SELECT video_id FROM scenes WHERE id = %s", (scene_id,)
+    ).fetchone()
+    if not scene_row:
+        conn.close()
+        return jsonify({'error': 'Scene not found'}), 404
+    video_row = conn.execute(
+        "SELECT id, path, fps FROM videos WHERE id = %s", (scene_row['video_id'],)
+    ).fetchone()
+    conn.close()
+    if not video_row:
+        return jsonify({'error': 'Video not found'}), 404
+
+    from pathlib import Path
+    from ltx2_dataset_builder.utils.ffmpeg import get_frame_at_time
+    from ltx2_dataset_builder.autotag.face_tag import _pick_best_face
+    from ltx2_dataset_builder.faces.detect import get_face_analyzer
+
+    video_path = Path(video_row['path'])
+    fps = video_row['fps'] or 24.0
+    frame_number = int(frame)
+    frame_time = frame_number / fps
+
+    # Ensure InsightFace is loaded (uses default buffalo_l)
+    get_face_analyzer()
+
+    # Dummy config shim — only embedding_model is needed by _pick_best_face
+    class _FaceCfg:
+        embedding_model = 'buffalo_l'
+    class _Cfg:
+        face = _FaceCfg()
+
+    try:
+        frame_bgr = get_frame_at_time(video_path, frame_time)
+        embedding_bytes = _pick_best_face(frame_bgr, _Cfg())
+    except Exception as e:
+        return jsonify({'error': f'Frame extraction failed: {e}'}), 500
+
+    if embedding_bytes is None:
+        return jsonify({'error': 'No face detected at that frame — try a different position'}), 422
+
+    conn = get_db_connection()
+    cur = conn.execute(
+        "INSERT INTO tag_references (tag, video_id, frame_number, frame_time, embedding) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+        (tag, video_row['id'], frame_number, frame_time, embedding_bytes)
+    )
+    ref_id = cur.fetchone()['id']
+    conn.commit()
+    conn.close()
+    return jsonify({'ref_id': ref_id, 'tag': tag, 'frame': frame_number, 'frame_time': frame_time}), 201
+
+
+@app.route('/api/tag-refs/<int:ref_id>', methods=['DELETE'])
+def delete_tag_ref(ref_id: int):
+    """Delete a tag face reference."""
+    conn = get_db_connection()
+    conn.execute("DELETE FROM tag_references WHERE id = %s", (ref_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'deleted': ref_id})
+
+
+@app.route('/api/tag-refs/<int:ref_id>/image')
+def tag_ref_image(ref_id: int):
+    """Return a tone-mapped JPEG still of the face reference frame."""
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT tr.frame_time, v.path, v.width, v.height FROM tag_references tr JOIN videos v ON v.id = tr.video_id WHERE tr.id = %s",
+        (ref_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+
+    video_path = Path(row['path'])
+    frame_time = row['frame_time']
+    is_hdr = _is_hdr_video(video_path)
+
+    tonemap_filter = (
+        'zscale=transfer=linear:npl=100,format=gbrpf32le,'
+        'zscale=primaries=bt709,tonemap=tonemap=hable:desat=0,'
+        'zscale=transfer=bt709:matrix=bt709:range=tv,'
+        'format=bgr24'
+    )
+
+    vf_args = ['-vf', tonemap_filter] if is_hdr else ['-pix_fmt', 'bgr24']
+
+    cmd = [
+        'ffmpeg', '-ss', str(frame_time), '-i', str(video_path),
+        '-vframes', '1',
+        *vf_args,
+        '-f', 'image2pipe', '-vcodec', 'rawvideo',
+        '-pix_fmt', 'bgr24', '-',
+    ]
+
+    try:
+        import numpy as np
+        import cv2
+        result = subprocess.run(cmd, capture_output=True, check=True)
+        w, h = row['width'], row['height']
+        frame = np.frombuffer(result.stdout, dtype=np.uint8).reshape((h, w, 3))
+        ok, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok:
+            raise RuntimeError('imencode failed')
+        return send_file(io.BytesIO(buf.tobytes()), mimetype='image/jpeg')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/scenes/<int:scene_id>/split', methods=['POST'])
@@ -1218,7 +1386,8 @@ def get_videos():
         SELECT v.*,
                COUNT(s.id) as scene_count,
                SUM(CASE WHEN s.caption IS NOT NULL AND s.caption != ''
-                        AND substr(s.caption, 1, 2) != '__' THEN 1 ELSE 0 END) as captioned
+                        AND substr(s.caption, 1, 2) != '__' THEN 1 ELSE 0 END) as captioned,
+               COALESCE(SUM(s.end_frame - s.start_frame), 0) as total_frames
         FROM videos v
         LEFT JOIN scenes s ON s.video_id = v.id
         GROUP BY v.id
@@ -1244,6 +1413,7 @@ def get_videos():
             "indexed_at": v.get("indexed_at"),
             "scene_count": v.get("scene_count") or 0,
             "captioned": v.get("captioned") or 0,
+            "total_frames": v.get("total_frames") or 0,
         })
     return jsonify({"videos": result})
 
@@ -1801,7 +1971,8 @@ def get_clips():
     conn = get_db_connection()
     rows = conn.execute("""
         SELECT c.id, c.name, c.caption_prompt, c.created_at,
-               COUNT(ci.id) as item_count
+               COUNT(ci.id) as item_count,
+               COALESCE(SUM(ci.end_frame - ci.start_frame), 0) as total_frames
         FROM clips c
         LEFT JOIN clip_items ci ON ci.clip_id = c.id
         GROUP BY c.id, c.name, c.caption_prompt, c.created_at
@@ -2273,5 +2444,13 @@ if __name__ == '__main__':
     print(f"Previews: {DEBUG_SCENES_DIR}")
     print(f"URL: http://{args.host}:{args.port}")
     print(f"{'='*50}\n")
-    
+
+    # Pre-load InsightFace model so the first /api/tag-refs POST doesn't block
+    try:
+        from ltx2_dataset_builder.faces.detect import get_face_analyzer
+        get_face_analyzer('buffalo_l')
+        print("InsightFace buffalo_l model ready.")
+    except Exception as _e:
+        print(f"Warning: could not pre-load InsightFace model: {_e}")
+
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)

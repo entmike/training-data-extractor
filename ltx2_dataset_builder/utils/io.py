@@ -113,17 +113,22 @@ class Database:
             """)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS face_detections (
-                    id SERIAL PRIMARY KEY,
-                    video_id INTEGER NOT NULL REFERENCES videos(id),
-                    frame_time DOUBLE PRECISION NOT NULL,
-                    bbox_x DOUBLE PRECISION,
-                    bbox_y DOUBLE PRECISION,
-                    bbox_w DOUBLE PRECISION,
-                    bbox_h DOUBLE PRECISION,
-                    confidence DOUBLE PRECISION,
-                    embedding BYTEA,
-                    UNIQUE(video_id, frame_time)
+                    id           SERIAL PRIMARY KEY,
+                    video_id     INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+                    frame_number INTEGER NOT NULL,
+                    bbox_area    DOUBLE PRECISION,
+                    pose_yaw     DOUBLE PRECISION,
+                    pose_pitch   DOUBLE PRECISION,
+                    pose_roll    DOUBLE PRECISION,
+                    det_score    DOUBLE PRECISION,
+                    age          INTEGER,
+                    sex          TEXT,
+                    embedding    BYTEA,
+                    created_at   TIMESTAMPTZ DEFAULT NOW()
                 )
+            """)
+            conn.execute("""
+                ALTER TABLE face_detections ADD COLUMN IF NOT EXISTS embedding BYTEA
             """)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS embeddings (
@@ -180,6 +185,29 @@ class Database:
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     UNIQUE(clip_id, scene_id)
                 )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tag_references (
+                    id           SERIAL PRIMARY KEY,
+                    tag          TEXT NOT NULL,
+                    video_id     INTEGER REFERENCES videos(id) ON DELETE CASCADE,
+                    frame_number INTEGER NOT NULL,
+                    frame_time   DOUBLE PRECISION NOT NULL,
+                    embedding    BYTEA NOT NULL,
+                    created_at   TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                ALTER TABLE tag_references
+                ADD COLUMN IF NOT EXISTS frame_number INTEGER
+            """)
+            conn.execute("""
+                ALTER TABLE scene_tags
+                ADD COLUMN IF NOT EXISTS confirmed BOOLEAN NOT NULL DEFAULT TRUE
+            """)
+            conn.execute("""
+                ALTER TABLE scenes
+                ADD COLUMN IF NOT EXISTS subtitles TEXT
             """)
             conn.commit()
 
@@ -472,49 +500,55 @@ class Database:
     def add_face_detection(
         self,
         video_id: int,
-        frame_time: float,
-        bbox: Optional[tuple] = None,
-        confidence: Optional[float] = None,
+        frame_number: int,
+        bbox_area: Optional[float] = None,
+        pose_yaw: Optional[float] = None,
+        pose_pitch: Optional[float] = None,
+        pose_roll: Optional[float] = None,
+        det_score: Optional[float] = None,
+        age: Optional[int] = None,
+        sex: Optional[str] = None,
         embedding: Optional[bytes] = None,
     ) -> None:
         with self._connection() as conn:
             conn.execute("""
                 INSERT INTO face_detections
-                    (video_id, frame_time, bbox_x, bbox_y, bbox_w, bbox_h, confidence, embedding)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (video_id, frame_time) DO UPDATE SET
-                    bbox_x = EXCLUDED.bbox_x, bbox_y = EXCLUDED.bbox_y,
-                    bbox_w = EXCLUDED.bbox_w, bbox_h = EXCLUDED.bbox_h,
-                    confidence = EXCLUDED.confidence, embedding = EXCLUDED.embedding
-            """, (
-                video_id, frame_time,
-                bbox[0] if bbox else None,
-                bbox[1] if bbox else None,
-                bbox[2] if bbox else None,
-                bbox[3] if bbox else None,
-                confidence,
-                embedding,
-            ))
+                    (video_id, frame_number, bbox_area, pose_yaw, pose_pitch, pose_roll,
+                     det_score, age, sex, embedding)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (video_id, frame_number, bbox_area, pose_yaw, pose_pitch, pose_roll,
+                  det_score, age, sex, embedding))
             conn.commit()
 
     def get_face_detections(
         self,
         video_id: int,
-        start_time: Optional[float] = None,
-        end_time: Optional[float] = None,
+        frame_number_min: Optional[int] = None,
+        frame_number_max: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         query = "SELECT * FROM face_detections WHERE video_id = %s"
         params: list = [video_id]
-        if start_time is not None:
-            query += " AND frame_time >= %s"
-            params.append(start_time)
-        if end_time is not None:
-            query += " AND frame_time <= %s"
-            params.append(end_time)
-        query += " ORDER BY frame_time"
+        if frame_number_min is not None:
+            query += " AND frame_number >= %s"
+            params.append(frame_number_min)
+        if frame_number_max is not None:
+            query += " AND frame_number <= %s"
+            params.append(frame_number_max)
+        query += " ORDER BY frame_number"
         with self._connection() as conn:
             rows = conn.execute(query, params).fetchall()
             return [dict(r) for r in rows]
+
+    def has_face_detections(self, video_id: int, frame_number_min: int, frame_number_max: int) -> bool:
+        """Return True if any face detections with embeddings exist for this frame range."""
+        with self._connection() as conn:
+            row = conn.execute("""
+                SELECT 1 FROM face_detections
+                WHERE video_id = %s AND frame_number >= %s AND frame_number <= %s
+                  AND embedding IS NOT NULL
+                LIMIT 1
+            """, (video_id, frame_number_min, frame_number_max)).fetchone()
+            return row is not None
 
     # ── Sample operations ─────────────────────────────────────────────────────
 
@@ -605,6 +639,116 @@ class Database:
         self, video_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         return self.get_buckets(video_id=video_id)
+
+    # ── Tag reference operations ──────────────────────────────────────────────
+
+    def add_tag_reference(
+        self,
+        tag: str,
+        video_id: int,
+        frame_number: int,
+        frame_time: float,
+        embedding: bytes,
+    ) -> int:
+        with self._connection() as conn:
+            cur = conn.execute("""
+                INSERT INTO tag_references (tag, video_id, frame_number, frame_time, embedding)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id
+            """, (tag, video_id, frame_number, frame_time, embedding))
+            conn.commit()
+            return cur.fetchone()["id"]
+
+    def get_tag_references(self, tag: Optional[str] = None) -> List[Dict[str, Any]]:
+        if tag:
+            query, params = (
+                "SELECT * FROM tag_references WHERE tag = %s ORDER BY tag, id",
+                [tag],
+            )
+        else:
+            query, params = (
+                "SELECT * FROM tag_references ORDER BY tag, id",
+                [],
+            )
+        with self._connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [dict(r) for r in rows]
+
+    # ── Scene tag operations ──────────────────────────────────────────────────
+
+    def add_scene_tag(self, scene_id: int, tag: str, confirmed: bool = True) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                """INSERT INTO scene_tags (scene_id, tag, confirmed)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (scene_id, tag) DO UPDATE SET confirmed = EXCLUDED.confirmed""",
+                (scene_id, tag, confirmed),
+            )
+            conn.commit()
+
+    def get_tags_with_confirmed_scenes(self, video_id: Optional[int] = None) -> set:
+        """Return the set of tags that have at least one confirmed scene_tag row.
+
+        If video_id is given, restrict to scenes from that video only.
+        """
+        with self._connection() as conn:
+            if video_id is not None:
+                rows = conn.execute("""
+                    SELECT DISTINCT st.tag
+                    FROM scene_tags st
+                    JOIN scenes s ON s.id = st.scene_id
+                    WHERE st.confirmed = TRUE AND s.video_id = %s
+                """, (video_id,)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT DISTINCT tag FROM scene_tags WHERE confirmed = TRUE
+                """).fetchall()
+            return {r["tag"] for r in rows}
+
+    def get_scenes_without_tag(self, tag: str, video_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Return scenes that do not have the given tag, but only from videos that already
+        have at least one confirmed scene with that tag (so we don't blindly scan unrelated videos).
+
+        If video_id is given, only scenes from that video are returned (still subject to the
+        confirmed-presence filter).
+        """
+        with self._connection() as conn:
+            if video_id is not None:
+                rows = conn.execute("""
+                    SELECT s.id, s.video_id, s.start_time, s.end_time,
+                           v.path AS video_path, v.fps
+                    FROM scenes s
+                    JOIN videos v ON v.id = s.video_id
+                    WHERE v.id = %s
+                      AND NOT EXISTS (
+                          SELECT 1 FROM scene_tags st
+                          WHERE st.scene_id = s.id AND st.tag = %s
+                      )
+                      AND EXISTS (
+                          SELECT 1 FROM scene_tags st2
+                          JOIN scenes s2 ON s2.id = st2.scene_id
+                          WHERE s2.video_id = v.id AND st2.tag = %s AND st2.confirmed = TRUE
+                      )
+                    ORDER BY s.start_time
+                """, (video_id, tag, tag)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT s.id, s.video_id, s.start_time, s.end_time,
+                           v.path AS video_path, v.fps
+                    FROM scenes s
+                    JOIN videos v ON v.id = s.video_id
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM scene_tags st
+                        WHERE st.scene_id = s.id AND st.tag = %s
+                    )
+                    AND EXISTS (
+                        SELECT 1 FROM scene_tags st2
+                        JOIN scenes s2 ON s2.id = st2.scene_id
+                        WHERE s2.video_id = v.id AND st2.tag = %s AND st2.confirmed = TRUE
+                    )
+                    ORDER BY s.video_id, s.start_time
+                """, (tag, tag)).fetchall()
+            return [dict(r) for r in rows]
 
 
 def write_jsonl(path: Path, entries: Iterator[Dict[str, Any]]) -> int:

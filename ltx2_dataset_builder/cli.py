@@ -195,6 +195,11 @@ def run_step(config: PipelineConfig, step: str) -> None:
     elif step == "stats":
         print_statistics(config)
     
+    elif step == "subtitles":
+        from .subtitles.extract import extract_all_subtitles
+        logger.info("Running: Extract subtitles")
+        extract_all_subtitles(config)
+
     elif step == "blurhash":
         from .scenes.blurhash import compute_all_blurhashes
         logger.info("Running: Compute scene blurhashes")
@@ -276,7 +281,7 @@ Examples:
     parser.add_argument(
         "--step",
         type=str,
-        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "debug-scenes", "debug-candidates"],
+        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "subtitles", "debug-scenes", "debug-candidates", "auto-tag"],
         help="Run a specific pipeline step"
     )
     
@@ -342,25 +347,73 @@ Examples:
         metavar="NAME",
         help="Set user-friendly name for a video (use with --video)"
     )
-    
+
+    # Auto-tag utilities
+    parser.add_argument(
+        "--add-tag-ref",
+        metavar="TAG",
+        help="Register a reference face frame for TAG (use with --video and --time)"
+    )
+    parser.add_argument(
+        "--frame",
+        type=int,
+        metavar="FRAME",
+        help="Frame number (used with --add-tag-ref)"
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Limit --step auto-tag or --list-tag-refs to a specific tag"
+    )
+    parser.add_argument(
+        "--list-tag-refs",
+        action="store_true",
+        help="List all stored tag reference frames"
+    )
+
     args = parser.parse_args()
-    
+
     # Setup logging
     setup_logging(args.verbose)
     logger = logging.getLogger(__name__)
-    
-    # Generate config mode
+
+    # Generate config mode (no existing config needed)
     if args.generate_config:
         config = PipelineConfig()
         config.to_yaml(Path(args.generate_config))
         logger.info(f"Generated default config: {args.generate_config}")
         return 0
-    
+
+    # Load config early so all utility handlers can use it
+    if args.config:
+        config = PipelineConfig.from_yaml(Path(args.config))
+    else:
+        config = PipelineConfig()
+
+    # Override with CLI arguments
+    if args.token:
+        config.token = args.token
+    if args.source:
+        config.source_dir = Path(args.source)
+    if args.output:
+        config.output_dir = Path(args.output)
+    if args.workers:
+        config.num_workers = args.workers
+    if args.no_skip_existing:
+        config.skip_existing = False
+    if args.verbose:
+        config.verbose = True
+    if args.resolution:
+        config.render.resolution = args.resolution
+    if args.frames:
+        config.render.frame_count = args.frames
+    if args.fps:
+        config.render.fps = args.fps
+
     # List videos mode
     if args.list_videos:
         from .utils.io import Database
-        dsn = config.dsn
-        db = Database(dsn)
+        db = Database(config.dsn)
         videos = db.get_all_videos()
         if not videos:
             logger.info("No videos indexed.")
@@ -398,8 +451,7 @@ Examples:
         from .utils.io import Database
         if not args.video:
             parser.error("--set-frame-offset requires --video")
-        dsn = config.dsn
-        db = Database(dsn)
+        db = Database(config.dsn)
 
         # Find video by ID or name
         videos = db.get_all_videos()
@@ -425,8 +477,7 @@ Examples:
         from .utils.io import Database
         if not args.video:
             parser.error("--set-name requires --video")
-        dsn = config.dsn
-        db = Database(dsn)
+        db = Database(config.dsn)
 
         # Find video by ID or name
         videos = db.get_all_videos()
@@ -446,42 +497,33 @@ Examples:
         db.set_video_name(video_id, args.set_name)
         logger.info(f"Set name='{args.set_name}' for video ID {video_id}")
         return 0
-    
-    # Load or create config
-    if args.config:
-        config = PipelineConfig.from_yaml(Path(args.config))
-    else:
-        config = PipelineConfig()
-    
-    # Override with CLI arguments
-    if args.token:
-        config.token = args.token
-    if args.source:
-        config.source_dir = Path(args.source)
-    if args.output:
-        config.output_dir = Path(args.output)
-    if args.workers:
-        config.num_workers = args.workers
-    if args.no_skip_existing:
-        config.skip_existing = False
-    if args.verbose:
-        config.verbose = True
-    if args.resolution:
-        config.render.resolution = args.resolution
-    if args.frames:
-        config.render.frame_count = args.frames
-    if args.fps:
-        config.render.fps = args.fps
-    
+
+    # Add tag reference mode
+    if args.add_tag_ref:
+        if not args.video or args.frame is None:
+            parser.error("--add-tag-ref requires --video and --frame")
+        from .autotag.face_tag import add_tag_reference
+        add_tag_reference(config, args.add_tag_ref, args.video, args.frame)
+        return 0
+
+    # List tag references mode
+    if args.list_tag_refs:
+        from .autotag.face_tag import list_tag_references
+        list_tag_references(config, tag=args.tag)
+        return 0
+
     # Validate required options for full pipeline
     if not args.step and not args.token:
         parser.error("--token is required for full pipeline run")
-    
+
     if not args.step and not config.source_dir.exists():
         parser.error(f"Source directory does not exist: {config.source_dir}")
-    
+
     try:
-        if args.step:
+        if args.step == "auto-tag":
+            from .autotag.face_tag import run_auto_tag
+            run_auto_tag(config, tag_filter=args.tag, video_filter=args.video)
+        elif args.step:
             run_step(config, args.step)
         else:
             run_pipeline(config)

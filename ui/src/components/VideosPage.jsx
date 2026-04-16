@@ -169,7 +169,8 @@ export default function VideosPage({ tagMap, allTags }) {
             [1,2,3].map(n => (
               <div key={n} className="video-sidebar-item video-sidebar-item--skeleton">
                 <span className="skeleton skeleton--text" style={{ width: `${50 + n * 15}%` }} />
-                <span className="skeleton skeleton--text" style={{ width: 30 }} />
+                <span className="skeleton skeleton--text" style={{ width: 24 }} />
+                <span className="skeleton skeleton--text" style={{ width: 36 }} />
               </div>
             ))
           ) : videos.map(v => (
@@ -180,6 +181,7 @@ export default function VideosPage({ tagMap, allTags }) {
             >
               <span className="video-sidebar-name">{v.name}</span>
               <span className="video-sidebar-count">{v.scene_count}</span>
+              <span className="video-sidebar-frames" title="Total frames">{v.total_frames > 0 ? `${v.total_frames.toLocaleString()}f` : ''}</span>
             </div>
           ))}
 

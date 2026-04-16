@@ -155,9 +155,14 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
   }
 
   async function removeItem(itemId) {
+    const item = items.find(i => i.id === itemId)
     await fetch(`/api/clips/${selectedId}/items/${itemId}`, { method: 'DELETE' })
     setItems(prev => prev.filter(i => i.id !== itemId))
-    setClips(cols => cols.map(c => c.id === selectedId ? { ...c, item_count: c.item_count - 1 } : c))
+    setClips(cols => cols.map(c => c.id === selectedId ? {
+      ...c,
+      item_count: c.item_count - 1,
+      total_frames: (c.total_frames || 0) - ((item?.end_frame ?? 0) - (item?.start_frame ?? 0)),
+    } : c))
   }
 
   function handleItemSaved(updated) {
@@ -221,8 +226,10 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
               {loadingClips ? (
                 [1,2,3].map(n => (
                   <div key={n} className="clip-item clip-item--skeleton">
-                    <span className="skeleton skeleton--text" style={{ width: `${50 + n * 15}%` }} />
-                    <span className="skeleton skeleton--text" style={{ width: 20 }} />
+                    <div className="clip-name-cell"><span className="skeleton skeleton--text" style={{ width: `${50 + n * 15}%` }} /></div>
+                    <div className="clip-count-cell"><span className="skeleton skeleton--text" style={{ width: 20 }} /></div>
+                    <div className="clip-frames-cell" />
+                    <div className="clip-actions-cell" />
                   </div>
                 ))
               ) : clips.length === 0 ? (
@@ -233,23 +240,33 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
                   className={`clip-item${col.id === selectedId ? ' clip-item--active' : ''}`}
                   onClick={() => selectClip(col)}
                 >
-                  {renamingId === col.id ? (
-                    <input
-                      className="clip-rename-input"
-                      value={renameDraft}
-                      autoFocus
-                      onChange={e => setRenameDraft(e.target.value)}
-                      onBlur={() => commitRename(col.id)}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter') commitRename(col.id)
-                        if (e.key === 'Escape') setRenamingId(null)
-                      }}
-                      onClick={e => e.stopPropagation()}
-                    />
-                  ) : (
-                    <span className="clip-name">{col.name}</span>
-                  )}
-                  <span className="clip-count">{col.item_count}</span>
+                  <div className="clip-name-cell">
+                    {renamingId === col.id ? (
+                      <input
+                        className="clip-rename-input"
+                        value={renameDraft}
+                        autoFocus
+                        onChange={e => setRenameDraft(e.target.value)}
+                        onBlur={() => commitRename(col.id)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') commitRename(col.id)
+                          if (e.key === 'Escape') setRenamingId(null)
+                        }}
+                        onClick={e => e.stopPropagation()}
+                      />
+                    ) : (
+                      <span className="clip-name">{col.name}</span>
+                    )}
+                  </div>
+                  <div className="clip-count-cell">
+                    <span className="clip-count">{col.item_count}</span>
+                  </div>
+                  <div className="clip-frames-cell">
+                    {col.total_frames > 0 && (
+                      <span className="clip-frames" title="Total frames">{col.total_frames.toLocaleString()}f</span>
+                    )}
+                  </div>
+                  <div className="clip-actions-cell">
                   <div className="clip-actions">
                     <button
                       className="clip-action-btn"
@@ -261,6 +278,7 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
                       title="Delete"
                       onClick={e => { e.stopPropagation(); deleteClip(col.id) }}
                     >✕</button>
+                  </div>
                   </div>
                 </div>
               ))}

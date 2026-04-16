@@ -67,6 +67,7 @@ python migrate_sqlite_to_pg.py
 | index | `--step index` | Scan `./vids`, hash files, store metadata in DB |
 | scenes | `--step scenes` | Detect scene cuts, write to DB incrementally per chunk |
 | captions | `--step captions` | Caption scenes with Qwen3 VLM |
+| subtitles | `--step subtitles` | Extract per-scene subtitles from MKV text tracks (SRT/ASS) |
 | buckets | `--step buckets` | Auto-detect optimal 24-frame-multiple crops prioritizing speech |
 | candidates | `--step candidates` | Split scenes into fixed-length clips |
 | quality | `--step quality` | Filter clips by quality score |
@@ -75,6 +76,7 @@ python migrate_sqlite_to_pg.py
 | render | `--step render` | Render 1024px, 121-frame PNG buckets |
 | manifest | `--step manifest` | Write `manifest.jsonl` and caption `.txt` files |
 | stats | `--step stats` | Print dataset statistics |
+| auto-tag | `--step auto-tag` | Auto-tag scenes via face recognition against stored references |
 | debug-scenes | `--step debug-scenes` | Generate scene preview images |
 | debug-candidates | `--step debug-candidates` | Generate candidate preview images |
 
@@ -99,6 +101,9 @@ python migrate_sqlite_to_pg.py
 - `ltx2_dataset_builder/captions/generate.py` — Qwen3 captioning
 - `ltx2_dataset_builder/buckets/detect.py` — speech-based optimal bucket detection
 - `ltx2_dataset_builder/faces/detect.py` — InsightFace filtering
+- `ltx2_dataset_builder/faces/embed.py` — face embedding utilities (`embedding_from_bytes`, `compute_identity_similarity`)
+- `ltx2_dataset_builder/autotag/face_tag.py` — face-recognition auto-tagging; `add_tag_reference`, `run_auto_tag`
+- `ltx2_dataset_builder/subtitles/extract.py` — subtitle extraction from MKV text tracks
 - `ltx2_dataset_builder/render/bucket.py` — FFmpeg bucket rendering
 
 ## Notes
@@ -111,3 +116,19 @@ python migrate_sqlite_to_pg.py
 - **HDR export**: Clip zip export auto-detects HDR sources (via `color_transfer` / 10-bit pixel format) and applies `zscale`→`tonemap=hable` tone-mapping to SDR. Falls back to plain encode if tone-mapping fails.
 - **Sentinel captions**: `__skip__`, `__empty__`, `__error__: <msg>` — filter with `substr(caption, 1, 2) != '__'`
 - All pipeline SQL uses `%s` placeholders (psycopg2 / PostgreSQL), not `?` (SQLite)
+- **Auto-tagging**: `--step auto-tag` only scans videos that already have at least one confirmed scene for each tag. Use `--add-tag-ref TAG --video FILE --frame N` to register reference faces. Face embeddings are cached in `face_detections` — rescans after adding new refs skip ffmpeg/InsightFace entirely.
+- **scene_tags.confirmed**: `TRUE` = manually tagged, `FALSE` = auto-detected (shown as dashed purple pills in UI with ✓/✕ confirm/reject buttons)
+- **Subtitles**: PGS bitmap tracks are skipped; only text-based tracks (SRT/ASS/WebVTT) are extracted. Multiple overlapping subtitle entries within a scene are joined with ` / `.
+
+## DB tables (key)
+
+| Table | Key columns |
+|-------|-------------|
+| `videos` | `id`, `path`, `name`, `fps`, `frame_offset` |
+| `scenes` | `id`, `video_id`, `start_time`, `end_time`, `caption`, `subtitles` |
+| `scene_tags` | `scene_id`, `tag`, `confirmed` (TRUE=manual, FALSE=auto) |
+| `tag_definitions` | `tag`, `display_name`, `description` |
+| `tag_references` | `id`, `tag`, `video_id`, `frame_number`, `frame_time`, `embedding` |
+| `face_detections` | `id`, `video_id`, `frame_number`, `bbox_area`, `pose_yaw/pitch/roll`, `det_score`, `age`, `sex`, `embedding` |
+| `candidates` | `id`, `scene_id`, `start_time`, `end_time`, `crop_type` |
+| `samples` | `id`, `candidate_id`, `crop_type`, `output_path`, `frame_count`, `caption` |

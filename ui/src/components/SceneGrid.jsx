@@ -5,7 +5,7 @@ import ViewToggle from './ViewToggle'
 
 const BATCH_SIZE = 200
 
-export default function SceneGrid({ videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, tagMap, onLoadingChange, totalCount }) {
+export default function SceneGrid({ videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, tagMap, onLoadingChange, totalCount, unconfirmedTag }) {
   const [scenes, setScenes] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [isEmpty, setIsEmpty] = useState(false)
@@ -27,6 +27,7 @@ export default function SceneGrid({ videoFilter, activeIncludeTags, activeExclud
     minFrames,
     [...ratingFilter].map(String).sort().join(','),
     sort,
+    unconfirmedTag || '',
   ].join('|')
 
   useEffect(() => {
@@ -73,6 +74,7 @@ export default function SceneGrid({ videoFilter, activeIncludeTags, activeExclud
       if (minFrames > 0) params.set('min_frames', minFrames)
       if (ratingFilter.size > 0) params.set('rating', [...ratingFilter].join(','))
       if (sort) params.set('sort', sort)
+      if (unconfirmedTag) params.set('unconfirmed_tag', unconfirmedTag)
       const r = await fetch('/api/scenes?' + params)
       if (!r.ok) throw new Error('fetch failed')
       const data = await r.json()
@@ -104,7 +106,7 @@ export default function SceneGrid({ videoFilter, activeIncludeTags, activeExclud
         if (sentinelVisibleRef.current && hasMoreRef.current) loadNext()
       }
     }
-  }, [videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, sort])
+  }, [videoFilter, activeIncludeTags, activeExcludeTags, includeMode, minFrames, ratingFilter, sort, unconfirmedTag])
 
   // Explicitly trigger initial load when loadNext changes (filter params changed).
   // The IntersectionObserver alone is unreliable here: if the sentinel is already

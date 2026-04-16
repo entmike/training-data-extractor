@@ -10,6 +10,9 @@ export default function TagsPage() {
   const [tags, setTags] = useState([])
   const [loading, setLoading] = useState(true)
   const [detailCollapsed, setDetailCollapsed] = useState(false)
+  const [activeTab, setActiveTab] = useState('scenes')
+  const [liveRefCount, setLiveRefCount] = useState(null) // live count for selected tag
+  const [unverifiedOnly, setUnverifiedOnly] = useState(false)
 
   const selectedTag = tagParam ? decodeURIComponent(tagParam) : null
 
@@ -23,6 +26,18 @@ export default function TagsPage() {
         if (t.length > 0 && !tagParam) navigate(`/tags/${encodeURIComponent(t[0].tag)}`, { replace: true })
       })
   }, [])
+
+  // Reset to scenes tab and fetch live ref count when switching tags
+  useEffect(() => {
+    setActiveTab('scenes')
+    setLiveRefCount(null)
+    setUnverifiedOnly(false)
+    if (!selectedTag) return
+    fetch(`/api/tag-refs?tag=${encodeURIComponent(selectedTag)}`)
+      .then(r => r.json())
+      .then(d => setLiveRefCount((d.refs || []).length))
+      .catch(() => {})
+  }, [selectedTag])
 
   function selectTag(tag) {
     navigate(`/tags/${encodeURIComponent(tag)}`)
@@ -46,7 +61,8 @@ export default function TagsPage() {
             [1,2,3,4].map(n => (
               <div key={n} className="video-sidebar-item video-sidebar-item--skeleton">
                 <span className="skeleton skeleton--text" style={{ width: `${40 + n * 12}%` }} />
-                <span className="skeleton skeleton--text" style={{ width: 28 }} />
+                <span className="skeleton skeleton--text" style={{ width: 24 }} />
+                <span className="skeleton skeleton--text" style={{ width: 36 }} />
               </div>
             ))
           ) : tags.map(t => (
@@ -57,6 +73,7 @@ export default function TagsPage() {
             >
               <span className="video-sidebar-name">{t.display_name || t.tag}</span>
               <span className="video-sidebar-count">{t.scene_count ?? ''}</span>
+              <span className="video-sidebar-frames" title="Total frames">{t.total_frames > 0 ? `${t.total_frames.toLocaleString()}f` : ''}</span>
             </div>
           ))}
         </div>
@@ -74,7 +91,36 @@ export default function TagsPage() {
                   <TagDetail tag={selected} onUpdated={updated => handleTagUpdated(selected.tag, updated)} />
                 )}
               </div>
-              <div className="videos-scenes-panel">
+
+              {/* Tab bar */}
+              <div className="tag-tabs">
+                <button
+                  className={`tag-tab-btn${activeTab === 'scenes' ? ' tag-tab-btn--active' : ''}`}
+                  onClick={() => setActiveTab('scenes')}
+                >
+                  Scenes
+                  {selected.scene_count > 0 && <span className="tag-tab-count">{selected.scene_count}</span>}
+                </button>
+                <button
+                  className={`tag-tab-btn${activeTab === 'refs' ? ' tag-tab-btn--active' : ''}`}
+                  onClick={() => setActiveTab('refs')}
+                >
+                  Face refs
+                  {(liveRefCount ?? 0) > 0 && <span className="tag-tab-count">{liveRefCount}</span>}
+                </button>
+                {activeTab === 'scenes' && (
+                  <button
+                    className={`tag-tab-filter-btn${unverifiedOnly ? ' tag-tab-filter-btn--active' : ''}`}
+                    onClick={() => setUnverifiedOnly(v => !v)}
+                    title="Show only auto-detected unverified scenes"
+                  >
+                    Unverified only
+                  </button>
+                )}
+              </div>
+
+              {/* Tab panels */}
+              <div className="videos-scenes-panel" style={{ display: activeTab === 'scenes' ? 'flex' : 'none', flexDirection: 'column' }}>
                 <SceneGrid
                   activeIncludeTags={new Set([selectedTag])}
                   activeExcludeTags={new Set()}
@@ -83,8 +129,18 @@ export default function TagsPage() {
                   ratingFilter={new Set()}
                   tagMap={tagMap}
                   totalCount={selected.scene_count}
+                  unconfirmedTag={unverifiedOnly ? selectedTag : undefined}
                 />
               </div>
+
+              {activeTab === 'refs' && (
+                <div className="tag-refs-panel">
+                  <FaceRefsPanel
+                    tag={selectedTag}
+                    onRefDeleted={() => setLiveRefCount(c => Math.max(0, (c ?? 1) - 1))}
+                  />
+                </div>
+              )}
             </>
           ) : !loading && (
             <div className="videos-empty">Select a tag</div>
@@ -92,6 +148,57 @@ export default function TagsPage() {
         </div>
 
       </div>
+    </div>
+  )
+}
+
+function FaceRefsPanel({ tag, onRefDeleted }) {
+  const [refs, setRefs] = useState(null)
+
+  useEffect(() => {
+    setRefs(null)
+    fetch(`/api/tag-refs?tag=${encodeURIComponent(tag)}`)
+      .then(r => r.json())
+      .then(d => setRefs(d.refs || []))
+      .catch(() => setRefs([]))
+  }, [tag])
+
+  async function deleteRef(id) {
+    const r = await fetch(`/api/tag-refs/${id}`, { method: 'DELETE' })
+    if (r.ok) {
+      setRefs(prev => prev.filter(x => x.id !== id))
+      onRefDeleted?.()
+    }
+  }
+
+  if (refs === null) return <div className="tag-refs-loading">Loading…</div>
+
+  if (refs.length === 0) return (
+    <div className="tag-refs-empty">
+      No face references yet. While playing a scene, use <strong>+ Face ref</strong> to register one.
+    </div>
+  )
+
+  return (
+    <div className="tag-refs-grid">
+      {refs.map(ref => (
+        <div key={ref.id} className="tag-ref-card">
+          <button
+            className="tag-ref-delete-btn"
+            title="Remove this reference"
+            onClick={() => deleteRef(ref.id)}
+          >✕</button>
+          <img
+            className="tag-ref-img"
+            src={`/api/tag-refs/${ref.id}/image`}
+            alt={`ref frame ${ref.frame_number}`}
+            loading="lazy"
+          />
+          <div className="tag-ref-meta">
+            frame {ref.frame_number ?? '?'}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

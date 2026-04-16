@@ -74,14 +74,22 @@ export default function VideoPlayerModal({ player, onClose }) {
   const [adjustingBound,  setAdjustingBound]  = useState(false)
   const [boundaryError,   setBoundaryError]   = useState('')
 
+  // ── Face-ref state ─────────────────────────────────────
+  const [refPickerPos,  setRefPickerPos]  = useState(null) // null | { top, left }
+  const [refSaveStatus, setRefSaveStatus] = useState({})   // { [tag]: 'saving'|'done'|'error' }
+  const refBtnRef = useRef(null)
+
   // ── Caption / tag state ────────────────────────────────
   const rawCaption = (player.caption && !player.caption.startsWith('__')) ? player.caption : ''
   const [caption,      setCaption]      = useState(rawCaption)
   const [savedCaption, setSavedCaption] = useState(rawCaption)
   const [saveStatus,   setSaveStatus]   = useState('')
   const [tags,         setTags]         = useState(player.tags || [])
+  const [autoTags,     setAutoTags]     = useState(player.autoTags || [])
   const [rating,       setRatingState]  = useState(player.rating || 0)
   const [dropdownPos,  setDropdownPos]  = useState(null)
+  const [modalTab,     setModalTab]     = useState('caption')
+  const subtitles = player.subtitles || ''
   const isDirty = caption !== savedCaption
 
   const bucketDuration   = bucketData?.optimal_duration || 0
@@ -364,6 +372,22 @@ export default function VideoPlayerModal({ player, onClose }) {
     const r = await fetch(`/api/tags/${sceneId}/${encodeURIComponent(tag)}`, { method: 'DELETE' })
     if (r.ok) { const d = await r.json(); setTags(d.tags); player.onTagsChange?.(d.tags) }
   }
+  async function confirmAutoTag(tag) {
+    const r = await fetch(`/api/tags/${sceneId}/${encodeURIComponent(tag)}/confirm`, { method: 'PUT' })
+    if (r.ok) {
+      setAutoTags(prev => prev.filter(t => t !== tag))
+      setTags(prev => [...prev, tag])
+      player.onAutoTagsChange?.(autoTags.filter(t => t !== tag))
+      player.onTagsChange?.([...tags, tag])
+    }
+  }
+  async function rejectAutoTag(tag) {
+    const r = await fetch(`/api/tags/${sceneId}/${encodeURIComponent(tag)}`, { method: 'DELETE' })
+    if (r.ok) {
+      setAutoTags(prev => prev.filter(t => t !== tag))
+      player.onAutoTagsChange?.(autoTags.filter(t => t !== tag))
+    }
+  }
   async function setRating(n) {
     const next = n === rating ? 0 : n; setRatingState(next); player.onRatingChange?.(next)
     await fetch(`/api/rating/${sceneId}`, {
@@ -520,6 +544,35 @@ export default function VideoPlayerModal({ player, onClose }) {
   const tagSuggestions = Object.values(tagMap).filter(def => !tags.includes(def.tag))
   const offsetFramesCurrent = Math.round(bucketOffset * fps)
   const bucketOffsetDirty = bucketData && !isDraggingBucket && !savingBucketOffset && offsetFramesCurrent !== originalBucketOffsetFrames
+  // Absolute source-video frame at current playback position (matches CLI --frame convention)
+  const currentAbsFrame = sceneStartF + frameOffset + 1 + Math.round(currentTime * fps)
+
+  function openRefPicker() {
+    if (refPickerPos) { setRefPickerPos(null); return }
+    const rect = refBtnRef.current.getBoundingClientRect()
+    setRefPickerPos({ top: rect.bottom + window.scrollY + 4, left: rect.left + window.scrollX })
+  }
+
+  async function saveRef(tag) {
+    setRefSaveStatus(s => ({ ...s, [tag]: 'saving' }))
+    try {
+      const r = await fetch('/api/tag-refs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scene_id: sceneId, tag, frame: currentAbsFrame }),
+      })
+      const d = await r.json()
+      if (!r.ok) {
+        setRefSaveStatus(s => ({ ...s, [tag]: 'error' }))
+      } else {
+        setRefSaveStatus(s => ({ ...s, [tag]: 'done' }))
+      }
+      setTimeout(() => setRefSaveStatus(s => { const n = { ...s }; delete n[tag]; return n }), 2000)
+    } catch {
+      setRefSaveStatus(s => ({ ...s, [tag]: 'error' }))
+      setTimeout(() => setRefSaveStatus(s => { const n = { ...s }; delete n[tag]; return n }), 2000)
+    }
+  }
 
   // ── Render ─────────────────────────────────────────────
   return (
@@ -701,6 +754,7 @@ export default function VideoPlayerModal({ player, onClose }) {
                 </div>
               )
             })()}
+
           </>
         )}
 
@@ -742,6 +796,14 @@ export default function VideoPlayerModal({ player, onClose }) {
                 + Clip
               </button>
             )}
+            <button
+              ref={refBtnRef}
+              className={`detect-bucket-btn detect-bucket-btn--ref${refPickerPos ? ' detect-bucket-btn--active' : ''}`}
+              onClick={openRefPicker}
+              title={`Set frame ${currentAbsFrame} as a face reference for a tag`}
+            >
+              + Face ref
+            </button>
           </div>
 
           {/* Scene boundary adjusters */}
@@ -800,33 +862,61 @@ export default function VideoPlayerModal({ player, onClose }) {
                 <button className="tag-remove" onClick={() => removeTag(tag)}>✕</button>
               </span>
             ))}
+            {autoTags.map(tag => (
+              <span key={tag} className="tag-pill tag-pill--auto" title="Auto-detected — click ✓ to confirm">
+                {tagMap[tag]?.display_name || tag}
+                <button className="tag-confirm" onClick={() => confirmAutoTag(tag)} title="Confirm">✓</button>
+                <button className="tag-remove" onClick={() => rejectAutoTag(tag)} title="Reject">✕</button>
+              </span>
+            ))}
             <button className="tag-add-btn" ref={addBtnRef} onClick={openDropdown}>+ Tag</button>
           </div>
 
-          {/* Caption */}
-          <div className={`caption-box${isDirty ? ' caption-box--dirty' : ''}`}>
-            <textarea
-              className="caption-textarea"
-              value={caption}
-              placeholder="Enter caption..."
-              onChange={e => handleCaptionChange(e.target.value)}
-              onBlur={handleBlur}
-            />
-            <div className="caption-footer">
-              <span className="caption-length">{caption.length} chars</span>
-              <div className="caption-actions">
-                {saveStatus === 'saving' && <span className="save-status save-status--saving">Saving…</span>}
-                {saveStatus === 'saved'  && <span className="save-status save-status--saved">✓ Saved</span>}
-                {saveStatus === 'error'  && <span className="save-status save-status--error">Error</span>}
-                {isDirty && (
-                  <button className="revert-btn" onClick={() => { clearTimeout(saveTimer.current); setCaption(savedCaption); setSaveStatus('') }}>
-                    Revert
-                  </button>
-                )}
-                {caption && <button className="delete-caption-btn" onClick={deleteCaption}>Delete</button>}
+          {/* Caption / Subtitles tabs */}
+          <div className="card-tabs">
+            <button
+              className={`card-tab-btn${modalTab === 'caption' ? ' card-tab-btn--active' : ''}`}
+              onClick={() => setModalTab('caption')}
+            >Caption</button>
+            {subtitles && (
+              <button
+                className={`card-tab-btn${modalTab === 'subtitles' ? ' card-tab-btn--active' : ''}`}
+                onClick={() => setModalTab('subtitles')}
+              >Subtitles</button>
+            )}
+          </div>
+
+          {modalTab === 'caption' && (
+            <div className={`caption-box${isDirty ? ' caption-box--dirty' : ''}`}>
+              <textarea
+                className="caption-textarea"
+                value={caption}
+                placeholder="Enter caption..."
+                onChange={e => handleCaptionChange(e.target.value)}
+                onBlur={handleBlur}
+              />
+              <div className="caption-footer">
+                <span className="caption-length">{caption.length} chars</span>
+                <div className="caption-actions">
+                  {saveStatus === 'saving' && <span className="save-status save-status--saving">Saving…</span>}
+                  {saveStatus === 'saved'  && <span className="save-status save-status--saved">✓ Saved</span>}
+                  {saveStatus === 'error'  && <span className="save-status save-status--error">Error</span>}
+                  {isDirty && (
+                    <button className="revert-btn" onClick={() => { clearTimeout(saveTimer.current); setCaption(savedCaption); setSaveStatus('') }}>
+                      Revert
+                    </button>
+                  )}
+                  {caption && <button className="delete-caption-btn" onClick={deleteCaption}>Delete</button>}
+                </div>
               </div>
             </div>
-          </div>
+          )}
+
+          {modalTab === 'subtitles' && (
+            <div className="subtitle-box">
+              {subtitles}
+            </div>
+          )}
         </div>
       </div>
 
@@ -847,6 +937,17 @@ export default function VideoPlayerModal({ player, onClose }) {
           onCreate={createAndAddClip}
           creating={creatingColl}
           onClose={() => setCollPickerPos(null)}
+        />,
+        document.body
+      )}
+
+      {refPickerPos && createPortal(
+        <FaceRefPicker
+          position={refPickerPos}
+          tags={Object.keys(tagMap)}
+          saveStatus={refSaveStatus}
+          onSave={saveRef}
+          onClose={() => setRefPickerPos(null)}
         />,
         document.body
       )}
@@ -908,6 +1009,49 @@ function ClipPicker({ position, clips, addStatus, newName, onNewNameChange, onAd
           onMouseDown={onCreate}
           disabled={creating || !newName.trim()}
         >{creating ? '…' : '+'}</button>
+      </div>
+    </div>
+  )
+}
+
+function FaceRefPicker({ position, tags, saveStatus, onSave, onClose }) {
+  const wrapRef = useRef(null)
+
+  useEffect(() => {
+    function onMouseDown(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) onClose()
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [onClose])
+
+  return (
+    <div
+      ref={wrapRef}
+      className="clip-picker ref-picker"
+      style={{ position: 'absolute', top: position.top, left: position.left, zIndex: 2000 }}
+    >
+      <div className="clip-picker-header">Save face ref as</div>
+      {tags.length === 0 && (
+        <div className="clip-picker-empty">No tags yet — create one on the Tags page.</div>
+      )}
+      <div className="clip-picker-list">
+        {tags.map(tag => {
+          const status = saveStatus[tag]
+          return (
+            <button
+              key={tag}
+              className={`clip-picker-item${status === 'done' ? ' clip-picker-item--done' : status === 'error' ? ' clip-picker-item--error' : ''}`}
+              onMouseDown={() => onSave(tag)}
+              disabled={status === 'saving'}
+            >
+              <span className="clip-picker-item-name">{tag}</span>
+              {status === 'saving' && <span className="clip-picker-status">…</span>}
+              {status === 'done'   && <span className="clip-picker-status clip-picker-status--done">✓</span>}
+              {status === 'error'  && <span className="clip-picker-status clip-picker-status--error">!</span>}
+            </button>
+          )
+        })}
       </div>
     </div>
   )

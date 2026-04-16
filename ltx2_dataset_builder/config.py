@@ -28,6 +28,10 @@ class FaceConfig:
     embedding_model: str = "buffalo_l"  # InsightFace model for embeddings
     similarity_threshold: float = 0.4  # Cosine similarity threshold for identity
     sample_frames: int = 5  # Number of frames to sample per clip for face detection
+    # Auto-tagging settings (--step auto-tag)
+    auto_tag_threshold: float = 0.4      # Cosine similarity to count a vote
+    auto_tag_frames_per_scene: int = 5   # Frames sampled per scene
+    auto_tag_min_votes: int = 1          # Min matching frames to apply tag
 
 
 @dataclass
@@ -213,6 +217,9 @@ class PipelineConfig:
                 'embedding_model': self.face.embedding_model,
                 'similarity_threshold': self.face.similarity_threshold,
                 'sample_frames': self.face.sample_frames,
+                'auto_tag_threshold': self.face.auto_tag_threshold,
+                'auto_tag_frames_per_scene': self.face.auto_tag_frames_per_scene,
+                'auto_tag_min_votes': self.face.auto_tag_min_votes,
             },
             'crop': {
                 'expansion_ratio': self.crop.expansion_ratio,
