@@ -24,6 +24,7 @@ export default function VideosPage({ tagMap, allTags }) {
   const [loading, setLoading] = useState(true)
   const [isGridLoading, setIsGridLoading] = useState(false)
   const [detailCollapsed, setDetailCollapsed] = useState(false)
+  const [detailTab, setDetailTab] = useState('info')
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState(null)  // null | { videoId, stats } | { error }
   const importFileRef = useRef(null)
@@ -76,6 +77,8 @@ export default function VideosPage({ tagMap, allTags }) {
   }, [navigate])
 
   const selected = videos.find(v => v.id === videoId) ?? null
+
+  useEffect(() => { setDetailTab('info') }, [videoId])
 
   function onVideoSaved(updatedVideo) {
     setVideos(vs => vs.map(v => v.id === updatedVideo.id ? { ...v, ...updatedVideo } : v))
@@ -219,10 +222,16 @@ export default function VideosPage({ tagMap, allTags }) {
                 <div className="detail-panel-header" onClick={() => setDetailCollapsed(c => !c)}>
                   <span className="collapse-toggle-btn">{detailCollapsed ? '▸' : '▾'}</span>
                   <span className="detail-panel-title">{selected.name || selected.path}</span>
+                  {!detailCollapsed && (
+                    <div className="detail-panel-tabs" onClick={e => e.stopPropagation()}>
+                      <button className={`detail-tab-btn${detailTab === 'info' ? ' active' : ''}`} onClick={() => setDetailTab('info')}>Info</button>
+                      <button className={`detail-tab-btn${detailTab === 'settings' ? ' active' : ''}`} onClick={() => setDetailTab('settings')}>Settings</button>
+                    </div>
+                  )}
                 </div>
-                {!detailCollapsed && (
+                {!detailCollapsed && detailTab === 'info' && (
                   <>
-                    <VideoDetail video={selected} onSaved={onVideoSaved} onDeleted={onVideoDeleted} />
+                    <VideoDetail video={selected} onSaved={onVideoSaved} />
                     <div className="tag-filter-bar">
                       <div className="tag-filter-row">
                         <span className="tag-filter-label">Show:</span>
@@ -319,6 +328,9 @@ export default function VideosPage({ tagMap, allTags }) {
                     </div>
                   </>
                 )}
+                {!detailCollapsed && detailTab === 'settings' && (
+                  <VideoSettings video={selected} onDeleted={onVideoDeleted} />
+                )}
               </div>
               <div className="videos-scenes-panel">
                 <SceneGrid
@@ -378,17 +390,13 @@ export default function VideosPage({ tagMap, allTags }) {
   )
 }
 
-function VideoDetail({ video, onSaved, onDeleted }) {
+function VideoDetail({ video, onSaved }) {
   const [name, setName]     = useState(video.name || '')
   const [prompt, setPrompt] = useState(video.prompt || '')
   const [savedName,   setSavedName]   = useState(video.name || '')
   const [savedPrompt, setSavedPrompt] = useState(video.prompt || '')
   const [nameStatus,   setNameStatus]   = useState('')
   const [promptStatus, setPromptStatus] = useState('')
-  const [showDeleteModal, setShowDeleteModal] = useState(false)
-  const [deleteConfirm,   setDeleteConfirm]   = useState('')
-  const [deleting,        setDeleting]        = useState(false)
-  const [deleteError,     setDeleteError]     = useState('')
 
   useEffect(() => {
     setName(video.name || '')
@@ -397,9 +405,6 @@ function VideoDetail({ video, onSaved, onDeleted }) {
     setSavedPrompt(video.prompt || '')
     setNameStatus('')
     setPromptStatus('')
-    setShowDeleteModal(false)
-    setDeleteConfirm('')
-    setDeleteError('')
   }, [video.id])
 
   const pct = video.scene_count > 0
@@ -437,24 +442,6 @@ function VideoDetail({ video, onSaved, onDeleted }) {
     } catch { setPromptStatus('Error') }
   }
 
-  const confirmTitle = video.name || video.path.split('/').pop().replace(/\.[^.]+$/, '')
-  const deleteReady  = deleteConfirm === confirmTitle
-
-  async function doDelete() {
-    if (!deleteReady) return
-    setDeleting(true)
-    setDeleteError('')
-    try {
-      const r = await fetch(`/api/videos/${video.id}`, { method: 'DELETE' })
-      const data = await r.json()
-      if (!r.ok) throw new Error(data.error || 'Delete failed')
-      onDeleted(video.id)
-    } catch (err) {
-      setDeleteError(err.message)
-      setDeleting(false)
-    }
-  }
-
   return (
     <div className="video-detail">
       {/* Stats bar */}
@@ -469,13 +456,9 @@ function VideoDetail({ video, onSaved, onDeleted }) {
         </div>
         <div className="video-detail-counts">
           <span className="video-detail-captioned">{video.captioned} / {video.scene_count} captioned ({pct}%)</span>
-        </div>
-      </div>
-
-      {/* Progress bar */}
-      <div className="video-detail-progress-wrap">
-        <div className="progress-bar-wrap" style={{ height: 6, borderRadius: 3 }}>
-          <div className="progress-bar" style={{ width: `${pct}%` }} />
+          <div className="progress-bar-wrap" style={{ height: 4, borderRadius: 2, marginTop: 4 }}>
+            <div className="progress-bar" style={{ width: `${pct}%` }} />
+          </div>
         </div>
       </div>
 
@@ -534,15 +517,49 @@ function VideoDetail({ video, onSaved, onDeleted }) {
           </div>
         </div>
 
+      </div>
+    </div>
+  )
+}
+
+function VideoSettings({ video, onDeleted }) {
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const [deleteConfirm,   setDeleteConfirm]   = useState('')
+  const [deleting,        setDeleting]        = useState(false)
+  const [deleteError,     setDeleteError]     = useState('')
+
+  useEffect(() => {
+    setShowDeleteModal(false)
+    setDeleteConfirm('')
+    setDeleteError('')
+  }, [video.id])
+
+  const confirmTitle = video.name || video.path.split('/').pop().replace(/\.[^.]+$/, '')
+  const deleteReady  = deleteConfirm === confirmTitle
+
+  async function doDelete() {
+    if (!deleteReady) return
+    setDeleting(true)
+    setDeleteError('')
+    try {
+      const r = await fetch(`/api/videos/${video.id}`, { method: 'DELETE' })
+      const data = await r.json()
+      if (!r.ok) throw new Error(data.error || 'Delete failed')
+      onDeleted(video.id)
+    } catch (err) {
+      setDeleteError(err.message)
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <div className="video-detail">
+      <div className="video-detail-fields">
         <div className="video-detail-field video-detail-field--full">
           <label className="video-detail-label">Export</label>
           <div className="video-detail-input-row">
             <span className="video-detail-hint">Download scenes, tags, and clips for this video as a zip file.</span>
-            <a
-              className="save-btn"
-              href={`/api/videos/${video.id}/export`}
-              download
-            >Export DB</a>
+            <a className="save-btn" href={`/api/videos/${video.id}/export`} download>Export DB</a>
           </div>
         </div>
 
@@ -563,9 +580,7 @@ function VideoDetail({ video, onSaved, onDeleted }) {
               This will permanently remove <strong>{confirmTitle}</strong> and all its scenes, tags, buckets, and clip memberships from the database.
               The source video file will not be touched.
             </p>
-            <p className="delete-video-body">
-              Type <strong>{confirmTitle}</strong> to confirm:
-            </p>
+            <p className="delete-video-body">Type <strong>{confirmTitle}</strong> to confirm:</p>
             <input
               className="delete-video-input"
               value={deleteConfirm}

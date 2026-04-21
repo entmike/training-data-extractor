@@ -29,9 +29,12 @@ class FaceConfig:
     similarity_threshold: float = 0.4  # Cosine similarity threshold for identity
     sample_frames: int = 5  # Number of frames to sample per clip for face detection
     # Auto-tagging settings (--step auto-tag)
-    auto_tag_threshold: float = 0.4      # Cosine similarity to count a vote
-    auto_tag_frames_per_scene: int = 5   # Frames sampled per scene
-    auto_tag_min_votes: int = 1          # Min matching frames to apply tag
+    auto_tag_threshold: float = 0.4          # InsightFace cosine similarity to count a vote
+    auto_tag_frames_per_scene: int = 5       # Frames sampled per scene
+    auto_tag_min_votes: int = 1              # Min matching frames to apply tag
+    # CLIP settings (for animated/stylized characters)
+    clip_model: str = "openai/clip-vit-large-patch14"
+    clip_auto_tag_threshold: float = 0.85    # CLIP cosine similarity threshold (sims are higher than InsightFace)
 
 
 @dataclass
@@ -220,6 +223,8 @@ class PipelineConfig:
                 'auto_tag_threshold': self.face.auto_tag_threshold,
                 'auto_tag_frames_per_scene': self.face.auto_tag_frames_per_scene,
                 'auto_tag_min_votes': self.face.auto_tag_min_votes,
+                'clip_model': self.face.clip_model,
+                'clip_auto_tag_threshold': self.face.clip_auto_tag_threshold,
             },
             'crop': {
                 'expansion_ratio': self.crop.expansion_ratio,

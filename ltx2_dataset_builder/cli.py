@@ -200,6 +200,11 @@ def run_step(config: PipelineConfig, step: str) -> None:
         logger.info("Running: Extract subtitles")
         extract_all_subtitles(config)
 
+    elif step == "cluster-faces":
+        from .cluster.faces import cluster_all_faces
+        logger.info("Running: Cluster face embeddings")
+        cluster_all_faces(config)
+
     elif step == "blurhash":
         from .scenes.blurhash import compute_all_blurhashes
         logger.info("Running: Compute scene blurhashes")
@@ -281,7 +286,7 @@ Examples:
     parser.add_argument(
         "--step",
         type=str,
-        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "subtitles", "debug-scenes", "debug-candidates", "auto-tag"],
+        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "subtitles", "debug-scenes", "debug-candidates", "auto-tag", "cluster-faces"],
         help="Run a specific pipeline step"
     )
     
@@ -359,6 +364,12 @@ Examples:
         type=int,
         metavar="FRAME",
         help="Frame number (used with --add-tag-ref)"
+    )
+    parser.add_argument(
+        "--embedding-type",
+        choices=["auto", "insightface", "clip"],
+        default="auto",
+        help="Embedding strategy for --add-tag-ref: 'auto' tries InsightFace then falls back to CLIP; 'clip' forces CLIP whole-frame embedding (best for animated/stylized characters)"
     )
     parser.add_argument(
         "--tag",
@@ -503,7 +514,8 @@ Examples:
         if not args.video or args.frame is None:
             parser.error("--add-tag-ref requires --video and --frame")
         from .autotag.face_tag import add_tag_reference
-        add_tag_reference(config, args.add_tag_ref, args.video, args.frame)
+        add_tag_reference(config, args.add_tag_ref, args.video, args.frame,
+                          embedding_type=args.embedding_type)
         return 0
 
     # List tag references mode

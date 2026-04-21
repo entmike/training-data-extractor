@@ -248,25 +248,38 @@ def sample_frames_from_clip(
     video_path: Path,
     start_time: float,
     end_time: float,
-    num_frames: int
+    num_frames: int,
+    pad_frames: int = 5,
+    fps: float = 24.0,
 ) -> List[Tuple[float, "np.ndarray"]]:
     """
-    Sample evenly spaced frames from a clip.
-    
+    Sample evenly spaced frames from a clip, padded inward by pad_frames on each
+    end to avoid bleed from adjacent scenes.
+
     Args:
         video_path: Path to the video file
         start_time: Start time in seconds
         end_time: End time in seconds
         num_frames: Number of frames to sample
-        
+        pad_frames: Frames to skip at the start and end of the scene
+        fps: Frame rate used to convert pad_frames to seconds
+
     Returns:
         List of (time, frame) tuples
     """
     import numpy as np
-    
-    duration = end_time - start_time
-    times = np.linspace(start_time, end_time, num_frames, endpoint=False)
-    
+
+    pad_secs = pad_frames / fps
+    sample_start = start_time + pad_secs
+    sample_end   = end_time   - pad_secs
+
+    # If padding collapses the window, fall back to the original bounds
+    if sample_start >= sample_end:
+        sample_start = start_time
+        sample_end   = end_time
+
+    times = np.linspace(sample_start, sample_end, num_frames, endpoint=False)
+
     frames = []
     for t in times:
         try:

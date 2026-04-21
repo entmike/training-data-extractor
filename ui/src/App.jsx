@@ -6,6 +6,8 @@ import VideoPlayerModal from './components/VideoPlayerModal'
 import ManageClipsModal from './components/ManageClipsModal'
 import VideosPage from './components/VideosPage'
 import TagsPage from './components/TagsPage'
+import DiscoverPage from './components/DiscoverPage'
+import ClusterDetailPage from './components/ClusterDetailPage'
 
 export default function App() {
   const navigate = useNavigate()
@@ -50,6 +52,8 @@ export default function App() {
         <Route path="/clips/:clipId" element={<ClipsPage tagMap={tagMap} headerProps={sharedProps} />} />
         <Route path="/tags" element={pageLayout(<TagsPage />)} />
         <Route path="/tags/:tag" element={pageLayout(<TagsPage />)} />
+        <Route path="/discover" element={pageLayout(<DiscoverPage />)} />
+        <Route path="/cluster/:clusterId" element={pageLayout(<ClusterDetailPage />)} />
       </Routes>
 
       {player && <VideoPlayerModal player={player} onClose={closePlayer} />}

@@ -10,12 +10,14 @@ function fmtBytes(b) {
 }
 
 const ROUTE_TITLES = [
-  [/^\/videos/, 'Videos'],
-  [/^\/clips/,  'Clips'],
-  [/^\/tags/,   'Tags'],
+  [/^\/videos/,   'Videos'],
+  [/^\/clips/,    'Clips'],
+  [/^\/tags/,     'Tags'],
+  [/^\/discover/, 'Discover'],
+  [/^\/cluster\//, 'Cluster'],
 ]
 
-export default function Header({ isLoading, onManageTags, onManageVideos }) {
+export default function Header({ isLoading, onManageTags, onManageVideos, onDiscover }) {
   const navigate = useNavigate()
   const { pathname } = useLocation()
 
@@ -30,6 +32,7 @@ export default function Header({ isLoading, onManageTags, onManageVideos }) {
           onManageTags={onManageTags}
           onManageVideos={onManageVideos}
           onManageClips={() => navigate('/clips')}
+          onDiscover={onDiscover || (() => navigate('/discover'))}
           disabled={isLoading}
         />
       </div>
@@ -84,7 +87,7 @@ function ClearCacheModal({ sizeLabel, onConfirm, onCancel }) {
   )
 }
 
-function ManageMenu({ onManageTags, onManageVideos, onManageClips, disabled }) {
+function ManageMenu({ onManageTags, onManageVideos, onManageClips, onDiscover, disabled }) {
   const [open, setOpen] = useState(false)
   const [cacheSize, setCacheSize] = useState(null)  // null = unknown, false = clearing
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -131,6 +134,7 @@ function ManageMenu({ onManageTags, onManageVideos, onManageClips, disabled }) {
     { label: 'Tags', action: onManageTags },
     { label: 'Videos', action: onManageVideos },
     { label: 'Clips', action: onManageClips },
+    { label: 'Discover', action: onDiscover },
   ]
 
   return (

@@ -37,6 +37,7 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
 
   const [saving,  setSaving]  = useState(false)
   const [saveMsg, setSaveMsg] = useState('') // '' | 'saved' | 'error'
+  const [itemMute, setItemMute] = useState(!!item.mute)
 
   // Caption state — auto-saves independently
   const rawCaption = (item.caption && !item.caption.startsWith('__')) ? item.caption : ''
@@ -205,6 +206,17 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
     setSaving(false)
   }
 
+  async function toggleItemMute() {
+    const newMute = !itemMute
+    setItemMute(newMute)
+    await fetch(`/api/clips/${clipId}/items/${item.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mute: newMute }),
+    })
+    onSaved({ ...item, mute: newMute })
+  }
+
   const startPct = sceneFrames > 0 ? (startOff / sceneFrames) * 100 : 0
   const endPct   = sceneFrames > 0 ? (endOff   / sceneFrames) * 100 : 0
   const isDirty  = startOff !== (item.start_frame - sceneStart) || endOff !== (item.end_frame - sceneStart)
@@ -362,6 +374,10 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
                 setEndOff(item.end_frame - sceneStart)
               }}>Revert</button>
             )}
+            <label className="cie-mute-label">
+              <input type="checkbox" checked={itemMute} onChange={toggleItemMute} />
+              Mute
+            </label>
           </div>
         </div>
 

@@ -20,6 +20,7 @@ function itemToScene(item, clipId) {
     caption: item.caption,
     tags: item.tags || [],
     rating: item.rating,
+    mute: item.mute,
     video_name: item.video_name,
     start_time_hms: item.start_time_hms,
     duration: item.duration,
@@ -119,6 +120,15 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
     if (selectedId === id) setSelectedId(next.length > 0 ? next[0].id : null)
   }
 
+  async function cloneClip(id) {
+    const r = await fetch(`/api/clips/${id}/clone`, { method: 'POST' })
+    if (r.ok) {
+      const d = await r.json()
+      await fetchClips()
+      setSelectedId(d.clip.id)
+    }
+  }
+
   async function startRename(col) {
     setRenamingId(col.id)
     setRenameDraft(col.name)
@@ -152,6 +162,16 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
       setClips(cols => cols.map(c => c.id === selectedId ? { ...c, ...d.clip } : c))
     }
     setSavingPrompt(false)
+  }
+
+  async function toggleItemMute(item) {
+    const newMute = !item.mute
+    setItems(prev => prev.map(i => i.id === item.id ? { ...i, mute: newMute } : i))
+    await fetch(`/api/clips/${selectedId}/items/${item.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mute: newMute }),
+    })
   }
 
   async function removeItem(itemId) {
@@ -274,6 +294,11 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
                       onClick={e => { e.stopPropagation(); startRename(col) }}
                     >✎</button>
                     <button
+                      className="clip-action-btn"
+                      title="Clone"
+                      onClick={e => { e.stopPropagation(); cloneClip(col.id) }}
+                    >⧉</button>
+                    <button
                       className="clip-action-btn clip-action-btn--danger"
                       title="Delete"
                       onClick={e => { e.stopPropagation(); deleteClip(col.id) }}
@@ -362,13 +387,25 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
                   renderOverlay={scene => {
                     const item = items.find(i => i.scene_id === scene.id)
                     return (
-                      <div className="clip-item-overlays">
-                        <button
-                          className="clip-item-remove-btn"
-                          title="Remove from clip"
-                          onClick={() => item && removeItem(item.id)}
-                        >✕</button>
-                      </div>
+                      <>
+                        <div className="clip-item-overlays">
+                          <button
+                            className={`clip-item-mute-btn${item?.mute ? ' clip-item-mute-btn--active' : ''}`}
+                            title={item?.mute ? 'Unmute' : 'Mute'}
+                            onClick={() => item && toggleItemMute(item)}
+                          >
+                            {item?.mute
+                              ? <svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><path d="M16.5 12A4.5 4.5 0 0014 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0021 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06A8.99 8.99 0 0017.73 18l1.28 1.27L20 18l-16-16-1.73 1.73zm9.73.73L9.13 8.6 12 11.47V4.73z"/></svg>
+                              : <svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77 0-4.28-2.99-7.86-7-8.77z"/></svg>
+                            }
+                          </button>
+                          <button
+                            className="clip-item-remove-btn"
+                            title="Remove from clip"
+                            onClick={() => item && removeItem(item.id)}
+                          >✕</button>
+                        </div>
+                      </>
                     )
                   }}
                 />

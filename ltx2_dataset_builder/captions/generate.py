@@ -86,6 +86,7 @@ def extract_scene_clip(
     output_path: Path,
     max_width: int = 1920,
     max_height: int = 1080,
+    mute: bool = False,
 ) -> bool:
     """
     Extract a video clip from a scene for captioning.
@@ -110,6 +111,7 @@ def extract_scene_clip(
         "force_original_aspect_ratio=decrease:force_divisible_by=2"
     )
 
+    audio_args = ["-an"] if mute else ["-c:a", "aac", "-ac", "2"]
     cmd = [
         "ffmpeg",
         "-ss", str(start_time),
@@ -119,8 +121,7 @@ def extract_scene_clip(
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-pix_fmt", "yuv420p",  # Force 8-bit; 10-bit HDR source segfaults torchvision
-        "-c:a", "aac",
-        "-ac", "2",  # Downmix to stereo; torchvision 0.25 segfaults on 7.1 (8-ch) audio
+        *audio_args,
         "-y",
         str(output_path)
     ]
@@ -172,6 +173,7 @@ def prepare_scene_inputs(
     prompt: Optional[str] = None,
     tags: Optional[List[str]] = None,
     tag_definitions: Optional[Dict[str, str]] = None,
+    mute: bool = False,
 ):
     """
     CPU-bound preparation: extract clip with FFmpeg, decode frames/audio,
@@ -198,10 +200,11 @@ def prepare_scene_inputs(
     tmpdir = tempfile.TemporaryDirectory()
     clip_path = Path(tmpdir.name) / "clip.mp4"
 
-    if not extract_scene_clip(video_path, adjusted_start, adjusted_end, clip_path):
+    if not extract_scene_clip(video_path, adjusted_start, adjusted_end, clip_path, mute=mute):
         tmpdir.cleanup()
         raise RuntimeError(f"Failed to extract clip from {video_path}")
 
+    use_audio = not mute
     conversation = []
     if tags:
         conversation.append({
@@ -219,7 +222,7 @@ def prepare_scene_inputs(
     text = processor.apply_chat_template(
         conversation, add_generation_prompt=True, tokenize=False
     )
-    audios, images, videos = process_mm_info(conversation, use_audio_in_video=True)
+    audios, images, videos = process_mm_info(conversation, use_audio_in_video=use_audio)
     inputs = processor(
         text=text,
         audio=audios,
@@ -227,13 +230,13 @@ def prepare_scene_inputs(
         videos=videos,
         return_tensors="pt",
         padding=True,
-        use_audio_in_video=True,
+        use_audio_in_video=use_audio,
     )
 
-    return inputs, tmpdir, caption_prompt
+    return inputs, tmpdir, caption_prompt, use_audio
 
 
-def run_scene_inference(inputs) -> str:
+def run_scene_inference(inputs, use_audio_in_video: bool = True) -> str:
     """
     GPU-bound inference step. Takes pre-prepared inputs, returns caption string.
     """
@@ -245,7 +248,7 @@ def run_scene_inference(inputs) -> str:
     with torch.no_grad():
         text_ids, _ = model.generate(
             **inputs_gpu,
-            use_audio_in_video=True,
+            use_audio_in_video=use_audio_in_video,
             max_new_tokens=150,
             do_sample=False,
         )
@@ -279,14 +282,14 @@ def caption_scene_with_qwen(
     Convenience wrapper: prepare inputs then run inference.
     Used when pipelining is not in effect.
     """
-    inputs, tmpdir, caption_prompt = prepare_scene_inputs(
+    inputs, tmpdir, caption_prompt, use_audio = prepare_scene_inputs(
         video_path, start_time, end_time,
         frame_offset=frame_offset, fps=fps,
         start_frame=start_frame, end_frame=end_frame,
         prompt=prompt, tags=tags, tag_definitions=tag_definitions,
     )
     try:
-        response = run_scene_inference(inputs)
+        response = run_scene_inference(inputs, use_audio_in_video=use_audio)
     finally:
         tmpdir.cleanup()
     return response, caption_prompt
@@ -435,7 +438,7 @@ def _pick_next_clip_item(db: Database) -> Optional[Dict[str, Any]]:
     with db._connection() as conn:
         row = conn.execute(
             """
-            SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame,
+            SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame, ci.mute,
                    s.start_time, s.end_time,
                    (SELECT COUNT(*) FROM scene_tags st WHERE st.scene_id = ci.scene_id) AS tag_count,
                    c.caption_prompt AS clip_caption_prompt
@@ -511,6 +514,7 @@ def _get_clip_item_prep_args(db: Database, item: Dict[str, Any]):
         prompt=video_prompt,
         tags=scene_tags,
         tag_definitions=scene_tag_definitions,
+        mute=bool(item.get("mute")),
     )
 
 
@@ -591,10 +595,11 @@ def caption_all_scenes(
 
         def _run():
             try:
-                inputs, tmpdir, prompt = prepare_scene_inputs(**args)
+                inputs, tmpdir, prompt, use_audio = prepare_scene_inputs(**args)
                 prefetch_result["inputs"] = inputs
                 prefetch_result["tmpdir"] = tmpdir
                 prefetch_result["prompt"] = prompt
+                prefetch_result["use_audio"] = use_audio
             except Exception as exc:
                 prefetch_result["error"] = exc
 
@@ -639,10 +644,11 @@ def caption_all_scenes(
         inputs      = prefetch_result["inputs"]
         tmpdir      = prefetch_result["tmpdir"]
         prompt_used = prefetch_result["prompt"]
+        use_audio   = prefetch_result.get("use_audio", True)
         started_at  = _now_utc()
 
         try:
-            caption = run_scene_inference(inputs)
+            caption = run_scene_inference(inputs, use_audio_in_video=use_audio)
             finished_at = _now_utc()
         except Exception as e:
             logger.error(f"Failed to caption {_log_label(work_item)}: {e}")

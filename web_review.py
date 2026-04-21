@@ -49,10 +49,11 @@ def _resolve(p: str) -> Path:
     return path if path.is_absolute() else _HERE / path
 
 OUTPUT_DIR       = _resolve(config.get("output_dir", "./dataset"))
-_CACHE_DIR       = _resolve(config.get("cache_dir", ".cache"))
-DEBUG_SCENES_DIR = _CACHE_DIR / "previews"
-WAVEFORMS_DIR    = _CACHE_DIR / "waveforms"
-CLIPS_DIR        = _CACHE_DIR / "clips"
+_CACHE_DIR        = _resolve(config.get("cache_dir", ".cache"))
+DEBUG_SCENES_DIR  = _CACHE_DIR / "previews"
+WAVEFORMS_DIR     = _CACHE_DIR / "waveforms"
+CLIPS_DIR         = _CACHE_DIR / "clips"
+CLUSTER_CACHE_DIR = _CACHE_DIR / "clusters"
 
 # ── PostgreSQL connection pool ────────────────────────────────────────────────
 
@@ -70,7 +71,7 @@ def _get_dsn() -> str:
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _pool
     if _pool is None:
-        _pool = psycopg2.pool.ThreadedConnectionPool(2, 10, _get_dsn())
+        _pool = psycopg2.pool.ThreadedConnectionPool(2, 20, _get_dsn())
     return _pool
 
 
@@ -590,33 +591,36 @@ def get_scenes():
 
     scenes_from = "FROM scenes s JOIN videos v ON s.video_id = v.id"
 
-    total = conn.execute(
-        f"SELECT COUNT(*) AS total {scenes_from} {where_clause}",
-        params
-    ).fetchone()["total"]
+    try:
+        total = conn.execute(
+            f"SELECT COUNT(*) AS total {scenes_from} {where_clause}",
+            params
+        ).fetchone()["total"]
 
-    offset = (page - 1) * limit
-    
-    order_by = (
-        "s.start_frame ASC, s.video_id, s.id" if sort == "frames_asc"
-        else "s.start_frame DESC, s.video_id, s.id" if sort == "frames_desc"
-        else "s.video_id, s.id"
-    )
-    base_query = f"""
-        SELECT s.*, v.path as video_path, v.fps, v.frame_offset, v.duration as video_duration,
-            (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
-            (SELECT COUNT(*) FROM clip_items ci WHERE ci.scene_id = s.id) as clip_count,
-            (SELECT COUNT(*) FROM tag_references tr WHERE tr.video_id = s.video_id AND tr.frame_number >= s.start_frame AND tr.frame_number <= s.end_frame) as face_ref_count,
-            (SELECT STRING_AGG(st.tag, '|') FROM scene_tags st WHERE st.scene_id = s.id AND st.confirmed = TRUE) as tags_concat,
-            (SELECT STRING_AGG(st.tag, '|') FROM scene_tags st WHERE st.scene_id = s.id AND st.confirmed = FALSE) as auto_tags_concat
-        {scenes_from}
-        {where_clause}
-        ORDER BY {order_by}
-        LIMIT {limit} OFFSET {offset}
-    """
-    
-    rows = conn.execute(base_query, params).fetchall()
-    conn.close()
+        offset = (page - 1) * limit
+
+        order_by = (
+            "s.start_frame ASC, s.video_id, s.id" if sort == "frames_asc"
+            else "s.start_frame DESC, s.video_id, s.id" if sort == "frames_desc"
+            else "s.video_id, s.id"
+        )
+        base_query = f"""
+            SELECT s.*, v.path as video_path, v.fps, v.frame_offset, v.width as video_width, v.height as video_height, v.duration as video_duration,
+                (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
+                (SELECT COUNT(*) FROM clip_items ci WHERE ci.scene_id = s.id) as clip_count,
+                (SELECT COUNT(*) FROM tag_references tr WHERE tr.video_id = s.video_id AND tr.frame_number >= s.start_frame AND tr.frame_number <= s.end_frame) as face_ref_count,
+                (SELECT COALESCE(MAX(fc.cnt), 0) FROM (SELECT COUNT(*) as cnt FROM face_detections fd WHERE fd.video_id = s.video_id AND fd.frame_number >= s.start_frame AND fd.frame_number <= s.end_frame AND fd.det_score >= 0.85 GROUP BY fd.frame_number) fc) as max_faces,
+                (SELECT STRING_AGG(st.tag, '|') FROM scene_tags st WHERE st.scene_id = s.id AND st.confirmed = TRUE) as tags_concat,
+                (SELECT STRING_AGG(st.tag, '|') FROM scene_tags st WHERE st.scene_id = s.id AND st.confirmed = FALSE) as auto_tags_concat
+            {scenes_from}
+            {where_clause}
+            ORDER BY {order_by}
+            LIMIT {limit} OFFSET {offset}
+        """
+
+        rows = conn.execute(base_query, params).fetchall()
+    finally:
+        conn.close()
 
     # Build preview lookup once for all scenes in this batch (avoid per-scene glob).
     # Scans video-partitioned subdirectories; falls back to flat legacy files.
@@ -671,8 +675,11 @@ def get_scenes():
             'blurhash': d.get('blurhash'),
             'clip_count': d.get('clip_count') or 0,
             'face_ref_count': d.get('face_ref_count') or 0,
+            'max_faces': d.get('max_faces') or 0,
             'subtitles': d.get('subtitles') or '',
             'video_total_frames': round((d.get('video_duration') or 0) * (d.get('fps') or 24.0)),
+            'video_width': d.get('video_width') or 0,
+            'video_height': d.get('video_height') or 0,
         })
 
     return jsonify({
@@ -1038,12 +1045,12 @@ def list_tag_refs():
     conn = get_db_connection()
     if tag:
         rows = conn.execute(
-            "SELECT id, tag, video_id, frame_number, frame_time, created_at FROM tag_references WHERE tag = %s ORDER BY tag, id",
+            "SELECT id, tag, video_id, frame_number, frame_time, embedding_type, created_at FROM tag_references WHERE tag = %s ORDER BY tag, id",
             (tag,)
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT id, tag, video_id, frame_number, frame_time, created_at FROM tag_references ORDER BY tag, id"
+            "SELECT id, tag, video_id, frame_number, frame_time, embedding_type, created_at FROM tag_references ORDER BY tag, id"
         ).fetchall()
     conn.close()
     return jsonify({"refs": [dict(r) for r in rows]})
@@ -1051,11 +1058,15 @@ def list_tag_refs():
 
 @app.route('/api/tag-refs', methods=['POST'])
 def add_tag_ref():
-    """Extract a face embedding from a video frame and store as a tag reference."""
+    """Extract an embedding from a video frame and store as a tag reference.
+
+    Accepts embedding_type: 'insightface' (default) or 'clip'.
+    """
     data = request.get_json()
     scene_id = data.get('scene_id')
     tag = (data.get('tag') or '').strip().lower()
     frame = data.get('frame')
+    embedding_type = data.get('embedding_type', 'insightface')
 
     if not scene_id or not tag or frame is None:
         return jsonify({'error': 'scene_id, tag, and frame are required'}), 400
@@ -1076,41 +1087,45 @@ def add_tag_ref():
 
     from pathlib import Path
     from ltx2_dataset_builder.utils.ffmpeg import get_frame_at_time
-    from ltx2_dataset_builder.autotag.face_tag import _pick_best_face
-    from ltx2_dataset_builder.faces.detect import get_face_analyzer
 
     video_path = Path(video_row['path'])
     fps = video_row['fps'] or 24.0
     frame_number = int(frame)
     frame_time = frame_number / fps
 
-    # Ensure InsightFace is loaded (uses default buffalo_l)
-    get_face_analyzer()
-
-    # Dummy config shim — only embedding_model is needed by _pick_best_face
-    class _FaceCfg:
-        embedding_model = 'buffalo_l'
-    class _Cfg:
-        face = _FaceCfg()
-
     try:
         frame_bgr = get_frame_at_time(video_path, frame_time)
-        embedding_bytes = _pick_best_face(frame_bgr, _Cfg())
     except Exception as e:
         return jsonify({'error': f'Frame extraction failed: {e}'}), 500
 
-    if embedding_bytes is None:
-        return jsonify({'error': 'No face detected at that frame — try a different position'}), 422
+    if embedding_type == 'clip':
+        from ltx2_dataset_builder.embed.clip_embed import embed_frame
+        embedding_bytes = embed_frame(frame_bgr).tobytes()
+        actual_type = 'clip'
+    else:
+        from ltx2_dataset_builder.autotag.face_tag import _pick_best_face
+        from ltx2_dataset_builder.faces.detect import get_face_analyzer
+        get_face_analyzer()
+
+        class _FaceCfg:
+            embedding_model = 'buffalo_l'
+        class _Cfg:
+            face = _FaceCfg()
+
+        embedding_bytes = _pick_best_face(frame_bgr, _Cfg())
+        if embedding_bytes is None:
+            return jsonify({'error': 'No face detected at that frame — try a different position'}), 422
+        actual_type = 'insightface'
 
     conn = get_db_connection()
     cur = conn.execute(
-        "INSERT INTO tag_references (tag, video_id, frame_number, frame_time, embedding) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-        (tag, video_row['id'], frame_number, frame_time, embedding_bytes)
+        "INSERT INTO tag_references (tag, video_id, frame_number, frame_time, embedding, embedding_type) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+        (tag, video_row['id'], frame_number, frame_time, embedding_bytes, actual_type)
     )
     ref_id = cur.fetchone()['id']
     conn.commit()
     conn.close()
-    return jsonify({'ref_id': ref_id, 'tag': tag, 'frame': frame_number, 'frame_time': frame_time}), 201
+    return jsonify({'ref_id': ref_id, 'tag': tag, 'frame': frame_number, 'frame_time': frame_time, 'embedding_type': actual_type}), 201
 
 
 @app.route('/api/tag-refs/<int:ref_id>', methods=['DELETE'])
@@ -1168,6 +1183,442 @@ def tag_ref_image(ref_id: int):
         return send_file(io.BytesIO(buf.tobytes()), mimetype='image/jpeg')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/clusters', methods=['GET'])
+def list_clusters():
+    """List face clusters. ?include_dismissed=1 to include dismissed."""
+    include_dismissed   = request.args.get('include_dismissed', '0') == '1'
+    include_promoted    = request.args.get('include_promoted', '1') == '1'
+    only_unclassified   = request.args.get('only_unclassified', '0') == '1'
+    min_scenes = int(request.args.get('min_scenes', 5))
+    conn = get_db_connection()
+    sql = """
+        SELECT fc.id, fc.cluster_label, fc.size, fc.stable_key,
+               fc.sample_frame_numbers, fc.sample_video_ids,
+               fc.nearest_tag, fc.nearest_sim, fc.dismissed, fc.promoted_tag,
+               (SELECT COUNT(DISTINCT s.id)
+                FROM face_detections fd
+                JOIN videos v ON v.id = fd.video_id
+                JOIN scenes s ON s.video_id = fd.video_id
+                  AND (fd.frame_number - COALESCE(v.frame_offset, 0))::float / v.fps
+                      BETWEEN s.start_time AND s.end_time
+                WHERE fd.id = ANY(fc.member_detection_ids)
+               ) AS scene_count
+        FROM face_clusters fc
+        WHERE (SELECT COUNT(DISTINCT s.id)
+               FROM face_detections fd
+               JOIN videos v ON v.id = fd.video_id
+               JOIN scenes s ON s.video_id = fd.video_id
+                 AND (fd.frame_number - COALESCE(v.frame_offset, 0))::float / v.fps
+                     BETWEEN s.start_time AND s.end_time
+               WHERE fd.id = ANY(fc.member_detection_ids)
+              ) >= %s"""
+    params: list = [min_scenes]
+    if not include_dismissed:
+        sql += " AND fc.dismissed = FALSE"
+    if not include_promoted:
+        sql += " AND fc.promoted_tag IS NULL"
+    if only_unclassified:
+        sql += " AND fc.nearest_tag IS NULL AND fc.promoted_tag IS NULL"
+    sql += " ORDER BY fc.size DESC"
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    result = []
+    for c in rows:
+        result.append({
+            'id': c['id'],
+            'cluster_label': c['cluster_label'],
+            'size': c['size'],
+            'stable_key': c['stable_key'],
+            'scene_count': c['scene_count'] or 0,
+            'sample_frame_numbers': list(c['sample_frame_numbers'] or []),
+            'sample_video_ids': list(c['sample_video_ids'] or []),
+            'nearest_tag': c['nearest_tag'],
+            'nearest_sim': c['nearest_sim'],
+            'dismissed': c['dismissed'],
+            'promoted_tag': c['promoted_tag'],
+        })
+    return jsonify({'clusters': result})
+
+
+@app.route('/api/clusters/run', methods=['POST'])
+def run_clustering():
+    """Trigger face embedding clustering and store results in face_clusters."""
+    from ltx2_dataset_builder.cluster.faces import cluster_all_faces
+    from ltx2_dataset_builder.config import PipelineConfig
+    import os, shutil
+    cfg = PipelineConfig()
+    cfg.pg_dsn = os.environ.get('DATABASE_URL')
+    try:
+        count = cluster_all_faces(cfg)
+        if CLUSTER_CACHE_DIR.exists():
+            shutil.rmtree(CLUSTER_CACHE_DIR)
+        return jsonify({'clusters': count})
+    except Exception as e:
+        app.logger.exception("Clustering failed")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/clusters/<int:cluster_id>/dismiss', methods=['POST'])
+def dismiss_cluster(cluster_id: int):
+    conn = get_db_connection()
+    conn.execute("""
+        UPDATE face_clusters
+        SET dismissed = TRUE,
+            stable_key = COALESCE(stable_key, 'dismissed-' || id)
+        WHERE id = %s
+    """, (cluster_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'dismissed': cluster_id})
+
+
+@app.route('/api/clusters/<int:cluster_id>/promote', methods=['POST'])
+def promote_cluster(cluster_id: int):
+    """Promote a cluster to a tag.
+
+    If the tag has no existing face references, auto-registers up to 5 refs
+    from distinct scenes, preferring frames where only one face is detected.
+    """
+    data = request.get_json() or {}
+    tag = (data.get('tag') or '').strip().lower()
+    if not tag:
+        return jsonify({'error': 'tag is required'}), 400
+
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT centroid, member_detection_ids, sample_frame_numbers, sample_video_ids FROM face_clusters WHERE id = %s",
+        (cluster_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'error': 'Cluster not found'}), 404
+
+    # Check existing refs for this tag
+    existing_refs = conn.execute(
+        "SELECT COUNT(*) AS n FROM tag_references WHERE tag = %s AND embedding_type = 'insightface'",
+        (tag,)
+    ).fetchone()['n']
+
+    ref_ids = []
+
+    if existing_refs == 0:
+        # Auto-register up to 5 refs from distinct scenes, preferring single-face frames
+        from ltx2_dataset_builder.utils.ffmpeg import get_frame_at_time
+        from ltx2_dataset_builder.autotag.face_tag import _pick_best_face
+
+        detection_ids = list(row['member_detection_ids'] or [])
+
+        # Find candidate detections: for each member, count faces in that frame
+        # Prefer single-face frames, then take best-from-each-scene up to 5
+        candidates = conn.execute("""
+            SELECT fd.id, fd.video_id, fd.frame_number,
+                   v.path, v.fps,
+                   (SELECT COUNT(*) FROM face_detections fd2
+                    WHERE fd2.video_id = fd.video_id
+                      AND fd2.frame_number = fd.frame_number) AS face_count,
+                   s.id AS scene_id
+            FROM face_detections fd
+            JOIN videos v ON v.id = fd.video_id
+            LEFT JOIN scenes s ON s.video_id = fd.video_id
+              AND (fd.frame_number - COALESCE(v.frame_offset, 0))::float / v.fps
+                  BETWEEN s.start_time AND s.end_time
+            WHERE fd.id = ANY(%s)
+            ORDER BY face_count ASC, fd.det_score DESC
+        """, (detection_ids,)).fetchall()
+
+        seen_scenes = set()
+        selected = []
+        # First pass: single-face frames from distinct scenes
+        for c in candidates:
+            key = (c['video_id'], c['scene_id'])
+            if key not in seen_scenes and c['face_count'] == 1:
+                seen_scenes.add(key)
+                selected.append(c)
+            if len(selected) >= 5:
+                break
+        # Second pass: fill remaining slots from any frame (distinct scenes)
+        if len(selected) < 5:
+            for c in candidates:
+                key = (c['video_id'], c['scene_id'])
+                if key not in seen_scenes:
+                    seen_scenes.add(key)
+                    selected.append(c)
+                if len(selected) >= 5:
+                    break
+
+        class _FaceCfg:
+            embedding_model = 'buffalo_l'
+        class _Cfg:
+            face = _FaceCfg()
+
+        for c in selected:
+            fps = c['fps'] or 24.0
+            frame_time = c['frame_number'] / fps
+            try:
+                frame_bgr = get_frame_at_time(Path(c['path']), frame_time)
+                embedding_bytes = _pick_best_face(frame_bgr, _Cfg())
+                if embedding_bytes is None:
+                    embedding_bytes = bytes(row['centroid'])
+                cur = conn.execute(
+                    "INSERT INTO tag_references (tag, video_id, frame_number, frame_time, embedding, embedding_type) VALUES (%s, %s, %s, %s, %s, 'insightface') RETURNING id",
+                    (tag, c['video_id'], c['frame_number'], frame_time, embedding_bytes)
+                )
+                ref_ids.append(cur.fetchone()['id'])
+                conn.commit()
+            except Exception as e:
+                app.logger.warning(f"Could not extract ref frame {c['frame_number']} for promoted cluster: {e}")
+    else:
+        # Tag already has refs — just store one ref from the first sample frame as before
+        sample_frames = list(row['sample_frame_numbers'] or [])
+        sample_vids = list(row['sample_video_ids'] or [])
+        if sample_frames and sample_vids:
+            video_row = conn.execute(
+                "SELECT path, fps FROM videos WHERE id = %s", (sample_vids[0],)
+            ).fetchone()
+            if video_row:
+                from ltx2_dataset_builder.utils.ffmpeg import get_frame_at_time
+                from ltx2_dataset_builder.autotag.face_tag import _pick_best_face
+                fps = video_row['fps'] or 24.0
+                frame_time = sample_frames[0] / fps
+                try:
+                    frame_bgr = get_frame_at_time(Path(video_row['path']), frame_time)
+                    class _FaceCfg:
+                        embedding_model = 'buffalo_l'
+                    class _Cfg:
+                        face = _FaceCfg()
+                    embedding_bytes = _pick_best_face(frame_bgr, _Cfg())
+                    if embedding_bytes is None:
+                        embedding_bytes = bytes(row['centroid'])
+                    cur = conn.execute(
+                        "INSERT INTO tag_references (tag, video_id, frame_number, frame_time, embedding, embedding_type) VALUES (%s, %s, %s, %s, %s, 'insightface') RETURNING id",
+                        (tag, sample_vids[0], sample_frames[0], frame_time, embedding_bytes)
+                    )
+                    ref_ids.append(cur.fetchone()['id'])
+                    conn.commit()
+                except Exception as e:
+                    app.logger.warning(f"Could not extract ref frame for promoted cluster: {e}")
+
+    conn.execute("UPDATE face_clusters SET promoted_tag = %s, stable_key = %s WHERE id = %s", (tag, tag, cluster_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'tag': tag, 'ref_ids': ref_ids, 'refs_created': len(ref_ids)})
+
+
+@app.route('/api/clusters/<int:cluster_id>/sample/<int:sample_index>')
+def cluster_sample_image(cluster_id: int, sample_index: int):
+    """Return a face-cropped JPEG for sample frame sample_index (0-5) of a cluster.
+
+    Re-runs InsightFace on the frame and crops to the face whose embedding
+    best matches the cluster centroid.
+    """
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT sample_frame_numbers, sample_video_ids, centroid FROM face_clusters WHERE id = %s",
+        (cluster_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'error': 'Cluster not found'}), 404
+
+    frames = list(row['sample_frame_numbers'] or [])
+    vids   = list(row['sample_video_ids']     or [])
+    if sample_index >= len(frames):
+        conn.close()
+        return jsonify({'error': 'Sample index out of range'}), 404
+
+    frame_number = frames[sample_index]
+    video_id     = vids[sample_index]
+    centroid_bytes = bytes(row['centroid'])
+
+    video_row = conn.execute(
+        "SELECT path, fps, width, height FROM videos WHERE id = %s", (video_id,)
+    ).fetchone()
+    conn.close()
+    if not video_row:
+        return jsonify({'error': 'Video not found'}), 404
+
+    fps        = video_row['fps'] or 24.0
+    frame_time = frame_number / fps
+    video_path = Path(video_row['path'])
+
+    cache_path = CLUSTER_CACHE_DIR / f"cluster_{cluster_id}_sample_{sample_index}.jpg"
+    if cache_path.exists():
+        return send_file(cache_path, mimetype='image/jpeg',
+                         max_age=86400, conditional=True)
+
+    try:
+        import numpy as np, cv2
+        from ltx2_dataset_builder.faces.detect import get_face_analyzer
+        from ltx2_dataset_builder.faces.embed import embedding_from_bytes
+
+        is_hdr = _is_hdr_video(video_path)
+        tonemap_filter = (
+            'zscale=transfer=linear:npl=100,format=gbrpf32le,'
+            'zscale=primaries=bt709,tonemap=tonemap=hable:desat=0,'
+            'zscale=transfer=bt709:matrix=bt709:range=tv,'
+            'format=bgr24'
+        )
+        vf_args = ['-vf', tonemap_filter] if is_hdr else ['-pix_fmt', 'bgr24']
+        cmd = [
+            'ffmpeg', '-ss', str(frame_time), '-i', str(video_path),
+            '-vframes', '1', *vf_args,
+            '-f', 'image2pipe', '-vcodec', 'rawvideo', '-pix_fmt', 'bgr24', '-',
+        ]
+        result = subprocess.run(cmd, capture_output=True, check=True)
+        w, h = video_row['width'], video_row['height']
+        frame_bgr = np.frombuffer(result.stdout, dtype=np.uint8).reshape((h, w, 3))
+        frame_rgb = frame_bgr[:, :, ::-1]
+
+        centroid = embedding_from_bytes(centroid_bytes)
+        centroid_norm = np.linalg.norm(centroid)
+        if centroid_norm > 0:
+            centroid = centroid / centroid_norm
+
+        analyzer = get_face_analyzer('buffalo_l')
+        faces    = analyzer.get(frame_rgb)
+
+        best_face = None
+        best_sim  = -1.0
+        for face in faces:
+            if face.embedding is None or face.bbox is None:
+                continue
+            emb = face.embedding / (np.linalg.norm(face.embedding) or 1)
+            sim = float(np.dot(centroid, emb))
+            if sim > best_sim:
+                best_sim  = sim
+                best_face = face
+
+        if best_face is not None:
+            x1, y1, x2, y2 = best_face.bbox
+            h, w = frame_bgr.shape[:2]
+            pad_x = (x2 - x1) * 0.4
+            pad_y = (y2 - y1) * 0.4
+            x1 = max(0, int(x1 - pad_x))
+            y1 = max(0, int(y1 - pad_y))
+            x2 = min(w, int(x2 + pad_x))
+            y2 = min(h, int(y2 + pad_y))
+            crop = frame_bgr[y1:y2, x1:x2]
+        else:
+            crop = frame_bgr  # fallback: full frame if no face detected
+
+        ok, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok:
+            raise RuntimeError('imencode failed')
+        jpg_bytes = buf.tobytes()
+
+        CLUSTER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_path.write_bytes(jpg_bytes)
+
+        return send_file(io.BytesIO(jpg_bytes), mimetype='image/jpeg',
+                         max_age=86400)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/clusters/<cluster_key>/scenes')
+def cluster_scenes(cluster_key: str):
+    """Return all scenes associated with a cluster. cluster_key may be an integer ID or a stable_key."""
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, member_detection_ids, nearest_tag, promoted_tag, size, stable_key FROM face_clusters WHERE id = %s",
+            (int(cluster_key),)
+        ).fetchone()
+    except (ValueError, TypeError):
+        row = conn.execute(
+            "SELECT id, member_detection_ids, nearest_tag, promoted_tag, size, stable_key FROM face_clusters WHERE stable_key = %s",
+            (cluster_key,)
+        ).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'error': 'Cluster not found'}), 404
+
+    detection_ids = list(row['member_detection_ids'] or [])
+    cluster_meta = {
+        'id': row['id'],
+        'nearest_tag': row['nearest_tag'],
+        'promoted_tag': row['promoted_tag'],
+        'size': row['size'],
+        'scene_count': 0,
+    }
+    if not detection_ids:
+        conn.close()
+        return jsonify({'cluster': cluster_meta, 'scenes': []})
+
+    rows = conn.execute("""
+        SELECT DISTINCT ON (s.id)
+               s.*, v.path AS video_path, v.fps, v.frame_offset, v.duration AS video_duration,
+               (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) AS scene_idx,
+               (SELECT COUNT(*) FROM clip_items ci WHERE ci.scene_id = s.id) AS clip_count,
+               (SELECT COUNT(*) FROM tag_references tr WHERE tr.video_id = s.video_id AND tr.frame_number >= s.start_frame AND tr.frame_number <= s.end_frame) AS face_ref_count,
+               (SELECT COALESCE(MAX(fc.cnt), 0) FROM (SELECT COUNT(*) AS cnt FROM face_detections fd2 WHERE fd2.video_id = s.video_id AND fd2.frame_number >= s.start_frame AND fd2.frame_number <= s.end_frame AND fd2.det_score >= 0.85 GROUP BY fd2.frame_number) fc) AS max_faces,
+               (SELECT STRING_AGG(st.tag, '|') FROM scene_tags st WHERE st.scene_id = s.id AND st.confirmed = TRUE) AS tags_concat,
+               (SELECT STRING_AGG(st.tag, '|') FROM scene_tags st WHERE st.scene_id = s.id AND st.confirmed = FALSE) AS auto_tags_concat
+        FROM face_detections fd
+        JOIN videos v ON v.id = fd.video_id
+        JOIN scenes s ON s.video_id = fd.video_id
+          AND (fd.frame_number - COALESCE(v.frame_offset, 0))::float / v.fps
+              BETWEEN s.start_time AND s.end_time
+        WHERE fd.id = ANY(%s)
+        ORDER BY s.id, v.path, s.start_time
+    """, (detection_ids,)).fetchall()
+    conn.close()
+
+    # Build preview lookup
+    preview_lookup: dict = {}
+    if DEBUG_SCENES_DIR.exists():
+        for entry in DEBUG_SCENES_DIR.iterdir():
+            if entry.is_dir():
+                for f in entry.iterdir():
+                    if f.suffix not in ('.png', '.jpg'):
+                        continue
+                    m = re.search(r'^(.+)_scene_(\d+)', f.stem)
+                    if m:
+                        preview_lookup[(m.group(1), int(m.group(2)))] = str(f.relative_to(DEBUG_SCENES_DIR))
+            elif entry.suffix == '.png':
+                m = re.search(r'^(.+)_scene_(\d+)', entry.stem)
+                if m:
+                    preview_lookup[(m.group(1), int(m.group(2)))] = entry.name
+
+    scenes = []
+    for d in [dict(r) for r in rows]:
+        video_path = Path(d['video_path'])
+        video_name = video_path.stem
+        scene_idx = d['scene_idx']
+        t = int(d['start_time'])
+        tags_raw = d.get('tags_concat') or ''
+        auto_tags_raw = d.get('auto_tags_concat') or ''
+        scenes.append({
+            'id': d['id'],
+            'video_name': video_name,
+            'video_path': d['video_path'],
+            'start_frame': d.get('start_frame') or 0,
+            'end_frame': d.get('end_frame') or 0,
+            'start_time': d['start_time'],
+            'end_time': d['end_time'],
+            'fps': d.get('fps') or 24.0,
+            'frame_offset': d.get('frame_offset') or 0,
+            'caption': d.get('caption') or '',
+            'subtitles': d.get('subtitles') or '',
+            'tags': [t for t in tags_raw.split('|') if t],
+            'auto_tags': [t for t in auto_tags_raw.split('|') if t],
+            'start_time_hms': f"{t//3600:02d}:{(t%3600)//60:02d}:{t%60:02d}",
+            'duration': d['end_time'] - d['start_time'],
+            'frame_count': (d.get('end_frame') or 0) - (d.get('start_frame') or 0),
+            'preview_path': preview_lookup.get((video_name, scene_idx)),
+            'caption_finished_at': (d['caption_finished_at'].isoformat() if hasattr(d.get('caption_finished_at'), 'isoformat') else None),
+            'rating': d.get('rating'),
+            'blurhash': d.get('blurhash'),
+            'clip_count': d.get('clip_count') or 0,
+            'face_ref_count': d.get('face_ref_count') or 0,
+            'max_faces': d.get('max_faces') or 0,
+            'video_total_frames': round((d.get('video_duration') or 0) * (d.get('fps') or 24.0)),
+        })
+
+    cluster_meta['scene_count'] = len(scenes)
+    return jsonify({'cluster': cluster_meta, 'scenes': scenes})
 
 
 @app.route('/api/scenes/<int:scene_id>/split', methods=['POST'])
@@ -2041,6 +2492,33 @@ def delete_clip(clip_id: int):
     return jsonify({"success": True})
 
 
+@app.route('/api/clips/<int:clip_id>/clone', methods=['POST'])
+def clone_clip(clip_id: int):
+    """Clone a clip collection, copying all its items into a new collection."""
+    conn = get_db_connection()
+    src = conn.execute("SELECT * FROM clips WHERE id = %s", (clip_id,)).fetchone()
+    if src is None:
+        conn.close()
+        return jsonify({"error": "Collection not found"}), 404
+    new_name = src['name'] + ' (copy)'
+    cur = conn.execute("INSERT INTO clips (name, caption_prompt) VALUES (%s, %s) RETURNING *",
+                       (new_name, src['caption_prompt']))
+    new_clip = cur.fetchone()
+    new_id = new_clip['id']
+    items = conn.execute(
+        "SELECT scene_id, video_id, start_frame, end_frame, caption FROM clip_items WHERE clip_id = %s ORDER BY id",
+        (clip_id,)
+    ).fetchall()
+    for item in items:
+        conn.execute(
+            "INSERT INTO clip_items (clip_id, scene_id, video_id, start_frame, end_frame, caption) VALUES (%s, %s, %s, %s, %s, %s)",
+            (new_id, item['scene_id'], item['video_id'], item['start_frame'], item['end_frame'], item['caption'])
+        )
+    conn.commit()
+    conn.close()
+    return jsonify({"clip": dict(new_clip)}), 201
+
+
 def _is_hdr_video(video_path: Path) -> bool:
     """Return True if the video stream uses an HDR transfer characteristic or 10-bit pixel format."""
     try:
@@ -2073,7 +2551,7 @@ def _is_hdr_video(video_path: Path) -> bool:
 
 
 def _build_export_cmd(video_file: Path, start_time: float, duration: float,
-                      out_path: Path, tonemap: bool) -> list:
+                      out_path: Path, tonemap: bool, mute: bool = False) -> list:
     vf = (
         'zscale=transfer=linear:npl=100,format=gbrpf32le,'
         'zscale=primaries=bt709,tonemap=tonemap=hable:desat=0,'
@@ -2081,6 +2559,25 @@ def _build_export_cmd(video_file: Path, start_time: float, duration: float,
         'format=yuv420p'
         if tonemap else 'format=yuv420p'
     )
+    if mute:
+        return [
+            'ffmpeg', '-y',
+            '-ss', f'{start_time:.6f}',
+            '-i', str(video_file),
+            '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo',
+            '-t', f'{duration:.6f}',
+            '-map', '0:v', '-map', '1:a',
+            '-vf', vf,
+            '-c:v', 'libx264',
+            '-preset', 'fast',
+            '-crf', '18',
+            '-pix_fmt', 'yuv420p',
+            '-c:a', 'aac', '-ac', '2',
+            '-shortest',
+            '-movflags', '+faststart',
+            '-f', 'mp4',
+            str(out_path),
+        ]
     return [
         'ffmpeg', '-y',
         '-ss', f'{start_time:.6f}',
@@ -2091,8 +2588,7 @@ def _build_export_cmd(video_file: Path, start_time: float, duration: float,
         '-preset', 'fast',
         '-crf', '18',
         '-pix_fmt', 'yuv420p',
-        '-ac', '2',
-        '-c:a', 'aac',
+        '-ac', '2', '-c:a', 'aac',
         '-movflags', '+faststart',
         '-f', 'mp4',
         str(out_path),
@@ -2115,7 +2611,7 @@ def export_clip_stream(clip_id: int):
         return jsonify({"error": "Collection not found"}), 404
 
     rows = conn.execute("""
-        SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame,
+        SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame, ci.mute,
                v.path as video_path, v.fps, v.frame_offset,
                COALESCE(NULLIF(ci.caption, ''), s.caption) AS caption
         FROM clip_items ci
@@ -2162,12 +2658,13 @@ def export_clip_stream(clip_id: int):
                                 hdr_cache[vf_key] = _is_hdr_video(video_file)
                             is_hdr = hdr_cache[vf_key]
                             ok = False
+                            item_mute = bool(item.get('mute'))
                             if is_hdr:
-                                cmd = _build_export_cmd(video_file, start_time, duration, mp4_path, tonemap=True)
+                                cmd = _build_export_cmd(video_file, start_time, duration, mp4_path, tonemap=True, mute=item_mute)
                                 result = subprocess.run(cmd, stderr=subprocess.DEVNULL)
                                 ok = result.returncode == 0 and mp4_path.exists()
                             if not ok:
-                                cmd = _build_export_cmd(video_file, start_time, duration, mp4_path, tonemap=False)
+                                cmd = _build_export_cmd(video_file, start_time, duration, mp4_path, tonemap=False, mute=item_mute)
                                 result = subprocess.run(cmd, stderr=subprocess.DEVNULL)
                                 ok = result.returncode == 0 and mp4_path.exists()
                             if ok:
@@ -2216,7 +2713,7 @@ def get_clip_items(clip_id: int):
         conn.close()
         return jsonify({"error": "Collection not found"}), 404
     rows = conn.execute(f"""
-        SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame, ci.created_at,
+        SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame, ci.mute, ci.created_at,
                ci.caption as item_caption,
                v.path as video_path, v.fps, v.frame_offset,
                COALESCE(v.name, '') as video_name_custom,
@@ -2248,6 +2745,7 @@ def get_clip_items(clip_id: int):
             'video_path': d['video_path'],
             'fps': d['fps'] or 24.0,
             'frame_offset': d['frame_offset'] or 0,
+            'mute': bool(d.get('mute')),
             'caption': d['item_caption'] or '',
             'scene_caption': d['scene_caption'] or '',
             'tags': [tag for tag in tags_raw.split('|') if tag],
@@ -2315,30 +2813,42 @@ def add_clip_item(clip_id: int):
 
 @app.route('/api/clips/<int:clip_id>/items/<int:item_id>', methods=['PUT'])
 def update_clip_item(clip_id: int, item_id: int):
-    """Update the start_frame and end_frame of a clip item."""
+    """Update start_frame, end_frame, and/or mute of a clip item."""
     data = request.get_json()
-    if data is None or 'start_frame' not in data or 'end_frame' not in data:
-        return jsonify({"error": "Missing start_frame or end_frame"}), 400
-    start_frame = int(data['start_frame'])
-    end_frame = int(data['end_frame'])
-    if end_frame <= start_frame:
-        return jsonify({"error": "end_frame must be greater than start_frame"}), 400
+    if data is None:
+        return jsonify({"error": "Missing data"}), 400
+    has_frames = 'start_frame' in data and 'end_frame' in data
+    has_mute = 'mute' in data
+    if not has_frames and not has_mute:
+        return jsonify({"error": "Nothing to update"}), 400
     conn = get_db_connection()
     row = conn.execute(
-        "SELECT id FROM clip_items WHERE id = %s AND clip_id = %s",
+        "SELECT id, start_frame, end_frame FROM clip_items WHERE id = %s AND clip_id = %s",
         (item_id, clip_id)
     ).fetchone()
     if not row:
         conn.close()
         return jsonify({"error": "Item not found"}), 404
-    conn.execute(
-        "UPDATE clip_items SET start_frame = %s, end_frame = %s WHERE id = %s",
-        (start_frame, end_frame, item_id)
-    )
+    if has_frames:
+        start_frame = int(data['start_frame'])
+        end_frame = int(data['end_frame'])
+        if end_frame <= start_frame:
+            conn.close()
+            return jsonify({"error": "end_frame must be greater than start_frame"}), 400
+        conn.execute(
+            "UPDATE clip_items SET start_frame = %s, end_frame = %s WHERE id = %s",
+            (start_frame, end_frame, item_id)
+        )
+    else:
+        start_frame = row['start_frame']
+        end_frame = row['end_frame']
+    if has_mute:
+        conn.execute("UPDATE clip_items SET mute = %s WHERE id = %s", (bool(data['mute']), item_id))
     conn.commit()
+    updated = conn.execute("SELECT mute FROM clip_items WHERE id = %s", (item_id,)).fetchone()
     conn.close()
     return jsonify({"item_id": item_id, "start_frame": start_frame, "end_frame": end_frame,
-                    "frame_count": end_frame - start_frame})
+                    "frame_count": end_frame - start_frame, "mute": bool(updated['mute'])})
 
 
 @app.route('/api/clips/<int:clip_id>/items/<int:item_id>/caption', methods=['PUT'])

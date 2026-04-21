@@ -1,9 +1,14 @@
 """
 Face-recognition-based automatic scene tagging.
 
+Supports two embedding strategies:
+  - insightface (default): detect face region, embed with buffalo_l. Best for real faces.
+  - clip: embed the whole frame with CLIP ViT. Works on any visual style (Pixar, anime, etc.)
+
 Workflow:
   1. Register reference frames per tag:
-       ltx2-build --add-tag-ref deadpool --video movie.mkv --time 330.5
+       ltx2-build --add-tag-ref deadpool --video movie.mkv --frame 7932
+       ltx2-build --add-tag-ref woody --video "Toy Story 4.mkv" --frame 1234 --embedding-type clip
 
   2. Run auto-tagging:
        ltx2-build --step auto-tag [--tag deadpool]
@@ -55,6 +60,13 @@ def _pick_best_face(frame_bgr: np.ndarray, config) -> Optional[bytes]:
     return best.embedding.tobytes()
 
 
+def _clip_embed_frame(frame_bgr: np.ndarray, config) -> bytes:
+    """Return CLIP embedding bytes for a BGR frame."""
+    from ..embed.clip_embed import embed_frame
+    emb = embed_frame(frame_bgr, model_name=config.face.clip_model)
+    return emb.tobytes()
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def add_tag_reference(
@@ -62,10 +74,16 @@ def add_tag_reference(
     tag: str,
     video_name: str,
     frame_number: int,
+    embedding_type: str = 'auto',
 ) -> None:
     """
-    Extract a face embedding from `video_name` at `frame_number` and store it
+    Extract an embedding from `video_name` at `frame_number` and store it
     as a reference embedding for `tag`.
+
+    embedding_type:
+      'auto'        — try InsightFace first; fall back to CLIP if no face detected
+      'insightface' — force InsightFace (logs error if no face found, stores nothing)
+      'clip'        — force CLIP whole-frame embedding (skips face detection)
     """
     db = Database(config.dsn)
 
@@ -76,22 +94,35 @@ def add_tag_reference(
 
     logger.info(
         f"Extracting reference frame from {video_path.name} "
-        f"frame {frame_number} ({frame_time:.2f}s)"
+        f"frame {frame_number} ({frame_time:.2f}s) [embedding_type={embedding_type}]"
     )
 
     frame = get_frame_at_time(video_path, frame_time)
-    embedding_bytes = _pick_best_face(frame, config)
 
-    if embedding_bytes is None:
-        logger.error(
-            f"No face detected in {video_path.name} at frame {frame_number}. "
-            "Try a different frame."
-        )
-        return
+    if embedding_type == 'clip':
+        embedding_bytes = _clip_embed_frame(frame, config)
+        actual_type = 'clip'
+    else:
+        embedding_bytes = _pick_best_face(frame, config)
+        if embedding_bytes is not None:
+            actual_type = 'insightface'
+        elif embedding_type == 'insightface':
+            logger.error(
+                f"No face detected in {video_path.name} at frame {frame_number}. "
+                "Try a different frame or use --embedding-type clip."
+            )
+            return
+        else:
+            # auto fallback to CLIP
+            logger.warning(
+                f"No face detected at frame {frame_number} — falling back to CLIP embedding."
+            )
+            embedding_bytes = _clip_embed_frame(frame, config)
+            actual_type = 'clip'
 
-    db.add_tag_reference(tag, video["id"], frame_number, frame_time, embedding_bytes)
+    db.add_tag_reference(tag, video["id"], frame_number, frame_time, embedding_bytes, actual_type)
     logger.info(
-        f"Stored reference for tag '{tag}' "
+        f"Stored {actual_type} reference for tag '{tag}' "
         f"(video={video_path.name}, frame={frame_number}, t={frame_time:.2f}s)"
     )
 
@@ -154,12 +185,16 @@ def run_auto_tag(
         logger.error(f"{msg} with confirmed scenes in the target video(s). Nothing to scan.")
         return
 
-    # Group and compute per-tag centroids
+    # Group and compute per-tag centroids, tracking embedding type per tag
     from collections import defaultdict
     raw: dict = defaultdict(list)
+    tag_embedding_type: dict[str, str] = {}  # tag -> 'insightface' | 'clip'
     for r in refs:
         if r.get("embedding"):
             raw[r["tag"]].append(embedding_from_bytes(bytes(r["embedding"])))
+            # All refs for a tag should share the same type; take the first seen
+            if r["tag"] not in tag_embedding_type:
+                tag_embedding_type[r["tag"]] = r.get("embedding_type") or "insightface"
 
     centroids: dict[str, np.ndarray] = {}
     for tag, embs in raw.items():
@@ -167,13 +202,24 @@ def run_auto_tag(
         centroid = np.mean(stack, axis=0)
         norm = np.linalg.norm(centroid)
         centroids[tag] = centroid / norm if norm > 0 else centroid
-    logger.info(f"Loaded centroids for {len(centroids)} tag(s): {list(centroids)}")
 
-    # Pre-load InsightFace once
-    analyzer = get_face_analyzer(config.face.embedding_model)
+    insightface_tags = {t for t, et in tag_embedding_type.items() if et == "insightface"}
+    clip_tags = {t for t, et in tag_embedding_type.items() if et == "clip"}
+    logger.info(
+        f"Loaded centroids for {len(centroids)} tag(s): "
+        f"{len(insightface_tags)} InsightFace {sorted(insightface_tags)}, "
+        f"{len(clip_tags)} CLIP {sorted(clip_tags)}"
+    )
+
+    # Pre-load models once
+    analyzer = get_face_analyzer(config.face.embedding_model) if insightface_tags else None
+    if clip_tags:
+        from ..embed.clip_embed import get_clip_model, embed_frame as clip_embed_frame
+        get_clip_model(config.face.clip_model)  # warm up
+
+    clip_threshold = config.face.clip_auto_tag_threshold
 
     # Build a unified scene list: for each scene collect the set of tags it still needs.
-    # This lets us sample frames once per scene and check all centroids in one pass.
     scenes_by_id: dict = {}
     scene_tags_needed: dict = defaultdict(set)  # scene_id -> set of tags to check
 
@@ -183,10 +229,7 @@ def run_auto_tag(
             scenes_by_id[sid] = scene
             scene_tags_needed[sid].add(tag)
 
-    logger.info(
-        f"Scanning {len(scenes_by_id)} unique scene(s) for "
-        f"{len(centroids)} tag(s): {list(centroids)}"
-    )
+    logger.info(f"Scanning {len(scenes_by_id)} unique scene(s)")
 
     tagged_counts: dict = defaultdict(int)
 
@@ -195,80 +238,134 @@ def run_auto_tag(
         video_path = Path(scene["video_path"])
         fps = scene.get("fps") or 24.0
 
+        insightface_tags_needed = tags_to_check & insightface_tags
+        clip_tags_needed = tags_to_check & clip_tags
+
         # votes[tag] and best_sim[tag] accumulated across all frames in this scene
         votes: dict = defaultdict(int)
         best_sim: dict = defaultdict(float)
 
-        start_frame = int(round(scene["start_time"] * fps))
-        end_frame   = int(round(scene["end_time"]   * fps))
+        # ── InsightFace path ──────────────────────────────────────────────────
+        if insightface_tags_needed:
+            pad_frames = 5
+            start_frame = int(round(scene["start_time"] * fps)) + pad_frames
+            end_frame   = int(round(scene["end_time"]   * fps)) - pad_frames
+            # If padding collapses the window, fall back to unpadded bounds
+            if start_frame >= end_frame:
+                start_frame = int(round(scene["start_time"] * fps))
+                end_frame   = int(round(scene["end_time"]   * fps))
 
-        # Fast path: embeddings already stored for this scene's frame range
-        cached = db.get_face_detections(scene["video_id"], start_frame, end_frame)
-        cached_with_emb = [r for r in cached if r.get("embedding")]
+            # Fast path: use cached embeddings if available
+            cached = db.get_face_detections(scene["video_id"], start_frame, end_frame)
+            cached_with_emb = [r for r in cached if r.get("embedding")]
 
-        if cached_with_emb:
-            logger.debug(f"  Scene {scene_id}: using {len(cached_with_emb)} cached face detection(s)")
-            face_embeddings = [
-                embedding_from_bytes(bytes(r["embedding"])) for r in cached_with_emb
-            ]
-            for raw_emb in face_embeddings:
-                norm = np.linalg.norm(raw_emb)
-                if norm == 0:
-                    continue
-                emb = raw_emb / norm
-                for tag in tags_to_check:
-                    sim = float(np.dot(centroids[tag], emb))
-                    if sim > best_sim[tag]:
-                        best_sim[tag] = sim
-                    if sim >= threshold:
-                        votes[tag] += 1
-        else:
-            # Slow path: extract frames, run InsightFace, store results
-            try:
-                frames = sample_frames_from_clip(
-                    video_path, scene["start_time"], scene["end_time"], frames_per_scene
-                )
-            except Exception as e:
-                logger.warning(f"Scene {scene_id}: frame extraction failed — {e}")
-                continue
-
-            for frame_t, frame_bgr in frames:
-                frame_rgb = frame_bgr[:, :, ::-1]
-                faces = analyzer.get(frame_rgb)
-
-                for face in faces:
-                    # Record detection metadata + embedding for future rescans
-                    bbox = face.bbox
-                    bbox_area = float((bbox[2] - bbox[0]) * (bbox[3] - bbox[1])) if bbox is not None else None
-                    pose = face.pose
-                    db.add_face_detection(
-                        video_id=scene["video_id"],
-                        frame_number=int(round(frame_t * fps)),
-                        bbox_area=bbox_area,
-                        pose_yaw=float(pose[0]) if pose is not None else None,
-                        pose_pitch=float(pose[1]) if pose is not None else None,
-                        pose_roll=float(pose[2]) if pose is not None else None,
-                        det_score=float(face.det_score) if face.det_score is not None else None,
-                        age=int(face.age) if face.age is not None else None,
-                        sex=str(face.sex) if face.sex is not None else None,
-                        embedding=face.embedding.tobytes() if face.embedding is not None else None,
-                    )
-
-                    if face.embedding is None:
+            if cached_with_emb:
+                logger.debug(f"  Scene {scene_id}: using {len(cached_with_emb)} cached face detection(s)")
+                for raw_emb in [embedding_from_bytes(bytes(r["embedding"])) for r in cached_with_emb]:
+                    norm = np.linalg.norm(raw_emb)
+                    if norm == 0:
                         continue
-                    emb = face.embedding / np.linalg.norm(face.embedding)
-
-                    # Check this face against every tag centroid in one shot
-                    for tag in tags_to_check:
+                    emb = raw_emb / norm
+                    for tag in insightface_tags_needed:
                         sim = float(np.dot(centroids[tag], emb))
                         if sim > best_sim[tag]:
                             best_sim[tag] = sim
                         if sim >= threshold:
                             votes[tag] += 1
-                            logger.debug(
-                                f"  Scene {scene_id} t={frame_t:.1f}s — "
-                                f"'{tag}' match: similarity={sim:.3f}"
-                            )
+            else:
+                # Slow path: extract frames, run InsightFace, store results
+                try:
+                    frames = sample_frames_from_clip(
+                        video_path, scene["start_time"], scene["end_time"], frames_per_scene, fps=fps
+                    )
+                except Exception as e:
+                    logger.warning(f"Scene {scene_id}: frame extraction failed — {e}")
+                    frames = []
+
+                for frame_t, frame_bgr in frames:
+                    frame_rgb = frame_bgr[:, :, ::-1]
+                    faces = analyzer.get(frame_rgb)
+
+                    for face in faces:
+                        bbox = face.bbox
+                        bbox_area = float((bbox[2] - bbox[0]) * (bbox[3] - bbox[1])) if bbox is not None else None
+                        pose = face.pose
+                        db.add_face_detection(
+                            video_id=scene["video_id"],
+                            frame_number=int(round(frame_t * fps)),
+                            bbox_area=bbox_area,
+                            pose_yaw=float(pose[0]) if pose is not None else None,
+                            pose_pitch=float(pose[1]) if pose is not None else None,
+                            pose_roll=float(pose[2]) if pose is not None else None,
+                            det_score=float(face.det_score) if face.det_score is not None else None,
+                            age=int(face.age) if face.age is not None else None,
+                            sex=str(face.sex) if face.sex is not None else None,
+                            embedding=face.embedding.tobytes() if face.embedding is not None else None,
+                        )
+
+                        if face.embedding is None:
+                            continue
+                        emb = face.embedding / np.linalg.norm(face.embedding)
+
+                        for tag in insightface_tags_needed:
+                            sim = float(np.dot(centroids[tag], emb))
+                            if sim > best_sim[tag]:
+                                best_sim[tag] = sim
+                            if sim >= threshold:
+                                votes[tag] += 1
+                                logger.debug(
+                                    f"  Scene {scene_id} t={frame_t:.1f}s — "
+                                    f"'{tag}' match: similarity={sim:.3f}"
+                                )
+
+        # ── CLIP path ─────────────────────────────────────────────────────────
+        if clip_tags_needed:
+            pad_frames = 5
+            clip_start_frame = int(round(scene["start_time"] * fps)) + pad_frames
+            clip_end_frame   = int(round(scene["end_time"]   * fps)) - pad_frames
+            if clip_start_frame >= clip_end_frame:
+                clip_start_frame = int(round(scene["start_time"] * fps))
+                clip_end_frame   = int(round(scene["end_time"]   * fps))
+            clip_model_name = config.face.clip_model
+
+            cached_clip = db.get_clip_embeddings(
+                scene["video_id"], clip_start_frame, clip_end_frame, model=clip_model_name
+            )
+
+            if cached_clip:
+                logger.debug(f"  Scene {scene_id}: using {len(cached_clip)} cached CLIP embedding(s)")
+                clip_embs = [
+                    embedding_from_bytes(bytes(r["embedding"])) for r in cached_clip
+                ]
+            else:
+                try:
+                    frames = sample_frames_from_clip(
+                        video_path, scene["start_time"], scene["end_time"], frames_per_scene, fps=fps
+                    )
+                except Exception as e:
+                    logger.warning(f"Scene {scene_id}: CLIP frame extraction failed — {e}")
+                    frames = []
+
+                clip_embs = []
+                for frame_t, frame_bgr in frames:
+                    emb = clip_embed_frame(frame_bgr, model_name=clip_model_name)
+                    frame_num = int(round(frame_t * fps))
+                    db.add_clip_embedding(scene["video_id"], frame_num, emb.tobytes(), model=clip_model_name)
+                    clip_embs.append(emb)
+
+            for emb in clip_embs:
+                norm = np.linalg.norm(emb)
+                emb = emb / norm if norm > 0 else emb
+                for tag in clip_tags_needed:
+                    sim = float(np.dot(centroids[tag], emb))
+                    if sim > best_sim[tag]:
+                        best_sim[tag] = sim
+                    if sim >= clip_threshold:
+                        votes[tag] += 1
+                        logger.debug(
+                            f"  Scene {scene_id} — "
+                            f"'{tag}' CLIP match: similarity={sim:.3f}"
+                        )
 
         for tag in tags_to_check:
             if votes[tag] >= min_votes:

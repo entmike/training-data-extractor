@@ -11,8 +11,11 @@ export default function TagsPage() {
   const [loading, setLoading] = useState(true)
   const [detailCollapsed, setDetailCollapsed] = useState(false)
   const [activeTab, setActiveTab] = useState('scenes')
-  const [liveRefCount, setLiveRefCount] = useState(null) // live count for selected tag
+  const [allRefs, setAllRefs] = useState(null) // all refs for selected tag (null = not fetched)
   const [unverifiedOnly, setUnverifiedOnly] = useState(false)
+
+  const faceRefs = (allRefs || []).filter(r => !r.embedding_type || r.embedding_type === 'insightface')
+  const clipRefs = (allRefs || []).filter(r => r.embedding_type === 'clip')
 
   const selectedTag = tagParam ? decodeURIComponent(tagParam) : null
 
@@ -27,16 +30,16 @@ export default function TagsPage() {
       })
   }, [])
 
-  // Reset to scenes tab and fetch live ref count when switching tags
+  // Reset to scenes tab and fetch refs when switching tags
   useEffect(() => {
     setActiveTab('scenes')
-    setLiveRefCount(null)
+    setAllRefs(null)
     setUnverifiedOnly(false)
     if (!selectedTag) return
     fetch(`/api/tag-refs?tag=${encodeURIComponent(selectedTag)}`)
       .then(r => r.json())
-      .then(d => setLiveRefCount((d.refs || []).length))
-      .catch(() => {})
+      .then(d => setAllRefs(d.refs || []))
+      .catch(() => setAllRefs([]))
   }, [selectedTag])
 
   function selectTag(tag) {
@@ -106,7 +109,14 @@ export default function TagsPage() {
                   onClick={() => setActiveTab('refs')}
                 >
                   Face refs
-                  {(liveRefCount ?? 0) > 0 && <span className="tag-tab-count">{liveRefCount}</span>}
+                  {faceRefs.length > 0 && <span className="tag-tab-count">{faceRefs.length}</span>}
+                </button>
+                <button
+                  className={`tag-tab-btn tag-tab-btn--clip${activeTab === 'cliprefs' ? ' tag-tab-btn--active' : ''}`}
+                  onClick={() => setActiveTab('cliprefs')}
+                >
+                  CLIP refs
+                  {clipRefs.length > 0 && <span className="tag-tab-count tag-tab-count--clip">{clipRefs.length}</span>}
                 </button>
                 {activeTab === 'scenes' && (
                   <button
@@ -136,8 +146,21 @@ export default function TagsPage() {
               {activeTab === 'refs' && (
                 <div className="tag-refs-panel">
                   <FaceRefsPanel
-                    tag={selectedTag}
-                    onRefDeleted={() => setLiveRefCount(c => Math.max(0, (c ?? 1) - 1))}
+                    refs={faceRefs}
+                    loading={allRefs === null}
+                    emptyMsg={<>No face references yet. While playing a scene, use <strong>+ Face ref</strong> to register one.</>}
+                    onRefDeleted={id => setAllRefs(prev => prev.filter(r => r.id !== id))}
+                  />
+                </div>
+              )}
+
+              {activeTab === 'cliprefs' && (
+                <div className="tag-refs-panel">
+                  <FaceRefsPanel
+                    refs={clipRefs}
+                    loading={allRefs === null}
+                    emptyMsg={<>No CLIP references yet. While playing a scene, use <strong>+ CLIP ref</strong> to register one.</>}
+                    onRefDeleted={id => setAllRefs(prev => prev.filter(r => r.id !== id))}
                   />
                 </div>
               )}
@@ -152,31 +175,16 @@ export default function TagsPage() {
   )
 }
 
-function FaceRefsPanel({ tag, onRefDeleted }) {
-  const [refs, setRefs] = useState(null)
-
-  useEffect(() => {
-    setRefs(null)
-    fetch(`/api/tag-refs?tag=${encodeURIComponent(tag)}`)
-      .then(r => r.json())
-      .then(d => setRefs(d.refs || []))
-      .catch(() => setRefs([]))
-  }, [tag])
-
+function FaceRefsPanel({ refs, loading, emptyMsg, onRefDeleted }) {
   async function deleteRef(id) {
     const r = await fetch(`/api/tag-refs/${id}`, { method: 'DELETE' })
-    if (r.ok) {
-      setRefs(prev => prev.filter(x => x.id !== id))
-      onRefDeleted?.()
-    }
+    if (r.ok) onRefDeleted?.(id)
   }
 
-  if (refs === null) return <div className="tag-refs-loading">Loading…</div>
+  if (loading) return <div className="tag-refs-loading">Loading…</div>
 
   if (refs.length === 0) return (
-    <div className="tag-refs-empty">
-      No face references yet. While playing a scene, use <strong>+ Face ref</strong> to register one.
-    </div>
+    <div className="tag-refs-empty">{emptyMsg}</div>
   )
 
   return (

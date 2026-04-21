@@ -166,6 +166,8 @@ export default function SceneCard({ scene: initialScene, tagMap, visible, onTags
       fps: initialScene.fps,
       frameOffset: initialScene.frame_offset,
       blurhash: initialScene.blurhash,
+      videoWidth: initialScene.video_width || 0,
+      videoHeight: initialScene.video_height || 0,
       caption,
       tags,
       rating,
@@ -212,6 +214,11 @@ export default function SceneCard({ scene: initialScene, tagMap, visible, onTags
             title={`${n} star${n > 1 ? 's' : ''}`}
           >★</button>
         ))}
+        {initialScene.mute && (
+          <span className="scene-card__mute" title="Muted">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M16.5 12A4.5 4.5 0 0014 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0021 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06A8.99 8.99 0 0017.73 18l1.28 1.27L20 18l-16-16-1.73 1.73zm9.73.73L9.13 8.6 12 11.47V4.73z"/></svg>
+          </span>
+        )}
         {initialScene.clip_count > 0 && (
           <span
             ref={badgeRef}
@@ -231,6 +238,18 @@ export default function SceneCard({ scene: initialScene, tagMap, visible, onTags
               <circle cx="12" cy="8" r="4" />
               <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
             </svg>
+          </span>
+        )}
+        {initialScene.max_faces > 0 && (
+          <span
+            className="face-count-badge"
+            title={`Up to ${initialScene.max_faces} face${initialScene.max_faces !== 1 ? 's' : ''} detected in this scene`}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="8" r="4" />
+              <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
+            </svg>
+            {initialScene.max_faces}
           </span>
         )}
       </div>
@@ -308,10 +327,9 @@ export default function SceneCard({ scene: initialScene, tagMap, visible, onTags
             </span>
           ))}
           {autoTags.map(tag => (
-            <span key={tag} className="tag-pill tag-pill--auto" title="Auto-detected — click ✓ to confirm">
+            <span key={tag} className="tag-pill tag-pill--auto" title="Auto-detected — click to confirm" onClick={() => confirmAutoTag(tag)}>
               {tagMap[tag]?.display_name || tag}
-              <button className="tag-confirm" onClick={() => confirmAutoTag(tag)} title="Confirm">✓</button>
-              <button className="tag-remove" onClick={() => rejectAutoTag(tag)} title="Reject">✕</button>
+              <button className="tag-remove" onClick={e => { e.stopPropagation(); rejectAutoTag(tag) }} title="Reject">✕</button>
             </span>
           ))}
           <button className="tag-add-btn" ref={addBtnRef} onClick={openDropdown}>+ Tag</button>

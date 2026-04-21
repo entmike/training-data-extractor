@@ -18,7 +18,7 @@ export default function VideoPlayerModal({ player, onClose }) {
   const mouseDownOnOverlay = useRef(false)
 
   const { tagMap, refreshTags } = useContext(AppContext)
-  const { sceneId, videoPath, startTime, endTime, fps = 24, frameOffset = 0, startFrame, endFrame: initialEndFrame, videoTotalFrames = 0, blurhash } = player
+  const { sceneId, videoPath, startTime, endTime, fps = 24, frameOffset = 0, startFrame, endFrame: initialEndFrame, videoTotalFrames = 0, blurhash, videoWidth = 0, videoHeight = 0 } = player
   const blurhashDataUrl = useMemo(() => blurhashToDataURL(blurhash), [blurhash])
 
   const duration = endTime - startTime
@@ -78,6 +78,11 @@ export default function VideoPlayerModal({ player, onClose }) {
   const [refPickerPos,  setRefPickerPos]  = useState(null) // null | { top, left }
   const [refSaveStatus, setRefSaveStatus] = useState({})   // { [tag]: 'saving'|'done'|'error' }
   const refBtnRef = useRef(null)
+
+  // ── CLIP-ref state ─────────────────────────────────────
+  const [clipRefPickerPos,  setClipRefPickerPos]  = useState(null) // null | { top, left }
+  const [clipRefSaveStatus, setClipRefSaveStatus] = useState({})   // { [tag]: 'saving'|'done'|'error' }
+  const clipRefBtnRef = useRef(null)
 
   // ── Caption / tag state ────────────────────────────────
   const rawCaption = (player.caption && !player.caption.startsWith('__')) ? player.caption : ''
@@ -574,6 +579,32 @@ export default function VideoPlayerModal({ player, onClose }) {
     }
   }
 
+  function openClipRefPicker() {
+    if (clipRefPickerPos) { setClipRefPickerPos(null); return }
+    const rect = clipRefBtnRef.current.getBoundingClientRect()
+    setClipRefPickerPos({ top: rect.bottom + window.scrollY + 4, left: rect.left + window.scrollX })
+  }
+
+  async function saveClipRef(tag) {
+    setClipRefSaveStatus(s => ({ ...s, [tag]: 'saving' }))
+    try {
+      const r = await fetch('/api/tag-refs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scene_id: sceneId, tag, frame: currentAbsFrame, embedding_type: 'clip' }),
+      })
+      if (!r.ok) {
+        setClipRefSaveStatus(s => ({ ...s, [tag]: 'error' }))
+      } else {
+        setClipRefSaveStatus(s => ({ ...s, [tag]: 'done' }))
+      }
+      setTimeout(() => setClipRefSaveStatus(s => { const n = { ...s }; delete n[tag]; return n }), 2000)
+    } catch {
+      setClipRefSaveStatus(s => ({ ...s, [tag]: 'error' }))
+      setTimeout(() => setClipRefSaveStatus(s => { const n = { ...s }; delete n[tag]; return n }), 2000)
+    }
+  }
+
   // ── Render ─────────────────────────────────────────────
   return (
     <div
@@ -618,7 +649,7 @@ export default function VideoPlayerModal({ player, onClose }) {
           </div>
         ) : (
           <>
-            <div className="modal-video-wrap">
+            <div className="modal-video-wrap" style={(clipLoading && videoWidth && videoHeight) ? { aspectRatio: `${videoWidth}/${videoHeight}` } : undefined}>
               <video
                 ref={videoRef}
                 src={`/clip/${sceneId}`}
@@ -804,6 +835,14 @@ export default function VideoPlayerModal({ player, onClose }) {
             >
               + Face ref
             </button>
+            <button
+              ref={clipRefBtnRef}
+              className={`detect-bucket-btn detect-bucket-btn--clipref${clipRefPickerPos ? ' detect-bucket-btn--active' : ''}`}
+              onClick={openClipRefPicker}
+              title={`Set frame ${currentAbsFrame} as a CLIP reference for a tag`}
+            >
+              + CLIP ref
+            </button>
           </div>
 
           {/* Scene boundary adjusters */}
@@ -863,10 +902,9 @@ export default function VideoPlayerModal({ player, onClose }) {
               </span>
             ))}
             {autoTags.map(tag => (
-              <span key={tag} className="tag-pill tag-pill--auto" title="Auto-detected — click ✓ to confirm">
+              <span key={tag} className="tag-pill tag-pill--auto" title="Auto-detected — click to confirm" onClick={() => confirmAutoTag(tag)}>
                 {tagMap[tag]?.display_name || tag}
-                <button className="tag-confirm" onClick={() => confirmAutoTag(tag)} title="Confirm">✓</button>
-                <button className="tag-remove" onClick={() => rejectAutoTag(tag)} title="Reject">✕</button>
+                <button className="tag-remove" onClick={e => { e.stopPropagation(); rejectAutoTag(tag) }} title="Reject">✕</button>
               </span>
             ))}
             <button className="tag-add-btn" ref={addBtnRef} onClick={openDropdown}>+ Tag</button>
@@ -951,6 +989,19 @@ export default function VideoPlayerModal({ player, onClose }) {
         />,
         document.body
       )}
+
+      {clipRefPickerPos && createPortal(
+        <FaceRefPicker
+          position={clipRefPickerPos}
+          tags={Object.keys(tagMap)}
+          saveStatus={clipRefSaveStatus}
+          onSave={saveClipRef}
+          onClose={() => setClipRefPickerPos(null)}
+          header="Save CLIP ref as"
+          variant="clipref"
+        />,
+        document.body
+      )}
     </div>
   )
 }
@@ -1014,7 +1065,7 @@ function ClipPicker({ position, clips, addStatus, newName, onNewNameChange, onAd
   )
 }
 
-function FaceRefPicker({ position, tags, saveStatus, onSave, onClose }) {
+function FaceRefPicker({ position, tags, saveStatus, onSave, onClose, header = 'Save face ref as', variant = 'ref' }) {
   const wrapRef = useRef(null)
 
   useEffect(() => {
@@ -1028,10 +1079,10 @@ function FaceRefPicker({ position, tags, saveStatus, onSave, onClose }) {
   return (
     <div
       ref={wrapRef}
-      className="clip-picker ref-picker"
+      className={`clip-picker ${variant}-picker`}
       style={{ position: 'absolute', top: position.top, left: position.left, zIndex: 2000 }}
     >
-      <div className="clip-picker-header">Save face ref as</div>
+      <div className="clip-picker-header">{header}</div>
       {tags.length === 0 && (
         <div className="clip-picker-empty">No tags yet — create one on the Tags page.</div>
       )}

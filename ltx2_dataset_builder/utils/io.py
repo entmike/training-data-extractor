@@ -3,6 +3,7 @@ I/O utilities for the dataset builder — PostgreSQL backend.
 """
 
 import json
+import numpy as np
 import psycopg2
 import psycopg2.extras
 import psycopg2.errors
@@ -188,18 +189,34 @@ class Database:
             """)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS tag_references (
-                    id           SERIAL PRIMARY KEY,
-                    tag          TEXT NOT NULL,
-                    video_id     INTEGER REFERENCES videos(id) ON DELETE CASCADE,
-                    frame_number INTEGER NOT NULL,
-                    frame_time   DOUBLE PRECISION NOT NULL,
-                    embedding    BYTEA NOT NULL,
-                    created_at   TIMESTAMPTZ DEFAULT NOW()
+                    id             SERIAL PRIMARY KEY,
+                    tag            TEXT NOT NULL,
+                    video_id       INTEGER REFERENCES videos(id) ON DELETE CASCADE,
+                    frame_number   INTEGER NOT NULL,
+                    frame_time     DOUBLE PRECISION NOT NULL,
+                    embedding      BYTEA NOT NULL,
+                    embedding_type TEXT NOT NULL DEFAULT 'insightface',
+                    created_at     TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
             conn.execute("""
                 ALTER TABLE tag_references
+                ADD COLUMN IF NOT EXISTS embedding_type TEXT NOT NULL DEFAULT 'insightface'
+            """)
+            conn.execute("""
+                ALTER TABLE tag_references
                 ADD COLUMN IF NOT EXISTS frame_number INTEGER
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS clip_embeddings (
+                    id           SERIAL PRIMARY KEY,
+                    video_id     INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+                    frame_number INTEGER NOT NULL,
+                    model        TEXT NOT NULL DEFAULT 'openai/clip-vit-large-patch14',
+                    embedding    BYTEA NOT NULL,
+                    created_at   TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE (video_id, frame_number, model)
+                )
             """)
             conn.execute("""
                 ALTER TABLE scene_tags
@@ -208,6 +225,36 @@ class Database:
             conn.execute("""
                 ALTER TABLE scenes
                 ADD COLUMN IF NOT EXISTS subtitles TEXT
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS face_clusters (
+                    id                      SERIAL PRIMARY KEY,
+                    video_id                INTEGER REFERENCES videos(id),
+                    cluster_label           INTEGER NOT NULL,
+                    centroid                BYTEA NOT NULL,
+                    size                    INTEGER NOT NULL,
+                    stable_key              TEXT,
+                    member_detection_ids    INTEGER[] NOT NULL DEFAULT '{}',
+                    sample_frame_numbers    INTEGER[] NOT NULL DEFAULT '{}',
+                    sample_video_ids        INTEGER[] NOT NULL DEFAULT '{}',
+                    nearest_tag             TEXT,
+                    nearest_sim             DOUBLE PRECISION,
+                    dismissed               BOOLEAN NOT NULL DEFAULT FALSE,
+                    promoted_tag            TEXT,
+                    created_at              TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                ALTER TABLE face_clusters
+                ADD COLUMN IF NOT EXISTS member_detection_ids INTEGER[] NOT NULL DEFAULT '{}'
+            """)
+            conn.execute("""
+                ALTER TABLE face_clusters
+                ADD COLUMN IF NOT EXISTS stable_key TEXT
+            """)
+            conn.execute("""
+                ALTER TABLE clip_items
+                ADD COLUMN IF NOT EXISTS mute BOOLEAN NOT NULL DEFAULT FALSE
             """)
             conn.commit()
 
@@ -550,6 +597,38 @@ class Database:
             """, (video_id, frame_number_min, frame_number_max)).fetchone()
             return row is not None
 
+    # ── CLIP embedding cache ──────────────────────────────────────────────────
+
+    def get_clip_embeddings(
+        self,
+        video_id: int,
+        frame_number_min: int,
+        frame_number_max: int,
+        model: str = 'openai/clip-vit-large-patch14',
+    ) -> List[Dict[str, Any]]:
+        with self._connection() as conn:
+            rows = conn.execute("""
+                SELECT frame_number, embedding FROM clip_embeddings
+                WHERE video_id = %s AND frame_number >= %s AND frame_number <= %s AND model = %s
+                ORDER BY frame_number
+            """, (video_id, frame_number_min, frame_number_max, model)).fetchall()
+            return [dict(r) for r in rows]
+
+    def add_clip_embedding(
+        self,
+        video_id: int,
+        frame_number: int,
+        embedding: bytes,
+        model: str = 'openai/clip-vit-large-patch14',
+    ) -> None:
+        with self._connection() as conn:
+            conn.execute("""
+                INSERT INTO clip_embeddings (video_id, frame_number, model, embedding)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (video_id, frame_number, model) DO NOTHING
+            """, (video_id, frame_number, model, embedding))
+            conn.commit()
+
     # ── Sample operations ─────────────────────────────────────────────────────
 
     def add_sample(
@@ -649,13 +728,14 @@ class Database:
         frame_number: int,
         frame_time: float,
         embedding: bytes,
+        embedding_type: str = 'insightface',
     ) -> int:
         with self._connection() as conn:
             cur = conn.execute("""
-                INSERT INTO tag_references (tag, video_id, frame_number, frame_time, embedding)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO tag_references (tag, video_id, frame_number, frame_time, embedding, embedding_type)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id
-            """, (tag, video_id, frame_number, frame_time, embedding))
+            """, (tag, video_id, frame_number, frame_time, embedding, embedding_type))
             conn.commit()
             return cur.fetchone()["id"]
 
@@ -673,6 +753,163 @@ class Database:
         with self._connection() as conn:
             rows = conn.execute(query, params).fetchall()
             return [dict(r) for r in rows]
+
+    # ── Face cluster operations ───────────────────────────────────────────────
+
+    def get_face_detections_with_embeddings(
+        self, video_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Return face_detections rows that have embeddings, optionally filtered by video.
+        Includes scene_id (NULL if the frame falls outside all known scenes)."""
+        query = """
+            SELECT fd.id, fd.video_id, fd.frame_number, fd.embedding,
+                   s.id AS scene_id
+            FROM face_detections fd
+            JOIN videos v ON v.id = fd.video_id
+            LEFT JOIN scenes s ON s.video_id = fd.video_id
+              AND (fd.frame_number - COALESCE(v.frame_offset, 0))::float / v.fps
+                  BETWEEN s.start_time AND s.end_time
+            WHERE fd.embedding IS NOT NULL
+        """
+        params: list = []
+        if video_id is not None:
+            query += " AND fd.video_id = %s"
+            params.append(video_id)
+        query += " ORDER BY fd.video_id, fd.frame_number"
+        with self._connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_tag_reference_centroids(self) -> Dict[str, Any]:
+        """Return {tag: normalized centroid np.ndarray} for all insightface tag references."""
+        import numpy as np
+        from ..faces.embed import embedding_from_bytes
+        refs = self.get_tag_references()
+        from collections import defaultdict
+        by_tag: dict = defaultdict(list)
+        for r in refs:
+            if r.get('embedding') and (not r.get('embedding_type') or r['embedding_type'] == 'insightface'):
+                emb = embedding_from_bytes(bytes(r['embedding']))
+                by_tag[r['tag']].append(emb)
+        centroids = {}
+        for tag, embs in by_tag.items():
+            stack = np.vstack(embs)
+            c = np.mean(stack, axis=0)
+            norm = np.linalg.norm(c)
+            centroids[tag] = c / norm if norm > 0 else c
+        return centroids
+
+    def save_face_clusters(
+        self, clusters: List[Dict[str, Any]], video_id: Optional[int] = None,
+        preserve_threshold: float = 0.80,
+    ) -> None:
+        """Replace face_clusters for this scope with fresh results.
+
+        Preserved promoted_tag and dismissed state are carried over to new clusters
+        whose centroid is within preserve_threshold cosine similarity of an old one.
+        """
+        with self._connection() as conn:
+            # Save promoted/dismissed clusters before wiping so we can restore them
+            scope_filter = "video_id = %s" if video_id is not None else "video_id IS NULL"
+            scope_params = (video_id,) if video_id is not None else ()
+            old_rows = conn.execute(
+                f"SELECT centroid, promoted_tag, dismissed, stable_key FROM face_clusters "
+                f"WHERE {scope_filter} AND (promoted_tag IS NOT NULL OR dismissed = TRUE)",
+                scope_params,
+            ).fetchall()
+
+            preserved = []
+            for r in old_rows:
+                c = np.frombuffer(bytes(r['centroid']), dtype=np.float32).copy()
+                norm = np.linalg.norm(c)
+                preserved.append({
+                    'centroid': c / norm if norm > 0 else c,
+                    'promoted_tag': r['promoted_tag'],
+                    'dismissed': r['dismissed'],
+                    'stable_key': r['stable_key'],
+                })
+
+            if video_id is not None:
+                conn.execute("DELETE FROM face_clusters WHERE video_id = %s", (video_id,))
+            else:
+                conn.execute("DELETE FROM face_clusters WHERE video_id IS NULL")
+
+            for c in clusters:
+                promoted_tag = None
+                dismissed = False
+                stable_key = None
+
+                if preserved:
+                    new_c = np.frombuffer(bytes(c['centroid']), dtype=np.float32).copy()
+                    norm = np.linalg.norm(new_c)
+                    new_c = new_c / norm if norm > 0 else new_c
+                    sims = [float(np.dot(new_c, p['centroid'])) for p in preserved]
+                    best_idx = int(np.argmax(sims))
+                    if sims[best_idx] >= preserve_threshold:
+                        promoted_tag = preserved[best_idx]['promoted_tag']
+                        dismissed = preserved[best_idx]['dismissed']
+                        stable_key = preserved[best_idx]['stable_key']
+
+                conn.execute("""
+                    INSERT INTO face_clusters
+                        (video_id, cluster_label, centroid, size, stable_key,
+                         member_detection_ids, sample_frame_numbers, sample_video_ids,
+                         nearest_tag, nearest_sim, promoted_tag, dismissed)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    video_id,
+                    c['cluster_label'],
+                    c['centroid'],
+                    c['size'],
+                    stable_key,
+                    c.get('member_detection_ids', []),
+                    c['sample_frame_numbers'],
+                    c['sample_video_ids'],
+                    c.get('nearest_tag'),
+                    c.get('nearest_sim'),
+                    promoted_tag,
+                    dismissed,
+                ))
+            conn.commit()
+
+    def get_face_clusters(
+        self,
+        video_id: Optional[int] = None,
+        include_dismissed: bool = False,
+    ) -> List[Dict[str, Any]]:
+        query = "SELECT id, video_id, cluster_label, size, sample_frame_numbers, sample_video_ids, nearest_tag, nearest_sim, dismissed, promoted_tag, created_at FROM face_clusters WHERE 1=1"
+        params: list = []
+        if video_id is not None:
+            query += " AND video_id = %s"
+            params.append(video_id)
+        if not include_dismissed:
+            query += " AND dismissed = FALSE"
+        query += " ORDER BY size DESC"
+        with self._connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [dict(r) for r in rows]
+
+    def dismiss_cluster(self, cluster_id: int) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE face_clusters SET dismissed = TRUE WHERE id = %s", (cluster_id,)
+            )
+            conn.commit()
+
+    def promote_cluster(self, cluster_id: int, tag: str) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE face_clusters SET promoted_tag = %s WHERE id = %s", (tag, cluster_id)
+            )
+            conn.commit()
+
+    def get_cluster_centroid(self, cluster_id: int) -> Optional[bytes]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT centroid, sample_frame_numbers, sample_video_ids FROM face_clusters WHERE id = %s",
+                (cluster_id,)
+            ).fetchone()
+            return dict(row) if row else None
 
     # ── Scene tag operations ──────────────────────────────────────────────────
 
