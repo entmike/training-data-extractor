@@ -1,0 +1,74 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Flask: web_review.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/web_review.py",
+      "args": ["--host", "0.0.0.0"],
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "env": { "FLASK_ENV": "development" },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Pipeline: Run step (pick)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ltx2_dataset_builder.cli",
+      "args": ["--config", "config.yaml", "--step", "${input:pipelineStep}"],
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Pipeline: captions",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ltx2_dataset_builder.cli",
+      "args": ["--config", "config.yaml", "--step", "captions"],
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Pipeline: scenes",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ltx2_dataset_builder.cli",
+      "args": ["--config", "config.yaml", "--step", "scenes"],
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Pipeline: auto-tag",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ltx2_dataset_builder.cli",
+      "args": ["--config", "config.yaml", "--step", "auto-tag"],
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ],
+  "inputs": [
+    {
+      "id": "pipelineStep",
+      "type": "pickString",
+      "description": "Pipeline step to debug",
+      "options": [
+        "index", "scenes", "captions", "subtitles",
+        "buckets", "candidates", "quality", "faces",
+        "crops", "render", "manifest", "stats",
+        "auto-tag", "debug-scenes", "debug-candidates"
+      ]
+    }
+  ]
+}

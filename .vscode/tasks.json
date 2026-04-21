@@ -1,0 +1,117 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Dev: Restart (backend + Vite)",
+      "type": "shell",
+      "command": "./restart.sh",
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Dev: Backend only",
+      "type": "shell",
+      "command": "source .venv/bin/activate && python web_review.py --host 0.0.0.0",
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Dev: Vite only",
+      "type": "shell",
+      "command": "cd ui && node_modules/.bin/vite",
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Pipeline: Run step",
+      "type": "shell",
+      "command": "source .venv/bin/activate && ltx2-build --config config.yaml --step ${input:pipelineStep}",
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Pipeline: index",
+      "type": "shell",
+      "command": "source .venv/bin/activate && ltx2-build --config config.yaml --step index",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "Pipeline: scenes",
+      "type": "shell",
+      "command": "source .venv/bin/activate && ltx2-build --config config.yaml --step scenes",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "Pipeline: captions",
+      "type": "shell",
+      "command": "source .venv/bin/activate && ltx2-build --config config.yaml --step captions 2>&1 | tee /tmp/captions.log",
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Pipeline: subtitles",
+      "type": "shell",
+      "command": "source .venv/bin/activate && ltx2-build --config config.yaml --step subtitles",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "Pipeline: auto-tag",
+      "type": "shell",
+      "command": "source .venv/bin/activate && ltx2-build --config config.yaml --step auto-tag",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "Pipeline: faces",
+      "type": "shell",
+      "command": "source .venv/bin/activate && ltx2-build --config config.yaml --step faces",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "Pipeline: stats",
+      "type": "shell",
+      "command": "source .venv/bin/activate && ltx2-build --config config.yaml --step stats",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "DB: List videos",
+      "type": "shell",
+      "command": "source .venv/bin/activate && ltx2-build --config config.yaml --list-videos",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "Docker: Start PostgreSQL",
+      "type": "shell",
+      "command": "docker compose up -d",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "Docker: Stop PostgreSQL",
+      "type": "shell",
+      "command": "docker compose down",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": false },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "pipelineStep",
+      "type": "pickString",
+      "description": "Pipeline step to run",
+      "options": [
+        "index", "scenes", "captions", "subtitles",
+        "buckets", "candidates", "quality", "faces",
+        "crops", "render", "manifest", "stats",
+        "auto-tag", "debug-scenes", "debug-candidates"
+      ]
+    }
+  ]
+}
