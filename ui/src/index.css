@@ -382,6 +382,12 @@ html, body {
   color: #fbbf24;
   filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));
 }
+.scene-thumb__denoise {
+  display: flex;
+  align-items: center;
+  color: #fbbf24;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));
+}
 .scene-thumb__clip {
   position: absolute;
   bottom: 4px;
@@ -1817,6 +1823,14 @@ html, body {
   pointer-events: none;
 }
 
+.vc-crop-dim {
+  position: absolute;
+  top: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  z-index: 1;
+  border-radius: 4px;
+}
 .vc-seek {
   position: relative;
   width: 100%;
@@ -1827,6 +1841,7 @@ html, body {
   cursor: pointer;
   margin: 0;
   padding: 0;
+  z-index: 2;
 }
 .vc-seek::-webkit-slider-runnable-track {
   height: 32px;
@@ -2634,11 +2649,72 @@ html, body {
   display: flex;
   align-items: center;
   gap: 5px;
-  margin-left: auto;
   font-size: 12px;
   color: var(--text-dim);
   cursor: pointer;
   user-select: none;
+  margin-left: auto;
+}
+.cie-denoise-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.cie-denoise-mix-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.cie-denoise-mix-slider {
+  width: 80px;
+  height: 4px;
+  accent-color: #fbbf24;
+  cursor: pointer;
+}
+.cie-denoise-mix-value {
+  min-width: 30px;
+  font-size: 11px;
+  color: #fbbf24;
+}
+.cie-video-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+}
+.cie-video-tab {
+  flex: 1;
+  padding: 6px 0;
+  font-size: 12px;
+  font-weight: 500;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.cie-video-tab:hover { color: var(--text); }
+.cie-video-tab--active { color: var(--text); border-bottom-color: var(--blue); }
+.cie-preview-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  background: #000;
+}
+.cie-preview-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+  font-size: 13px;
 }
 .clips-loading {
   padding: 14px;
@@ -2767,6 +2843,7 @@ html, body {
 .clip-scene-wrap:hover .clip-item-overlays { opacity: 1; }
 .clip-item-edit-btn,
 .clip-item-mute-btn,
+.clip-item-denoise-btn,
 .clip-item-remove-btn {
   width: 24px;
   height: 24px;
@@ -2786,7 +2863,15 @@ html, body {
 .clip-item-remove-btn:hover { color: #fff; background: rgba(220,38,38,0.75); }
 .clip-item-mute-btn--active { color: #fbbf24; }
 .clip-item-mute-btn--active:hover { color: #fff; background: rgba(161,98,7,0.75); }
+.clip-item-denoise-btn--active { color: #fbbf24; }
+.clip-item-denoise-btn--active:hover { color: #fff; background: rgba(161,98,7,0.75); }
 .scene-card__mute {
+  display: flex;
+  align-items: center;
+  color: #fbbf24;
+  margin-left: 2px;
+}
+.scene-card__denoise {
   display: flex;
   align-items: center;
   color: #fbbf24;
@@ -2867,7 +2952,14 @@ html, body {
 /* ── Clip item editor ──────────────────────────── */
 .cie-modal { max-width: 700px; }
 
-/* Range overlay + handles on seek bar */
+/* Crop range row — sits below seek bar, above frame inputs */
+.cie-crop-row {
+  position: relative;
+  height: 32px;
+  margin: 2px 8px 0;
+}
+
+/* Range overlay + handles */
 .cie-range-body {
   position: absolute;
   top: 0; bottom: 0;
@@ -2895,19 +2987,22 @@ html, body {
 /* Frame panel */
 .cie-frame-panel {
   display: flex;
-  align-items: flex-end;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding: 8px 10px 10px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
   background: var(--bg-hover);
   border-top: 1px solid var(--border-subtle);
+}
+.cie-frame-groups {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
 }
 .cie-frame-group {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
-.cie-frame-group--count { min-width: 70px; }
 .cie-label {
   font-size: 10px;
   font-weight: 600;
@@ -2941,7 +3036,6 @@ html, body {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-left: auto;
 }
 .cie-save-btn {
   background: var(--green);
@@ -2967,6 +3061,13 @@ html, body {
 .cie-save-msg { font-size: 12px; }
 .cie-save-msg--ok  { color: var(--green); }
 .cie-save-msg--err { color: var(--red); }
+@keyframes cie-flash-fade { 0%,60% { opacity:1 } 100% { opacity:0 } }
+.cie-save-flash {
+  font-size: 12px;
+  color: var(--green);
+  animation: cie-flash-fade 1.8s ease-out forwards;
+  pointer-events: none;
+}
 
 .cie-caption-panel {
   border-top: 1px solid var(--border-subtle);

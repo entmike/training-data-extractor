@@ -219,6 +219,11 @@ export default function SceneCard({ scene: initialScene, tagMap, visible, onTags
             <svg viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M16.5 12A4.5 4.5 0 0014 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0021 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06A8.99 8.99 0 0017.73 18l1.28 1.27L20 18l-16-16-1.73 1.73zm9.73.73L9.13 8.6 12 11.47V4.73z"/></svg>
           </span>
         )}
+        {initialScene.denoise && (
+          <span className="scene-card__denoise" title="Denoise">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M3 9h2V5H3v4zm0 4h2v-2H3v2zm0 4h2v-2H3v2zm4 0h2v-2H7v2zm0-8h2V5H7v4zm4 12v-4h-2v4h2zm-4-4h2v-2H7v2zm8 0h2v-2h-2v2zm2-12v4h2V5h-2zm0 8h2v-2h-2v2zM3 21h2v-2H3v2zm12-4h2v-2h-2v2zm2 4h2v-2h-2v2zm-8 0h2v-2h-2v2zm-4-8h2V9H7v4zm8 4h2v-4h-2v4zm-4 4h2V5h-2v16zm4-8h2V9h-2v4z"/></svg>
+          </span>
+        )}
         {initialScene.clip_count > 0 && (
           <span
             ref={badgeRef}

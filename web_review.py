@@ -2550,8 +2550,20 @@ def _is_hdr_video(video_path: Path) -> bool:
         return False
 
 
+def _ensure_arnndn_model() -> Path:
+    model_path = Path('.cache/arnndn_model.rnnn')
+    if not model_path.exists():
+        import urllib.request
+        url = 'https://github.com/GregorR/rnnoise-models/raw/master/beguiling-drafter-2018-08-30/bd.rnnn'
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        urllib.request.urlretrieve(url, model_path)
+    return model_path
+
+
 def _build_export_cmd(video_file: Path, start_time: float, duration: float,
-                      out_path: Path, tonemap: bool, mute: bool = False) -> list:
+                      out_path: Path, tonemap: bool, mute: bool = False,
+                      denoise: bool = False, denoise_mix: float = 1.0,
+                      arnndn_model: Path | None = None) -> list:
     vf = (
         'zscale=transfer=linear:npl=100,format=gbrpf32le,'
         'zscale=primaries=bt709,tonemap=tonemap=hable:desat=0,'
@@ -2578,6 +2590,10 @@ def _build_export_cmd(video_file: Path, start_time: float, duration: float,
             '-f', 'mp4',
             str(out_path),
         ]
+    af_args = []
+    if denoise and arnndn_model:
+        mix = max(0.0, min(1.0, denoise_mix))
+        af_args = ['-af', f'arnndn=model={arnndn_model}:mix={mix:.3f}']
     return [
         'ffmpeg', '-y',
         '-ss', f'{start_time:.6f}',
@@ -2589,6 +2605,7 @@ def _build_export_cmd(video_file: Path, start_time: float, duration: float,
         '-crf', '18',
         '-pix_fmt', 'yuv420p',
         '-ac', '2', '-c:a', 'aac',
+        *af_args,
         '-movflags', '+faststart',
         '-f', 'mp4',
         str(out_path),
@@ -2611,7 +2628,7 @@ def export_clip_stream(clip_id: int):
         return jsonify({"error": "Collection not found"}), 404
 
     rows = conn.execute("""
-        SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame, ci.mute,
+        SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame, ci.mute, ci.denoise, ci.denoise_mix,
                v.path as video_path, v.fps, v.frame_offset,
                COALESCE(NULLIF(ci.caption, ''), s.caption) AS caption
         FROM clip_items ci
@@ -2631,6 +2648,15 @@ def export_clip_stream(clip_id: int):
     total = len(rows)
 
     def generate():
+        needs_denoise = any(dict(r).get('denoise') for r in rows)
+        arnndn_model = None
+        if needs_denoise:
+            try:
+                arnndn_model = _ensure_arnndn_model()
+            except Exception as e:
+                yield f"data: {_json.dumps({'error': f'Failed to download arnndn model: {e}'})}\n\n"
+                return
+
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             zip_buf = io.BytesIO()
@@ -2659,12 +2685,14 @@ def export_clip_stream(clip_id: int):
                             is_hdr = hdr_cache[vf_key]
                             ok = False
                             item_mute = bool(item.get('mute'))
+                            item_denoise = bool(item.get('denoise'))
+                            item_denoise_mix = float(item.get('denoise_mix') or 1.0)
                             if is_hdr:
-                                cmd = _build_export_cmd(video_file, start_time, duration, mp4_path, tonemap=True, mute=item_mute)
+                                cmd = _build_export_cmd(video_file, start_time, duration, mp4_path, tonemap=True, mute=item_mute, denoise=item_denoise, denoise_mix=item_denoise_mix, arnndn_model=arnndn_model)
                                 result = subprocess.run(cmd, stderr=subprocess.DEVNULL)
                                 ok = result.returncode == 0 and mp4_path.exists()
                             if not ok:
-                                cmd = _build_export_cmd(video_file, start_time, duration, mp4_path, tonemap=False, mute=item_mute)
+                                cmd = _build_export_cmd(video_file, start_time, duration, mp4_path, tonemap=False, mute=item_mute, denoise=item_denoise, denoise_mix=item_denoise_mix, arnndn_model=arnndn_model)
                                 result = subprocess.run(cmd, stderr=subprocess.DEVNULL)
                                 ok = result.returncode == 0 and mp4_path.exists()
                             if ok:
@@ -2713,7 +2741,7 @@ def get_clip_items(clip_id: int):
         conn.close()
         return jsonify({"error": "Collection not found"}), 404
     rows = conn.execute(f"""
-        SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame, ci.mute, ci.created_at,
+        SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame, ci.mute, ci.denoise, ci.denoise_mix, ci.created_at,
                ci.caption as item_caption,
                v.path as video_path, v.fps, v.frame_offset,
                COALESCE(v.name, '') as video_name_custom,
@@ -2746,6 +2774,8 @@ def get_clip_items(clip_id: int):
             'fps': d['fps'] or 24.0,
             'frame_offset': d['frame_offset'] or 0,
             'mute': bool(d.get('mute')),
+            'denoise': bool(d.get('denoise')),
+            'denoise_mix': float(d.get('denoise_mix') or 1.0),
             'caption': d['item_caption'] or '',
             'scene_caption': d['scene_caption'] or '',
             'tags': [tag for tag in tags_raw.split('|') if tag],
@@ -2813,13 +2843,15 @@ def add_clip_item(clip_id: int):
 
 @app.route('/api/clips/<int:clip_id>/items/<int:item_id>', methods=['PUT'])
 def update_clip_item(clip_id: int, item_id: int):
-    """Update start_frame, end_frame, and/or mute of a clip item."""
+    """Update start_frame, end_frame, mute, and/or denoise of a clip item."""
     data = request.get_json()
     if data is None:
         return jsonify({"error": "Missing data"}), 400
     has_frames = 'start_frame' in data and 'end_frame' in data
     has_mute = 'mute' in data
-    if not has_frames and not has_mute:
+    has_denoise = 'denoise' in data
+    has_denoise_mix = 'denoise_mix' in data
+    if not has_frames and not has_mute and not has_denoise and not has_denoise_mix:
         return jsonify({"error": "Nothing to update"}), 400
     conn = get_db_connection()
     row = conn.execute(
@@ -2844,11 +2876,85 @@ def update_clip_item(clip_id: int, item_id: int):
         end_frame = row['end_frame']
     if has_mute:
         conn.execute("UPDATE clip_items SET mute = %s WHERE id = %s", (bool(data['mute']), item_id))
+    if has_denoise:
+        conn.execute("UPDATE clip_items SET denoise = %s WHERE id = %s", (bool(data['denoise']), item_id))
+    if has_denoise_mix:
+        mix = max(0.0, min(1.0, float(data['denoise_mix'])))
+        conn.execute("UPDATE clip_items SET denoise_mix = %s WHERE id = %s", (mix, item_id))
     conn.commit()
-    updated = conn.execute("SELECT mute FROM clip_items WHERE id = %s", (item_id,)).fetchone()
+    updated = conn.execute("SELECT mute, denoise, denoise_mix FROM clip_items WHERE id = %s", (item_id,)).fetchone()
     conn.close()
     return jsonify({"item_id": item_id, "start_frame": start_frame, "end_frame": end_frame,
-                    "frame_count": end_frame - start_frame, "mute": bool(updated['mute'])})
+                    "frame_count": end_frame - start_frame,
+                    "mute": bool(updated['mute']), "denoise": bool(updated['denoise']),
+                    "denoise_mix": float(updated['denoise_mix'])})
+
+
+_PROCESSED_PREVIEW_DIR = Path('.cache/processed_previews')
+
+@app.route('/api/clips/<int:clip_id>/items/<int:item_id>/processed')
+def clip_item_processed_preview(clip_id: int, item_id: int):
+    """Generate and serve a processed preview clip (with mute/denoise applied)."""
+    import hashlib
+    conn = get_db_connection()
+    row = conn.execute("""
+        SELECT ci.start_frame, ci.end_frame, ci.mute, ci.denoise, ci.denoise_mix,
+               v.path as video_path, v.fps, v.frame_offset
+        FROM clip_items ci
+        JOIN videos v ON ci.video_id = v.id
+        WHERE ci.id = %s AND ci.clip_id = %s
+    """, (item_id, clip_id)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "Item not found"}), 404
+
+    d = dict(row)
+    video_file = Path(d['video_path'])
+    if not video_file.exists():
+        return jsonify({"error": "Video file not found"}), 404
+
+    fps = d['fps'] or 24.0
+    frame_offset = d['frame_offset'] or 0
+    start_time = max(0.0, (d['start_frame'] + frame_offset + 1) / fps)
+    duration = (d['end_frame'] - d['start_frame']) / fps
+    if duration <= 0:
+        return jsonify({"error": "Invalid frame range"}), 400
+
+    mute = bool(d['mute'])
+    denoise = bool(d['denoise'])
+    denoise_mix = float(d['denoise_mix'] or 1.0)
+
+    params_key = f"{item_id}_{mute}_{denoise}_{denoise_mix:.3f}_{d['start_frame']}_{d['end_frame']}"
+    cache_name = hashlib.md5(params_key.encode()).hexdigest()[:12]
+    _PROCESSED_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = _PROCESSED_PREVIEW_DIR / f"{item_id}_{cache_name}.mp4"
+
+    if not cache_path.exists():
+        arnndn_model = None
+        if denoise:
+            try:
+                arnndn_model = _ensure_arnndn_model()
+            except Exception as e:
+                return jsonify({"error": f"Failed to load arnndn model: {e}"}), 500
+
+        is_hdr = _is_hdr_video(video_file)
+        ok = False
+        if is_hdr:
+            cmd = _build_export_cmd(video_file, start_time, duration, cache_path,
+                                    tonemap=True, mute=mute, denoise=denoise,
+                                    denoise_mix=denoise_mix, arnndn_model=arnndn_model)
+            result = subprocess.run(cmd, stderr=subprocess.DEVNULL)
+            ok = result.returncode == 0 and cache_path.exists()
+        if not ok:
+            cmd = _build_export_cmd(video_file, start_time, duration, cache_path,
+                                    tonemap=False, mute=mute, denoise=denoise,
+                                    denoise_mix=denoise_mix, arnndn_model=arnndn_model)
+            result = subprocess.run(cmd, stderr=subprocess.DEVNULL)
+            ok = result.returncode == 0 and cache_path.exists()
+        if not ok:
+            return jsonify({"error": "Clip generation failed"}), 500
+
+    return send_file(cache_path, mimetype='video/mp4', conditional=True)
 
 
 @app.route('/api/clips/<int:clip_id>/items/<int:item_id>/caption', methods=['PUT'])

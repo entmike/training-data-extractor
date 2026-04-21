@@ -10,6 +10,7 @@ function fmtSecs(s) {
 export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
   const videoRef    = useRef(null)
   const seekWrapRef = useRef(null)
+  const cropWrapRef = useRef(null)
   const timeRafRef  = useRef(null)
   const seekingRef  = useRef(false)
   const mouseDownOnOverlay = useRef(false)
@@ -24,9 +25,13 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
   // Working copies of start/end as frame offsets relative to scene start
   const [startOff, setStartOff] = useState(item.start_frame - sceneStart)
   const [endOff,   setEndOff]   = useState(item.end_frame   - sceneStart)
+  // Last-persisted offsets — used for isDirty and Revert
+  const [savedStart, setSavedStart] = useState(item.start_frame - sceneStart)
+  const [savedEnd,   setSavedEnd]   = useState(item.end_frame   - sceneStart)
 
   const startOffRef = useRef(startOff)
   const endOffRef   = useRef(endOff)
+  const autoSaveRef = useRef(null)
 
   const [playing,     setPlaying]     = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
@@ -35,9 +40,19 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
   const [volume,      setVolume]      = useState(1)
   const [waveformUrl] = useState(`/waveform/${item.scene_id}`)
 
-  const [saving,  setSaving]  = useState(false)
-  const [saveMsg, setSaveMsg] = useState('') // '' | 'saved' | 'error'
+  const frameTimer = useRef(null)
+  const [savedFlash, setSavedFlash] = useState(false)
   const [itemMute, setItemMute] = useState(!!item.mute)
+  const [itemDenoise, setItemDenoise] = useState(!!item.denoise)
+  const [denoiseMix, setDenoiseMix] = useState(Math.round((item.denoise_mix ?? 1.0) * 100))
+  const denoiseMixTimer = useRef(null)
+
+  // Preview tab state
+  const [videoTab, setVideoTab] = useState('preview') // 'original' | 'preview'
+  const videoTabRef = useRef('preview')
+  const previewVideoRef = useRef(null)
+  const [previewStatus, setPreviewStatus] = useState('idle') // 'idle' | 'loading' | 'ready' | 'error'
+  const [previewUrl, setPreviewUrl] = useState(null)
 
   // Caption state — auto-saves independently
   const rawCaption = (item.caption && !item.caption.startsWith('__')) ? item.caption : ''
@@ -67,8 +82,8 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
   // Global mouse move/up for dragging
   useEffect(() => {
     function onMove(e) {
-      if (!dragMode.current || !seekWrapRef.current) return
-      const rect = seekWrapRef.current.getBoundingClientRect()
+      if (!dragMode.current || !cropWrapRef.current) return
+      const rect = cropWrapRef.current.getBoundingClientRect()
       const deltaPx = e.clientX - dragStartX.current
       const deltaFrames = Math.round((deltaPx / rect.width) * sceneFrames)
       const { start: s0, end: e0 } = dragStartState.current
@@ -97,6 +112,7 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
       if (!dragMode.current) return
       dragMode.current = null
       setIsDragging(false)
+      autoSaveRef.current?.()
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup',  onUp)
@@ -130,8 +146,6 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
     const vid = videoRef.current; if (!vid) return
     setVideoDur(vid.duration)
     vid.currentTime = startOffRef.current / fps
-    if (sceneFrames <= 600)
-      vid.play().catch(() => {})
   }
 
   async function togglePlay() {
@@ -185,11 +199,12 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
     if (caption !== savedCaption) doSaveCaption(caption)
   }
 
-  // Frame save
-  async function save() {
-    setSaving(true); setSaveMsg('')
-    const newStart = sceneStart + startOff
-    const newEnd   = sceneStart + endOff
+  // Keep autoSaveRef current so the drag effect + debounce can call it without stale closure
+  autoSaveRef.current = async () => {
+    const start = startOffRef.current
+    const end   = endOffRef.current
+    const newStart = sceneStart + start
+    const newEnd   = sceneStart + end
     try {
       const r = await fetch(`/api/clips/${clipId}/items/${item.id}`, {
         method: 'PUT',
@@ -197,13 +212,18 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
         body: JSON.stringify({ start_frame: newStart, end_frame: newEnd }),
       })
       if (!r.ok) throw new Error()
-      setSaveMsg('saved')
+      setSavedStart(start)
+      setSavedEnd(end)
       onSaved({ ...item, start_frame: newStart, end_frame: newEnd, frame_count: newEnd - newStart })
-      setTimeout(() => setSaveMsg(''), 2000)
-    } catch {
-      setSaveMsg('error')
-    }
-    setSaving(false)
+      setSavedFlash(true)
+      setTimeout(() => setSavedFlash(false), 1800)
+      if (videoTabRef.current === 'preview') loadPreview()
+    } catch { /* silent */ }
+  }
+
+  function scheduleFrameSave() {
+    clearTimeout(frameTimer.current)
+    frameTimer.current = setTimeout(() => autoSaveRef.current?.(), 600)
   }
 
   async function toggleItemMute() {
@@ -215,11 +235,70 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
       body: JSON.stringify({ mute: newMute }),
     })
     onSaved({ ...item, mute: newMute })
+    setSavedFlash(true); setTimeout(() => setSavedFlash(false), 1800)
+    if (videoTabRef.current === 'preview') loadPreview()
+  }
+
+  async function toggleItemDenoise() {
+    const newDenoise = !itemDenoise
+    setItemDenoise(newDenoise)
+    await fetch(`/api/clips/${clipId}/items/${item.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ denoise: newDenoise }),
+    })
+    onSaved({ ...item, denoise: newDenoise })
+    setSavedFlash(true); setTimeout(() => setSavedFlash(false), 1800)
+    if (videoTabRef.current === 'preview') loadPreview()
+  }
+
+  function handleDenoiseMixChange(pct) {
+    setDenoiseMix(pct)
+    clearTimeout(denoiseMixTimer.current)
+    denoiseMixTimer.current = setTimeout(async () => {
+      await fetch(`/api/clips/${clipId}/items/${item.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ denoise_mix: pct / 100 }),
+      })
+      onSaved({ ...item, denoise_mix: pct / 100 })
+      if (videoTabRef.current === 'preview') loadPreview()
+    }, 500)
+  }
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadPreview() }, [])
+
+  async function loadPreview() {
+    setPreviewUrl(null)
+    setPreviewStatus('loading')
+    try {
+      const r = await fetch(`/api/clips/${clipId}/items/${item.id}/processed`)
+      if (!r.ok) throw new Error('Failed')
+      const blob = await r.blob()
+      const url = URL.createObjectURL(blob)
+      setPreviewUrl(url)
+      setPreviewStatus('ready')
+    } catch {
+      setPreviewStatus('error')
+    }
+  }
+
+  function switchTab(tab) {
+    if (tab === 'preview') {
+      videoRef.current?.pause()
+      setPlaying(false)
+    } else {
+      previewVideoRef.current?.pause()
+    }
+    videoTabRef.current = tab
+    setVideoTab(tab)
+    if (tab === 'preview') loadPreview()
   }
 
   const startPct = sceneFrames > 0 ? (startOff / sceneFrames) * 100 : 0
   const endPct   = sceneFrames > 0 ? (endOff   / sceneFrames) * 100 : 0
-  const isDirty  = startOff !== (item.start_frame - sceneStart) || endOff !== (item.end_frame - sceneStart)
+  const isDirty  = startOff !== savedStart || endOff !== savedEnd
 
   return createPortal(
     <div
@@ -235,8 +314,14 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
           <button className="modal-close-btn" onClick={onClose}>&times;</button>
         </div>
 
+        {/* Video tabs */}
+        <div className="cie-video-tabs">
+          <button className={`cie-video-tab${videoTab === 'original' ? ' cie-video-tab--active' : ''}`} onClick={() => switchTab('original')}>Original</button>
+          <button className={`cie-video-tab${videoTab === 'preview' ? ' cie-video-tab--active' : ''}`} onClick={() => switchTab('preview')}>Preview</button>
+        </div>
+
         {/* Video */}
-        <div className="modal-video-wrap">
+        <div className="modal-video-wrap" style={{ display: videoTab === 'original' ? undefined : 'none' }}>
           <video
             ref={videoRef}
             src={`/clip/${item.scene_id}`}
@@ -251,8 +336,34 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
           />
         </div>
 
-        {/* Controls */}
-        <div className="video-controls">
+        {/* Processed preview */}
+        {videoTab === 'preview' && (
+          <div className="modal-video-wrap cie-preview-wrap">
+            {previewStatus === 'loading' && (
+              <div className="cie-preview-loading">
+                <div className="clip-loading-spinner" />
+                <span className="clip-loading-label">Generating preview…</span>
+              </div>
+            )}
+            {previewStatus === 'error' && (
+              <div className="cie-preview-loading">
+                <span style={{ color: '#f87171' }}>Preview failed</span>
+                <button className="cie-revert-btn" style={{ marginTop: 8 }} onClick={loadPreview}>Retry</button>
+              </div>
+            )}
+            {previewStatus === 'ready' && previewUrl && (
+              <video
+                ref={previewVideoRef}
+                src={previewUrl}
+                loop autoPlay controls
+                className="modal-video"
+              />
+            )}
+          </div>
+        )}
+
+        {/* Controls — hidden on preview tab */}
+        <div className="video-controls" style={videoTab === 'preview' ? { display: 'none' } : undefined}>
           <button className="vc-btn" onClick={togglePlay} title={playing ? 'Pause' : 'Play'}>
             {playing
               ? <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>
@@ -261,37 +372,14 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
 
           <span className="vc-time">{fmtSecs(currentTime)} / {fmtSecs(videoDur)}</span>
 
-          {/* Seek bar with range overlay */}
+          {/* Seek bar — waveform + playback position only */}
           <div className="vc-seek-wrap" ref={seekWrapRef}>
             {waveformUrl && (
               <img src={waveformUrl} className="vc-waveform-img" alt="" aria-hidden="true"
                 onError={() => {}} />
             )}
-
-            {/* Selected range body — drag to shift */}
-            <div
-              className={`cie-range-body${isDragging && dragMode.current === 'body' ? ' cie-range-body--dragging' : ''}`}
-              style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }}
-              onMouseDown={e => startDrag(e, 'body')}
-              title="Drag to shift range"
-            />
-
-            {/* Start handle */}
-            <div
-              className="cie-handle cie-handle--start"
-              style={{ left: `${startPct}%` }}
-              onMouseDown={e => startDrag(e, 'start')}
-              title="Drag to adjust start frame"
-            />
-
-            {/* End handle */}
-            <div
-              className="cie-handle cie-handle--end"
-              style={{ left: `${endPct}%` }}
-              onMouseDown={e => startDrag(e, 'end')}
-              title="Drag to adjust end frame"
-            />
-
+            <div className="vc-crop-dim" style={{ left: 0, width: `${startPct}%` }} />
+            <div className="vc-crop-dim" style={{ left: `${endPct}%`, width: `${100 - endPct}%` }} />
             <input
               type="range"
               className="vc-seek"
@@ -314,70 +402,107 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
             value={muted ? 0 : volume} onChange={handleVolumeChange} />
         </div>
 
+        {/* Crop range handles — hidden on preview tab */}
+        <div className="cie-crop-row" ref={cropWrapRef} style={videoTab === 'preview' ? { display: 'none' } : undefined}>
+          {waveformUrl && (
+            <img src={waveformUrl} className="vc-waveform-img" alt="" aria-hidden="true" onError={() => {}} />
+          )}
+          <div
+            className={`cie-range-body${isDragging && dragMode.current === 'body' ? ' cie-range-body--dragging' : ''}`}
+            style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }}
+            onMouseDown={e => startDrag(e, 'body')}
+            title="Drag to shift range"
+          />
+          <div
+            className="cie-handle cie-handle--start"
+            style={{ left: `${startPct}%` }}
+            onMouseDown={e => startDrag(e, 'start')}
+            title="Drag to adjust start frame"
+          />
+          <div
+            className="cie-handle cie-handle--end"
+            style={{ left: `${endPct}%` }}
+            onMouseDown={e => startDrag(e, 'end')}
+            title="Drag to adjust end frame"
+          />
+        </div>
+
         {/* Frame info + inputs */}
-        <div className="cie-frame-panel">
-          <div className="cie-frame-group">
-            <label className="cie-label">Start frame</label>
-            <input
-              type="number"
-              className="cie-frame-input"
-              value={sceneStart + startOff}
-              min={sceneStart}
-              max={sceneStart + endOff - 1}
-              onChange={e => {
-                const abs = Math.max(sceneStart, Math.min(sceneStart + endOff - 1, parseInt(e.target.value) || sceneStart))
-                setStartOff(abs - sceneStart)
-              }}
-            />
-            <span className="cie-frame-hint">offset {startOff}f in scene</span>
-          </div>
+        <div className="cie-frame-panel" style={videoTab === 'original' ? { display: 'none' } : undefined}>
+          <div className="cie-frame-groups">
+            <div className="cie-frame-group">
+              <label className="cie-label">Start frame</label>
+              <input
+                type="number"
+                className="cie-frame-input"
+                value={sceneStart + startOff}
+                min={sceneStart}
+                max={sceneStart + endOff - 1}
+                onChange={e => {
+                  const abs = Math.max(sceneStart, Math.min(sceneStart + endOff - 1, parseInt(e.target.value) || sceneStart))
+                  setStartOff(abs - sceneStart)
+                  scheduleFrameSave()
+                }}
+              />
+              <span className="cie-frame-hint">offset {startOff}f in scene</span>
+            </div>
 
-          <div className="cie-frame-group">
-            <label className="cie-label">End frame</label>
-            <input
-              type="number"
-              className="cie-frame-input"
-              value={sceneStart + endOff}
-              min={sceneStart + startOff + 1}
-              max={sceneEnd}
-              onChange={e => {
-                const abs = Math.max(sceneStart + startOff + 1, Math.min(sceneEnd, parseInt(e.target.value) || sceneEnd))
-                setEndOff(abs - sceneStart)
-              }}
-            />
-            <span className="cie-frame-hint">offset {endOff}f in scene</span>
-          </div>
+            <div className="cie-frame-group">
+              <label className="cie-label">End frame</label>
+              <input
+                type="number"
+                className="cie-frame-input"
+                value={sceneStart + endOff}
+                min={sceneStart + startOff + 1}
+                max={sceneEnd}
+                onChange={e => {
+                  const abs = Math.max(sceneStart + startOff + 1, Math.min(sceneEnd, parseInt(e.target.value) || sceneEnd))
+                  setEndOff(abs - sceneStart)
+                  scheduleFrameSave()
+                }}
+              />
+              <span className="cie-frame-hint">offset {endOff}f in scene</span>
+            </div>
 
-          <div className="cie-frame-group cie-frame-group--count">
-            <label className="cie-label">Frame count</label>
-            <FrameCountStepper
-              frameCount={endOff - startOff}
-              min={1}
-              max={sceneFrames - startOff}
-              onChange={newCount => setEndOff(startOff + newCount)}
-            />
+            <div className="cie-frame-group">
+              <label className="cie-label">Frame count</label>
+              <FrameCountStepper
+                frameCount={endOff - startOff}
+                min={1}
+                max={sceneFrames - startOff}
+                onChange={newCount => { setEndOff(startOff + newCount); scheduleFrameSave() }}
+              />
+            </div>
           </div>
 
           <div className="cie-save-row">
-            <button
-              className="cie-save-btn"
-              onClick={save}
-              disabled={saving || !isDirty}
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-            {saveMsg === 'saved' && <span className="cie-save-msg cie-save-msg--ok">✓ Saved</span>}
-            {saveMsg === 'error' && <span className="cie-save-msg cie-save-msg--err">Error</span>}
-            {isDirty && !saving && (
+            {savedFlash && <span className="cie-save-flash">✓ Saved</span>}
+            {isDirty && (
               <button className="cie-revert-btn" onClick={() => {
-                setStartOff(item.start_frame - sceneStart)
-                setEndOff(item.end_frame - sceneStart)
+                clearTimeout(frameTimer.current)
+                setStartOff(savedStart)
+                setEndOff(savedEnd)
               }}>Revert</button>
             )}
             <label className="cie-mute-label">
               <input type="checkbox" checked={itemMute} onChange={toggleItemMute} />
               Mute
             </label>
+            <label className="cie-denoise-label">
+              <input type="checkbox" checked={itemDenoise} onChange={toggleItemDenoise} />
+              Denoise
+            </label>
+            {itemDenoise && (
+              <label className="cie-denoise-mix-label">
+                <input
+                  type="range" min={1} max={100} step={1}
+                  value={denoiseMix}
+                  className="cie-denoise-mix-slider"
+                  onChange={e => handleDenoiseMixChange(Number(e.target.value))}
+                />
+                <span className="cie-denoise-mix-value">{denoiseMix}%</span>
+              </label>
+            )}
           </div>
         </div>
 

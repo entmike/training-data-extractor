@@ -43,219 +43,35 @@ class Database:
         self._init_tables()
 
     def _init_tables(self) -> None:
+        # schema/schema.sql is the single source of truth for all table definitions.
+        # Each statement is a complete CREATE TABLE IF NOT EXISTS with all current columns.
+        schema_path = Path(__file__).parents[2] / 'schema' / 'schema.sql'
+        schema_sql = schema_path.read_text()
+        import re
+        clean_sql = re.sub(r'--[^\n]*', '', schema_sql)   # strip line comments
+        statements = [s.strip() for s in clean_sql.split(';') if s.strip()]
+
+        # Incremental ADD COLUMN IF NOT EXISTS guards for columns added after each
+        # table's initial deployment.  Safe to re-run; ignored on fresh installs
+        # because the CREATE TABLE above already includes these columns.
+        migrations = [
+            "ALTER TABLE face_detections  ADD COLUMN IF NOT EXISTS embedding      BYTEA",
+            "ALTER TABLE tag_references   ADD COLUMN IF NOT EXISTS embedding_type TEXT NOT NULL DEFAULT 'insightface'",
+            "ALTER TABLE tag_references   ADD COLUMN IF NOT EXISTS frame_number   INTEGER",
+            "ALTER TABLE scene_tags       ADD COLUMN IF NOT EXISTS confirmed      BOOLEAN NOT NULL DEFAULT TRUE",
+            "ALTER TABLE scenes           ADD COLUMN IF NOT EXISTS subtitles      TEXT",
+            "ALTER TABLE face_clusters    ADD COLUMN IF NOT EXISTS member_detection_ids INTEGER[] NOT NULL DEFAULT '{}'",
+            "ALTER TABLE face_clusters    ADD COLUMN IF NOT EXISTS stable_key     TEXT",
+            "ALTER TABLE clip_items       ADD COLUMN IF NOT EXISTS mute           BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE clip_items       ADD COLUMN IF NOT EXISTS denoise        BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE clip_items       ADD COLUMN IF NOT EXISTS denoise_mix    FLOAT   NOT NULL DEFAULT 1.0",
+        ]
+
         with self._connection() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS videos (
-                    id SERIAL PRIMARY KEY,
-                    path TEXT UNIQUE NOT NULL,
-                    hash TEXT NOT NULL,
-                    duration DOUBLE PRECISION,
-                    fps DOUBLE PRECISION,
-                    width INTEGER,
-                    height INTEGER,
-                    codec TEXT,
-                    frame_offset INTEGER DEFAULT 0,
-                    prompt TEXT,
-                    name TEXT,
-                    indexed_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS scenes (
-                    id SERIAL PRIMARY KEY,
-                    video_id INTEGER NOT NULL REFERENCES videos(id),
-                    start_time DOUBLE PRECISION NOT NULL,
-                    end_time DOUBLE PRECISION NOT NULL,
-                    duration DOUBLE PRECISION NOT NULL,
-                    start_frame INTEGER,
-                    end_frame INTEGER,
-                    caption TEXT,
-                    caption_started_at TIMESTAMPTZ,
-                    caption_finished_at TIMESTAMPTZ,
-                    caption_prompt TEXT,
-                    blurhash TEXT,
-                    rating INTEGER DEFAULT 2,
-                    bucket_ineligible INTEGER DEFAULT 0,
-                    UNIQUE(video_id, start_time, end_time)
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS buckets (
-                    id SERIAL PRIMARY KEY,
-                    video_id INTEGER NOT NULL REFERENCES videos(id),
-                    scene_id INTEGER REFERENCES scenes(id),
-                    start_time DOUBLE PRECISION NOT NULL,
-                    end_time DOUBLE PRECISION NOT NULL,
-                    duration DOUBLE PRECISION NOT NULL,
-                    start_frame INTEGER NOT NULL,
-                    end_frame INTEGER NOT NULL,
-                    frame_count INTEGER,
-                    speech_score DOUBLE PRECISION,
-                    speech_start_frame INTEGER,
-                    speech_end_frame INTEGER,
-                    optimal_offset_frames INTEGER,
-                    optimal_duration DOUBLE PRECISION,
-                    bucket_timestamp TIMESTAMPTZ DEFAULT NOW(),
-                    UNIQUE(video_id, start_frame, end_frame)
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS candidates (
-                    id SERIAL PRIMARY KEY,
-                    video_id INTEGER NOT NULL REFERENCES videos(id),
-                    scene_id INTEGER REFERENCES scenes(id),
-                    start_time DOUBLE PRECISION NOT NULL,
-                    end_time DOUBLE PRECISION NOT NULL,
-                    duration DOUBLE PRECISION NOT NULL,
-                    quality_score DOUBLE PRECISION,
-                    face_presence DOUBLE PRECISION,
-                    status TEXT DEFAULT 'pending'
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS face_detections (
-                    id           SERIAL PRIMARY KEY,
-                    video_id     INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
-                    frame_number INTEGER NOT NULL,
-                    bbox_area    DOUBLE PRECISION,
-                    pose_yaw     DOUBLE PRECISION,
-                    pose_pitch   DOUBLE PRECISION,
-                    pose_roll    DOUBLE PRECISION,
-                    det_score    DOUBLE PRECISION,
-                    age          INTEGER,
-                    sex          TEXT,
-                    embedding    BYTEA,
-                    created_at   TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            conn.execute("""
-                ALTER TABLE face_detections ADD COLUMN IF NOT EXISTS embedding BYTEA
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS embeddings (
-                    id SERIAL PRIMARY KEY,
-                    video_id INTEGER NOT NULL REFERENCES videos(id),
-                    frame_time DOUBLE PRECISION NOT NULL,
-                    embedding BYTEA NOT NULL,
-                    cluster_id INTEGER
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS samples (
-                    id SERIAL PRIMARY KEY,
-                    candidate_id INTEGER NOT NULL REFERENCES candidates(id),
-                    crop_type TEXT NOT NULL,
-                    output_path TEXT NOT NULL,
-                    frame_count INTEGER,
-                    caption TEXT,
-                    rendered_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS scene_tags (
-                    scene_id INTEGER NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
-                    tag TEXT NOT NULL,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    PRIMARY KEY (scene_id, tag)
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS tag_definitions (
-                    tag TEXT PRIMARY KEY,
-                    description TEXT NOT NULL DEFAULT '',
-                    display_name TEXT NOT NULL DEFAULT ''
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS clips (
-                    id SERIAL PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    caption_prompt TEXT,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS clip_items (
-                    id SERIAL PRIMARY KEY,
-                    clip_id INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
-                    scene_id INTEGER NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
-                    video_id INTEGER NOT NULL,
-                    start_frame INTEGER NOT NULL,
-                    end_frame INTEGER NOT NULL,
-                    caption TEXT DEFAULT '',
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    UNIQUE(clip_id, scene_id)
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS tag_references (
-                    id             SERIAL PRIMARY KEY,
-                    tag            TEXT NOT NULL,
-                    video_id       INTEGER REFERENCES videos(id) ON DELETE CASCADE,
-                    frame_number   INTEGER NOT NULL,
-                    frame_time     DOUBLE PRECISION NOT NULL,
-                    embedding      BYTEA NOT NULL,
-                    embedding_type TEXT NOT NULL DEFAULT 'insightface',
-                    created_at     TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            conn.execute("""
-                ALTER TABLE tag_references
-                ADD COLUMN IF NOT EXISTS embedding_type TEXT NOT NULL DEFAULT 'insightface'
-            """)
-            conn.execute("""
-                ALTER TABLE tag_references
-                ADD COLUMN IF NOT EXISTS frame_number INTEGER
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS clip_embeddings (
-                    id           SERIAL PRIMARY KEY,
-                    video_id     INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
-                    frame_number INTEGER NOT NULL,
-                    model        TEXT NOT NULL DEFAULT 'openai/clip-vit-large-patch14',
-                    embedding    BYTEA NOT NULL,
-                    created_at   TIMESTAMPTZ DEFAULT NOW(),
-                    UNIQUE (video_id, frame_number, model)
-                )
-            """)
-            conn.execute("""
-                ALTER TABLE scene_tags
-                ADD COLUMN IF NOT EXISTS confirmed BOOLEAN NOT NULL DEFAULT TRUE
-            """)
-            conn.execute("""
-                ALTER TABLE scenes
-                ADD COLUMN IF NOT EXISTS subtitles TEXT
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS face_clusters (
-                    id                      SERIAL PRIMARY KEY,
-                    video_id                INTEGER REFERENCES videos(id),
-                    cluster_label           INTEGER NOT NULL,
-                    centroid                BYTEA NOT NULL,
-                    size                    INTEGER NOT NULL,
-                    stable_key              TEXT,
-                    member_detection_ids    INTEGER[] NOT NULL DEFAULT '{}',
-                    sample_frame_numbers    INTEGER[] NOT NULL DEFAULT '{}',
-                    sample_video_ids        INTEGER[] NOT NULL DEFAULT '{}',
-                    nearest_tag             TEXT,
-                    nearest_sim             DOUBLE PRECISION,
-                    dismissed               BOOLEAN NOT NULL DEFAULT FALSE,
-                    promoted_tag            TEXT,
-                    created_at              TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            conn.execute("""
-                ALTER TABLE face_clusters
-                ADD COLUMN IF NOT EXISTS member_detection_ids INTEGER[] NOT NULL DEFAULT '{}'
-            """)
-            conn.execute("""
-                ALTER TABLE face_clusters
-                ADD COLUMN IF NOT EXISTS stable_key TEXT
-            """)
-            conn.execute("""
-                ALTER TABLE clip_items
-                ADD COLUMN IF NOT EXISTS mute BOOLEAN NOT NULL DEFAULT FALSE
-            """)
+            for stmt in statements:
+                conn.execute(stmt)
+            for stmt in migrations:
+                conn.execute(stmt)
             conn.commit()
 
     @contextmanager
