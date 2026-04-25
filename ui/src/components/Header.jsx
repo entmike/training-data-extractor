@@ -15,6 +15,9 @@ const ROUTE_TITLES = [
   [/^\/tags/,     'Tags'],
   [/^\/discover/, 'Discover'],
   [/^\/cluster\//, 'Cluster'],
+  [/^\/outputs/,  'Outputs'],
+  [/^\/config/,   'Config'],
+  [/^\/queue/,    'ComfyUI Queue'],
 ]
 
 export default function Header({ isLoading, onManageTags, onManageVideos, onDiscover }) {
@@ -88,6 +91,7 @@ function ClearCacheModal({ sizeLabel, onConfirm, onCancel }) {
 }
 
 function ManageMenu({ onManageTags, onManageVideos, onManageClips, onDiscover, disabled }) {
+  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [cacheSize, setCacheSize] = useState(null)  // null = unknown, false = clearing
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -135,6 +139,9 @@ function ManageMenu({ onManageTags, onManageVideos, onManageClips, onDiscover, d
     { label: 'Videos', action: onManageVideos },
     { label: 'Clips', action: onManageClips },
     { label: 'Discover', action: onDiscover },
+    { label: 'Outputs',       action: () => navigate('/outputs') },
+    { label: 'ComfyUI Queue', action: () => navigate('/queue')   },
+    { label: 'Config',        action: () => navigate('/config')  },
   ]
 
   return (

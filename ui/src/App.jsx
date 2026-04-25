@@ -8,6 +8,9 @@ import VideosPage from './components/VideosPage'
 import TagsPage from './components/TagsPage'
 import DiscoverPage from './components/DiscoverPage'
 import ClusterDetailPage from './components/ClusterDetailPage'
+import OutputsPage from './components/OutputsPage'
+import ConfigPage from './components/ConfigPage'
+import ComfyQueuePage from './components/ComfyQueuePage'
 
 export default function App() {
   const navigate = useNavigate()
@@ -54,6 +57,9 @@ export default function App() {
         <Route path="/tags/:tag" element={pageLayout(<TagsPage />)} />
         <Route path="/discover" element={pageLayout(<DiscoverPage />)} />
         <Route path="/cluster/:clusterId" element={pageLayout(<ClusterDetailPage />)} />
+        <Route path="/outputs" element={pageLayout(<OutputsPage />)} />
+        <Route path="/config" element={pageLayout(<ConfigPage />)} />
+        <Route path="/queue" element={pageLayout(<ComfyQueuePage />)} />
       </Routes>
 
       {player && <VideoPlayerModal player={player} onClose={closePlayer} />}

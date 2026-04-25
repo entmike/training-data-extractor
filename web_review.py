@@ -71,7 +71,7 @@ def _get_dsn() -> str:
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _pool
     if _pool is None:
-        _pool = psycopg2.pool.ThreadedConnectionPool(2, 20, _get_dsn())
+        _pool = psycopg2.pool.ThreadedConnectionPool(2, 50, _get_dsn())
     return _pool
 
 
@@ -91,7 +91,12 @@ class _DbConn:
         self._conn.commit()
 
     def close(self):
-        _get_pool().putconn(self._conn)
+        if self._conn is not None:
+            _get_pool().putconn(self._conn)
+            self._conn = None
+
+    def __del__(self):
+        self.close()
 
     def __enter__(self):
         return self
@@ -3042,6 +3047,437 @@ def get_scene_clip_items(scene_id: int):
             'scene_end_frame': d.get('scene_end_frame') or 0,
         })
     return jsonify({"items": items})
+
+
+@app.route('/api/outputs')
+def get_outputs():
+    """Return paginated list of scanned ComfyUI outputs."""
+    page  = max(1, int(request.args.get('page', 1) or 1))
+    limit = min(200, int(request.args.get('limit', 50) or 50))
+    wf      = request.args.get('workflow', '')   # 'yes' | 'no' | ''
+    ftype   = request.args.get('type', '')       # 'image' | 'video' | ''
+    sort    = request.args.get('sort', 'desc')   # 'asc' | 'desc'
+    search  = request.args.get('search', '').strip()
+
+    conditions = ['deleted_at IS NULL']
+    params = []
+    if wf == 'yes':
+        conditions.append('workflow IS NOT NULL')
+    elif wf == 'no':
+        conditions.append('workflow IS NULL')
+    if ftype == 'image':
+        conditions.append("mime_type LIKE %s")
+        params.append('image/%')
+    elif ftype == 'video':
+        conditions.append("mime_type LIKE %s")
+        params.append('video/%')
+    if search:
+        conditions.append("(workflow::text ILIKE %s OR prompt::text ILIKE %s)")
+        like = f'%{search}%'
+        params.extend([like, like])
+
+    where = ('WHERE ' + ' AND '.join(conditions)) if conditions else ''
+    offset = (page - 1) * limit
+
+    conn = get_db_connection()
+    total = conn.execute(f"SELECT COUNT(*) as n FROM outputs {where}", params).fetchone()['n']
+    rows  = conn.execute(f"""
+        SELECT id, path, sha256, file_size, file_mtime, mime_type,
+               width, height,
+               workflow IS NOT NULL as has_workflow,
+               prompt  IS NOT NULL as has_prompt,
+               indexed_at
+        FROM outputs {where}
+        ORDER BY file_mtime {('ASC' if sort == 'asc' else 'DESC')}
+        LIMIT %s OFFSET %s
+    """, params + [limit, offset]).fetchall()
+    conn.close()
+
+    items = []
+    for r in rows:
+        d = dict(r)
+        d['filename'] = Path(d['path']).name
+        items.append(d)
+
+    return jsonify({'outputs': items, 'total': total, 'page': page, 'limit': limit})
+
+
+_output_path_cache: dict = {}        # output_id -> (path_str, mime_type)
+_output_path_lock = __import__('threading').Lock()
+
+def _output_path(output_id: int):
+    with _output_path_lock:
+        if output_id in _output_path_cache:
+            return _output_path_cache[output_id]
+    # Use a dedicated short-lived connection outside the pool for this lookup
+    # so the shared pool isn't exhausted by burst image requests.
+    raw = psycopg2.connect(_get_dsn())
+    try:
+        cur = raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT path, mime_type FROM outputs WHERE id = %s", (output_id,))
+        row = cur.fetchone()
+    finally:
+        raw.close()
+    result = (row['path'], row['mime_type']) if row else (None, None)
+    with _output_path_lock:
+        _output_path_cache[output_id] = result
+    return result
+
+
+@app.route('/output_image/<int:output_id>')
+def serve_output_image(output_id: int):
+    """Serve the actual image/video file for an output record."""
+    path_str, mime_type = _output_path(output_id)
+    if not path_str:
+        return jsonify({'error': 'Not found'}), 404
+    p = Path(path_str)
+    if not p.exists():
+        return jsonify({'error': 'File not found on disk'}), 404
+    return send_file(p, mimetype=mime_type or 'image/png')
+
+
+_OUTPUT_THUMB_DIR = _CACHE_DIR / 'output_thumbs'
+
+@app.route('/output_thumb/<int:output_id>')
+def serve_output_thumb(output_id: int):
+    """Return a JPEG thumbnail for a video output (extracted via ffmpeg, cached)."""
+    path_str, mime_type = _output_path(output_id)
+    if not path_str:
+        return jsonify({'error': 'Not found'}), 404
+    p = Path(path_str)
+    if not p.exists():
+        return jsonify({'error': 'File not found on disk'}), 404
+
+    _OUTPUT_THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = _OUTPUT_THUMB_DIR / f'{output_id}.jpg'
+
+    if not cache_path.exists():
+        cmd = [
+            'ffmpeg', '-y', '-ss', '1', '-i', str(p),
+            '-vframes', '1', '-vf', 'scale=400:-1',
+            '-q:v', '5', str(cache_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode != 0 or not cache_path.exists():
+            return jsonify({'error': 'Thumbnail generation failed'}), 500
+
+    return send_file(cache_path, mimetype='image/jpeg', conditional=True)
+
+
+@app.route('/api/outputs/<int:output_id>/delete', methods=['POST'])
+def soft_delete_output(output_id: int):
+    conn = get_db_connection()
+    conn.execute("UPDATE outputs SET deleted_at = NOW() WHERE id = %s", (output_id,))
+    conn.commit()
+    conn.close()
+    _output_path_cache.pop(output_id, None)
+    return jsonify({'success': True})
+
+
+@app.route('/api/outputs/<int:output_id>/restore', methods=['POST'])
+def restore_output(output_id: int):
+    conn = get_db_connection()
+    conn.execute("UPDATE outputs SET deleted_at = NULL WHERE id = %s", (output_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/outputs/trash', methods=['GET'])
+def get_trash_outputs():
+    conn = get_db_connection()
+    rows = conn.execute("""
+        SELECT id, path, sha256, file_size, file_mtime, mime_type,
+               width, height,
+               workflow IS NOT NULL as has_workflow,
+               prompt   IS NOT NULL as has_prompt,
+               indexed_at, deleted_at
+        FROM outputs
+        WHERE deleted_at IS NOT NULL
+        ORDER BY deleted_at DESC
+    """).fetchall()
+    conn.close()
+    items = [dict(r) | {'filename': Path(r['path']).name} for r in rows]
+    return jsonify({'outputs': items, 'total': len(items)})
+
+
+@app.route('/api/outputs/trash', methods=['DELETE'])
+def empty_trash():
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT id, path FROM outputs WHERE deleted_at IS NOT NULL"
+    ).fetchall()
+    conn.execute("DELETE FROM outputs WHERE deleted_at IS NOT NULL")
+    conn.commit()
+    conn.close()
+
+    deleted_files = 0
+    for r in rows:
+        _output_path_cache.pop(r['id'], None)
+        p = Path(r['path'])
+        if p.exists():
+            try:
+                p.unlink()
+                deleted_files += 1
+            except OSError:
+                pass
+
+    return jsonify({'deleted_records': len(rows), 'deleted_files': deleted_files})
+
+
+@app.route('/api/outputs/<int:output_id>/workflow')
+def get_output_workflow(output_id: int):
+    """Return full workflow + prompt JSON for a single output."""
+    conn = get_db_connection()
+    row  = conn.execute("SELECT workflow, prompt FROM outputs WHERE id = %s", (output_id,)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'workflow': row['workflow'], 'prompt': row['prompt']})
+
+
+@app.route('/api/prompt-favorites', methods=['GET'])
+def get_prompt_favorites():
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT node_id, class_type, input_key FROM prompt_favorites ORDER BY node_id, class_type, input_key"
+    ).fetchall()
+    conn.close()
+    return jsonify({'favorites': [dict(r) for r in rows]})
+
+
+@app.route('/api/prompt-favorites', methods=['POST'])
+def add_prompt_favorite():
+    data = request.get_json(silent=True) or {}
+    node_id    = data.get('node_id',    '').strip()
+    class_type = data.get('class_type', '').strip()
+    input_key  = data.get('input_key',  '').strip()
+    if not node_id or not class_type or not input_key:
+        return jsonify({'error': 'node_id, class_type and input_key required'}), 400
+    conn = get_db_connection()
+    conn.execute("""
+        INSERT INTO prompt_favorites (node_id, class_type, input_key)
+        VALUES (%s, %s, %s) ON CONFLICT (node_id, class_type, input_key) DO NOTHING
+    """, (node_id, class_type, input_key))
+    conn.commit()
+    conn.close()
+    return jsonify({'node_id': node_id, 'class_type': class_type, 'input_key': input_key})
+
+
+@app.route('/api/prompt-favorites', methods=['DELETE'])
+def remove_prompt_favorite():
+    data = request.get_json(silent=True) or {}
+    node_id    = data.get('node_id',    '').strip()
+    class_type = data.get('class_type', '').strip()
+    input_key  = data.get('input_key',  '').strip()
+    conn = get_db_connection()
+    conn.execute(
+        "DELETE FROM prompt_favorites WHERE node_id = %s AND class_type = %s AND input_key = %s",
+        (node_id, class_type, input_key)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({'deleted': True})
+
+
+@app.route('/api/comfyui-cache/<key>', methods=['GET'])
+def get_comfyui_cache(key: str):
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT data, updated_at FROM comfyui_cache WHERE key = %s", (key,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'data': None, 'updated_at': None, 'count': None})
+    data = row['data']
+    count = len(data) if isinstance(data, (dict, list)) else None
+    updated_at = row['updated_at'].isoformat() if row['updated_at'] else None
+    return jsonify({'data': data, 'updated_at': updated_at, 'count': count})
+
+
+@app.route('/api/comfyui-cache/<key>/refresh', methods=['POST'])
+def refresh_comfyui_cache(key: str):
+    import urllib.request as _urllib_request
+
+    _KEY_TO_PATH = {
+        'node_info': '/object_info',
+        'models':    '/models',
+    }
+    path = _KEY_TO_PATH.get(key)
+    if not path:
+        return jsonify({'error': f'Unknown cache key: {key}'}), 400
+
+    conn = get_db_connection()
+    row = conn.execute("SELECT value FROM config WHERE key = 'comfyui_endpoint'").fetchone()
+    conn.close()
+    endpoint = (row['value'] if row else '').rstrip('/')
+    if not endpoint:
+        return jsonify({'error': 'ComfyUI endpoint not configured — set it in Config first'}), 400
+
+    try:
+        url = endpoint + path
+        req = _urllib_request.Request(url, headers={'Accept': 'application/json'})
+        with _urllib_request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 502
+
+    conn = get_db_connection()
+    conn.execute("""
+        INSERT INTO comfyui_cache (key, data, updated_at)
+        VALUES (%s, %s, NOW())
+        ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+    """, (key, json.dumps(data)))
+    conn.commit()
+    row = conn.execute("SELECT updated_at FROM comfyui_cache WHERE key = %s", (key,)).fetchone()
+    conn.close()
+
+    count = len(data) if isinstance(data, (dict, list)) else None
+    updated_at = row['updated_at'].isoformat() if row and row['updated_at'] else None
+    return jsonify({'updated_at': updated_at, 'count': count})
+
+
+@app.route('/api/config', methods=['GET'])
+def get_config():
+    conn = get_db_connection()
+    rows = conn.execute("SELECT key, value FROM config").fetchall()
+    conn.close()
+    return jsonify({r['key']: r['value'] for r in rows})
+
+
+@app.route('/api/config/<key>', methods=['PUT'])
+def set_config(key: str):
+    value = (request.get_json(silent=True) or {}).get('value', '')
+    conn = get_db_connection()
+    conn.execute("""
+        INSERT INTO config (key, value, updated_at)
+        VALUES (%s, %s, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+    """, (key, value))
+    conn.commit()
+    conn.close()
+    return jsonify({'key': key, 'value': value})
+
+
+def _comfyui_endpoint() -> str:
+    """Return the configured ComfyUI base URL, or raise a 400 response."""
+    conn = get_db_connection()
+    row = conn.execute("SELECT value FROM config WHERE key = 'comfyui_endpoint'").fetchone()
+    conn.close()
+    endpoint = (row['value'] if row else '').rstrip('/')
+    if not endpoint:
+        raise ValueError('ComfyUI endpoint not configured — set it in Config first')
+    return endpoint
+
+
+def _comfyui_get(path: str, timeout: int = 10):
+    import urllib.request as _req
+    endpoint = _comfyui_endpoint()
+    url = endpoint + path
+    with _req.urlopen(_req.Request(url, headers={'Accept': 'application/json'}), timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def _comfyui_post(path: str, body: dict, timeout: int = 10):
+    import urllib.request as _req
+    endpoint = _comfyui_endpoint()
+    url = endpoint + path
+    data = json.dumps(body).encode()
+    req = _req.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
+    with _req.urlopen(req, timeout=timeout) as r:
+        raw = r.read()
+        return json.loads(raw) if raw.strip() else {}
+
+
+def _fmt_queue_item(item):
+    """Normalise a raw ComfyUI queue tuple into a display-friendly dict."""
+    number, prompt_id, nodes, extra_data, _ = item
+    node_count = len(nodes) if isinstance(nodes, dict) else 0
+    # Try to extract a human-readable title from the workflow metadata
+    title = None
+    try:
+        title = extra_data.get('extra_pnginfo', {}).get('workflow', {}).get('name') or None
+    except Exception:
+        pass
+    if not title:
+        # Fall back to the ckpt name from a CheckpointLoaderSimple node
+        try:
+            for n in nodes.values():
+                if n.get('class_type') in ('CheckpointLoaderSimple', 'CheckpointLoader'):
+                    title = n['inputs'].get('ckpt_name', '').split('/')[-1] or None
+                    if title:
+                        break
+        except Exception:
+            pass
+    return {
+        'number':    number,
+        'prompt_id': prompt_id,
+        'title':     title or f'Job #{number}',
+        'node_count': node_count,
+    }
+
+
+@app.route('/api/comfyui/queue', methods=['GET'])
+def comfyui_queue():
+    try:
+        data = _comfyui_get('/queue')
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 502
+
+    return jsonify({
+        'running': [_fmt_queue_item(i) for i in data.get('queue_running', [])],
+        'pending': [_fmt_queue_item(i) for i in data.get('queue_pending', [])],
+    })
+
+
+@app.route('/api/comfyui/history', methods=['GET'])
+def comfyui_history():
+    limit = request.args.get('limit', 20, type=int)
+    try:
+        data = _comfyui_get(f'/history?max_items={limit}')
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 502
+
+    items = []
+    for prompt_id, entry in data.items():
+        status = entry.get('status', {})
+        items.append({
+            'prompt_id':  prompt_id,
+            'completed':  status.get('completed', False),
+            'status_str': status.get('status_str', 'unknown'),
+            'outputs':    len(entry.get('outputs', {})),
+        })
+    # ComfyUI history is unordered; sort by completion is not available without timestamps
+    return jsonify({'history': items})
+
+
+@app.route('/api/comfyui/queue/delete', methods=['POST'])
+def comfyui_queue_delete():
+    prompt_id = (request.get_json(silent=True) or {}).get('prompt_id')
+    if not prompt_id:
+        return jsonify({'error': 'prompt_id required'}), 400
+    try:
+        _comfyui_post('/queue', {'delete': [prompt_id]})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 502
+    return jsonify({'deleted': prompt_id})
+
+
+@app.route('/api/comfyui/queue/clear', methods=['POST'])
+def comfyui_queue_clear():
+    try:
+        _comfyui_post('/queue', {'clear': True})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 502
+    return jsonify({'cleared': True})
 
 
 if __name__ == '__main__':
