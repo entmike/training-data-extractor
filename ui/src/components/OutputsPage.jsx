@@ -1312,6 +1312,83 @@ function OutputsView() {
   )
 }
 
+// ── Liked view ───────────────────────────────────────────────────────────────
+
+function LikedView() {
+  const [items, setItems]           = useState([])
+  const [loading, setLoading]       = useState(true)
+  const [selected, setSelected]     = useState(null)
+  const [selectedIdx, setSelectedIdx] = useState(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const r = await fetch('/api/outputs/liked')
+      const d = await r.json()
+      setItems(d.outputs ?? [])
+    } catch (e) {
+      console.error('Failed to load liked outputs', e)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  function handleUnlike(output) {
+    fetch(`/api/outputs/${output.id}/unlike`, { method: 'POST' })
+    const next = items.filter(o => o.id !== output.id)
+    setItems(next)
+    if (selected?.id === output.id) {
+      const idx = items.findIndex(o => o.id === output.id)
+      if (next.length === 0) { setSelected(null); setSelectedIdx(null) }
+      else { const i = Math.min(idx, next.length - 1); setSelected(next[i]); setSelectedIdx(i) }
+    }
+  }
+
+  return (
+    <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div style={{
+        padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)',
+        display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
+      }}>
+        <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+          {loading ? '…' : `${items.length} liked file${items.length !== 1 ? 's' : ''}`}
+        </span>
+      </div>
+
+      <div style={{ flex: 1, overflow: 'auto' }}>
+        {!loading && items.length === 0 && (
+          <div style={{ padding: 32, color: 'var(--text-muted)', textAlign: 'center' }}>
+            No liked outputs yet. Click ♥ on any output to like it.
+          </div>
+        )}
+        <div className="outputs-grid">
+          {items.map((o, i) => (
+            <OutputCard key={o.id} output={o}
+              onClick={() => { setSelected(o); setSelectedIdx(i) }}
+              onLikeToggle={handleUnlike}
+            />
+          ))}
+        </div>
+      </div>
+
+      {selected && (
+        <WorkflowModal
+          output={selected}
+          onClose={() => { setSelected(null); setSelectedIdx(null) }}
+          hasPrev={selectedIdx > 0}
+          hasNext={selectedIdx < items.length - 1}
+          onPrev={() => { const i = selectedIdx - 1; setSelected(items[i]); setSelectedIdx(i) }}
+          onNext={() => { const i = selectedIdx + 1; setSelected(items[i]); setSelectedIdx(i) }}
+          onDelete={null}
+          onLikeToggle={handleUnlike}
+        />
+      )}
+    </div>
+  )
+}
+
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function OutputsPage() {
@@ -1324,7 +1401,7 @@ export default function OutputsPage() {
         padding: '0 16px', borderBottom: '1px solid var(--border-subtle)',
         display: 'flex', gap: 0, flexShrink: 0,
       }}>
-        {[['outputs', 'Outputs'], ['trash', '🗑 Recycle Bin']].map(([key, label]) => (
+        {[['outputs', 'Outputs'], ['liked', '♥ Liked'], ['trash', '🗑 Recycle Bin']].map(([key, label]) => (
           <button
             key={key}
             onClick={() => setActiveTab(key)}
@@ -1340,7 +1417,9 @@ export default function OutputsPage() {
         ))}
       </div>
 
-      {activeTab === 'outputs' ? <OutputsView /> : <RecycleBinView />}
+      {activeTab === 'outputs' ? <OutputsView />
+        : activeTab === 'liked' ? <LikedView />
+        : <RecycleBinView />}
     </div>
   )
 }

@@ -3206,6 +3206,25 @@ def restore_output(output_id: int):
     return jsonify({'success': True})
 
 
+@app.route('/api/outputs/liked', methods=['GET'])
+def get_liked_outputs():
+    conn = get_db_connection()
+    rows = conn.execute("""
+        SELECT id, path, sha256, file_size, file_mtime, mime_type,
+               width, height,
+               workflow IS NOT NULL as has_workflow,
+               prompt   IS NOT NULL as has_prompt,
+               indexed_at, liked_at,
+               TRUE as liked
+        FROM outputs
+        WHERE liked_at IS NOT NULL AND deleted_at IS NULL
+        ORDER BY liked_at DESC
+    """).fetchall()
+    conn.close()
+    items = [dict(r) | {'filename': Path(r['path']).name} for r in rows]
+    return jsonify({'outputs': items, 'total': len(items)})
+
+
 @app.route('/api/outputs/trash', methods=['GET'])
 def get_trash_outputs():
     conn = get_db_connection()
