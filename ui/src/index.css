@@ -3372,3 +3372,35 @@ html, body {
   flex-shrink: 0;
 }
 .cq-delete-btn:hover { background: rgba(248,81,73,.15); color: #f87171; }
+
+/* ── Output like button ──────────────────────────────── */
+.output-card-thumb { position: relative; }
+.output-like-btn {
+  position: absolute;
+  top: 5px; right: 5px;
+  background: rgba(0,0,0,0.55);
+  border: none;
+  border-radius: 50%;
+  width: 26px; height: 26px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  color: rgba(255,255,255,0.45);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0;
+  transition: opacity .15s, color .15s;
+}
+.output-card:hover .output-like-btn { opacity: 1; }
+.output-like-btn--active {
+  opacity: 1 !important;
+  color: #f43f5e;
+}
+.output-like-btn:hover { color: #f43f5e; }
+.output-modal-like-btn {
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text-muted);
+  transition: color .15s, border-color .15s;
+}
+.output-modal-like-btn:hover { color: #f43f5e; border-color: #f43f5e; }
+.output-modal-like-btn--active { color: #f43f5e !important; border-color: #f43f5e !important; }

@@ -65,6 +65,14 @@ class Database:
             "ALTER TABLE clip_items       ADD COLUMN IF NOT EXISTS mute           BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE clip_items       ADD COLUMN IF NOT EXISTS denoise        BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE clip_items       ADD COLUMN IF NOT EXISTS denoise_mix    FLOAT   NOT NULL DEFAULT 1.0",
+            "ALTER TABLE outputs          ADD COLUMN IF NOT EXISTS deleted_at     TIMESTAMPTZ",
+            "ALTER TABLE outputs          ADD COLUMN IF NOT EXISTS liked_at       TIMESTAMPTZ",
+            "CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+            "CREATE TABLE IF NOT EXISTS prompt_favorites (id SERIAL PRIMARY KEY, node_id TEXT NOT NULL, class_type TEXT NOT NULL, input_key TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (node_id, class_type, input_key))",
+            "ALTER TABLE prompt_favorites ADD COLUMN IF NOT EXISTS node_id TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE prompt_favorites DROP CONSTRAINT IF EXISTS prompt_favorites_class_type_input_key_key",
+            "CREATE UNIQUE INDEX IF NOT EXISTS prompt_favorites_node_class_input ON prompt_favorites (node_id, class_type, input_key)",
+            "CREATE TABLE IF NOT EXISTS comfyui_cache (key TEXT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
         ]
 
         with self._connection() as conn:
@@ -757,6 +765,48 @@ class Database:
                     SELECT DISTINCT tag FROM scene_tags WHERE confirmed = TRUE
                 """).fetchall()
             return {r["tag"] for r in rows}
+
+    # ── Output scan operations ────────────────────────────────────────────────
+
+    def get_output_by_path(self, path: str) -> Optional[Dict[str, Any]]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT id, sha256 FROM outputs WHERE path = %s", (path,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def upsert_output(
+        self,
+        path: str,
+        sha256: str,
+        file_size: Optional[int],
+        file_mtime,
+        mime_type: Optional[str],
+        width: Optional[int],
+        height: Optional[int],
+        workflow: Optional[dict],
+        prompt: Optional[dict],
+    ) -> int:
+        wf_json = json.dumps(workflow) if workflow is not None else None
+        pr_json = json.dumps(prompt) if prompt is not None else None
+        with self._connection() as conn:
+            cur = conn.execute("""
+                INSERT INTO outputs (path, sha256, file_size, file_mtime, mime_type, width, height, workflow, prompt)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
+                ON CONFLICT (path) DO UPDATE SET
+                    sha256     = EXCLUDED.sha256,
+                    file_size  = EXCLUDED.file_size,
+                    file_mtime = EXCLUDED.file_mtime,
+                    mime_type  = EXCLUDED.mime_type,
+                    width      = EXCLUDED.width,
+                    height     = EXCLUDED.height,
+                    workflow   = EXCLUDED.workflow,
+                    prompt     = EXCLUDED.prompt,
+                    indexed_at = NOW()
+                RETURNING id
+            """, (path, sha256, file_size, file_mtime, mime_type, width, height, wf_json, pr_json))
+            conn.commit()
+            return cur.fetchone()['id']
 
     def get_scenes_without_tag(self, tag: str, video_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return scenes that do not have the given tag, but only from videos that already

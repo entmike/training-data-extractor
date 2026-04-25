@@ -3086,7 +3086,8 @@ def get_outputs():
                width, height,
                workflow IS NOT NULL as has_workflow,
                prompt  IS NOT NULL as has_prompt,
-               indexed_at
+               indexed_at,
+               liked_at IS NOT NULL as liked
         FROM outputs {where}
         ORDER BY file_mtime {('ASC' if sort == 'asc' else 'DESC')}
         LIMIT %s OFFSET %s
@@ -3164,9 +3165,31 @@ def serve_output_thumb(output_id: int):
     return send_file(cache_path, mimetype='image/jpeg', conditional=True)
 
 
+@app.route('/api/outputs/<int:output_id>/like', methods=['POST'])
+def like_output(output_id: int):
+    conn = get_db_connection()
+    conn.execute("UPDATE outputs SET liked_at = NOW() WHERE id = %s", (output_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'liked': True})
+
+
+@app.route('/api/outputs/<int:output_id>/unlike', methods=['POST'])
+def unlike_output(output_id: int):
+    conn = get_db_connection()
+    conn.execute("UPDATE outputs SET liked_at = NULL WHERE id = %s", (output_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'liked': False})
+
+
 @app.route('/api/outputs/<int:output_id>/delete', methods=['POST'])
 def soft_delete_output(output_id: int):
     conn = get_db_connection()
+    row = conn.execute("SELECT liked_at FROM outputs WHERE id = %s", (output_id,)).fetchone()
+    if row and row['liked_at'] is not None:
+        conn.close()
+        return jsonify({'error': 'Cannot delete a liked output — unlike it first'}), 409
     conn.execute("UPDATE outputs SET deleted_at = NOW() WHERE id = %s", (output_id,))
     conn.commit()
     conn.close()
@@ -3191,7 +3214,8 @@ def get_trash_outputs():
                width, height,
                workflow IS NOT NULL as has_workflow,
                prompt   IS NOT NULL as has_prompt,
-               indexed_at, deleted_at
+               indexed_at, deleted_at,
+               liked_at IS NOT NULL as liked
         FROM outputs
         WHERE deleted_at IS NOT NULL
         ORDER BY deleted_at DESC

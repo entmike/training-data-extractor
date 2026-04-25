@@ -253,3 +253,63 @@ CREATE TABLE IF NOT EXISTS clip_items (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (clip_id, scene_id)
 );
+
+
+-- ---------------------------------------------------------------------------
+-- outputs
+-- ComfyUI (or other) generated files scanned from an output directory.
+-- Stores file attributes and any embedded ComfyUI workflow/prompt JSON.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS outputs (
+    id          SERIAL PRIMARY KEY,
+    path        TEXT UNIQUE NOT NULL,
+    sha256      TEXT        NOT NULL,
+    file_size   BIGINT,
+    file_mtime  TIMESTAMPTZ,
+    mime_type   TEXT,
+    width       INTEGER,
+    height      INTEGER,
+    workflow    JSONB,               -- ComfyUI workflow graph
+    prompt      JSONB,               -- ComfyUI prompt (API/queue format)
+    indexed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    liked_at    TIMESTAMPTZ,                         -- liked; liked items cannot be soft-deleted
+    deleted_at  TIMESTAMPTZ                          -- soft delete; NULL = active
+);
+
+
+-- ---------------------------------------------------------------------------
+-- config
+-- Application key/value configuration store.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS config (
+    key        TEXT PRIMARY KEY,
+    value      TEXT        NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+-- ---------------------------------------------------------------------------
+-- prompt_favorites
+-- Favorited ComfyUI prompt node inputs (by class_type + input_key).
+-- Shown as an editable quick-access panel when viewing any prompt.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS prompt_favorites (
+    id         SERIAL PRIMARY KEY,
+    node_id    TEXT        NOT NULL,
+    class_type TEXT        NOT NULL,
+    input_key  TEXT        NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (node_id, class_type, input_key)
+);
+
+
+-- ---------------------------------------------------------------------------
+-- comfyui_cache
+-- Cached responses from the ComfyUI API (object_info, models, etc.)
+-- Refreshed on demand from the Config page.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS comfyui_cache (
+    key        TEXT PRIMARY KEY,
+    data       JSONB        NOT NULL,
+    updated_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
