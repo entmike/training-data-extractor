@@ -32,3 +32,6 @@ ui/dist/
 
 .env
 .env-*
+
+# Vite build cache
+.vite/
