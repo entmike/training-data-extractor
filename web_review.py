@@ -3059,7 +3059,7 @@ def get_outputs():
     sort    = request.args.get('sort', 'desc')   # 'asc' | 'desc'
     search  = request.args.get('search', '').strip()
 
-    conditions = ['deleted_at IS NULL']
+    conditions = ['deleted_at IS NULL', 'nsfw_at IS NULL']
     params = []
     if wf == 'yes':
         conditions.append('workflow IS NOT NULL')
@@ -3087,7 +3087,8 @@ def get_outputs():
                workflow IS NOT NULL as has_workflow,
                prompt  IS NOT NULL as has_prompt,
                indexed_at,
-               liked_at IS NOT NULL as liked
+               liked_at IS NOT NULL as liked,
+               nsfw_at  IS NOT NULL as nsfw
         FROM outputs {where}
         ORDER BY file_mtime {('ASC' if sort == 'asc' else 'DESC')}
         LIMIT %s OFFSET %s
@@ -3183,6 +3184,24 @@ def unlike_output(output_id: int):
     return jsonify({'liked': False})
 
 
+@app.route('/api/outputs/<int:output_id>/nsfw', methods=['POST'])
+def nsfw_output(output_id: int):
+    conn = get_db_connection()
+    conn.execute("UPDATE outputs SET nsfw_at = NOW() WHERE id = %s", (output_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'nsfw': True})
+
+
+@app.route('/api/outputs/<int:output_id>/unnsfw', methods=['POST'])
+def unnsfw_output(output_id: int):
+    conn = get_db_connection()
+    conn.execute("UPDATE outputs SET nsfw_at = NULL WHERE id = %s", (output_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'nsfw': False})
+
+
 @app.route('/api/outputs/<int:output_id>/delete', methods=['POST'])
 def soft_delete_output(output_id: int):
     conn = get_db_connection()
@@ -3208,17 +3227,46 @@ def restore_output(output_id: int):
 
 @app.route('/api/outputs/liked', methods=['GET'])
 def get_liked_outputs():
+    sort = request.args.get('sort', 'liked')   # 'liked' | 'mtime'
+    dir = request.args.get('dir', 'desc')      # 'asc' | 'desc'
+    order_dir = 'ASC' if dir == 'asc' else 'DESC'
+    col = 'liked_at' if sort == 'liked' else 'file_mtime'
     conn = get_db_connection()
-    rows = conn.execute("""
+    rows = conn.execute(f"""
         SELECT id, path, sha256, file_size, file_mtime, mime_type,
                width, height,
                workflow IS NOT NULL as has_workflow,
                prompt   IS NOT NULL as has_prompt,
                indexed_at, liked_at,
-               TRUE as liked
+               TRUE as liked,
+               nsfw_at IS NOT NULL as nsfw
         FROM outputs
-        WHERE liked_at IS NOT NULL AND deleted_at IS NULL
-        ORDER BY liked_at DESC
+        WHERE liked_at IS NOT NULL AND nsfw_at IS NULL AND deleted_at IS NULL
+        ORDER BY {col} {order_dir}
+    """).fetchall()
+    conn.close()
+    items = [dict(r) | {'filename': Path(r['path']).name} for r in rows]
+    return jsonify({'outputs': items, 'total': len(items)})
+
+
+@app.route('/api/outputs/nsfw', methods=['GET'])
+def get_nsfw_outputs():
+    sort = request.args.get('sort', 'nsfw')   # 'nsfw' | 'mtime'
+    dir = request.args.get('dir', 'desc')      # 'asc' | 'desc'
+    order_dir = 'ASC' if dir == 'asc' else 'DESC'
+    col = 'nsfw_at' if sort == 'nsfw' else 'file_mtime'
+    conn = get_db_connection()
+    rows = conn.execute(f"""
+        SELECT id, path, sha256, file_size, file_mtime, mime_type,
+               width, height,
+               workflow IS NOT NULL as has_workflow,
+               prompt   IS NOT NULL as has_prompt,
+               indexed_at, nsfw_at,
+               liked_at IS NOT NULL as liked,
+               TRUE as nsfw
+        FROM outputs
+        WHERE nsfw_at IS NOT NULL AND deleted_at IS NULL
+        ORDER BY {col} {order_dir}
     """).fetchall()
     conn.close()
     items = [dict(r) | {'filename': Path(r['path']).name} for r in rows]
@@ -3227,17 +3275,22 @@ def get_liked_outputs():
 
 @app.route('/api/outputs/trash', methods=['GET'])
 def get_trash_outputs():
+    sort = request.args.get('sort', 'deleted')  # 'deleted' | 'mtime'
+    dir = request.args.get('dir', 'desc')       # 'asc' | 'desc'
+    order_dir = 'ASC' if dir == 'asc' else 'DESC'
+    col = 'deleted_at' if sort == 'deleted' else 'file_mtime'
     conn = get_db_connection()
-    rows = conn.execute("""
+    rows = conn.execute(f"""
         SELECT id, path, sha256, file_size, file_mtime, mime_type,
                width, height,
                workflow IS NOT NULL as has_workflow,
                prompt   IS NOT NULL as has_prompt,
                indexed_at, deleted_at,
-               liked_at IS NOT NULL as liked
+               liked_at IS NOT NULL as liked,
+               nsfw_at  IS NOT NULL as nsfw
         FROM outputs
         WHERE deleted_at IS NOT NULL
-        ORDER BY deleted_at DESC
+        ORDER BY {col} {order_dir}
     """).fetchall()
     conn.close()
     items = [dict(r) | {'filename': Path(r['path']).name} for r in rows]
@@ -3386,6 +3439,18 @@ def get_config():
     rows = conn.execute("SELECT key, value FROM config").fetchall()
     conn.close()
     return jsonify({r['key']: r['value'] for r in rows})
+
+
+@app.route('/api/config/nsfw-unlock', methods=['POST'])
+def nsfw_unlock():
+    submitted = (request.get_json(silent=True) or {}).get('password', '')
+    conn = get_db_connection()
+    row = conn.execute("SELECT value FROM config WHERE key = 'nsfw_password'").fetchone()
+    conn.close()
+    stored = (row['value'] if row else '').strip()
+    if not stored or submitted != stored:
+        return jsonify({'error': 'Incorrect password'}), 401
+    return jsonify({'ok': True})
 
 
 @app.route('/api/config/<key>', methods=['PUT'])

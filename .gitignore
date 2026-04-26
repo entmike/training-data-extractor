@@ -15,6 +15,7 @@ vids/
 vids-*/
 dataset/
 db_backups/
+output/
 
 # Node
 ui/node_modules/

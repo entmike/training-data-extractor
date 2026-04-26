@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS tag_references (
     id             SERIAL PRIMARY KEY,
     tag            TEXT             NOT NULL,
     video_id       INTEGER          REFERENCES videos(id) ON DELETE CASCADE,
-    frame_number   INTEGER          NOT NULL,
+    frame_number   INTEGER,
     frame_time     DOUBLE PRECISION NOT NULL,
     embedding      BYTEA            NOT NULL,
     embedding_type TEXT             NOT NULL DEFAULT 'insightface',
@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS candidates (
     duration       DOUBLE PRECISION NOT NULL,
     quality_score  DOUBLE PRECISION,
     face_presence  DOUBLE PRECISION,
-    status         TEXT             NOT NULL DEFAULT 'pending'
+    status         TEXT             DEFAULT 'pending'
 );
 
 
@@ -148,7 +148,7 @@ CREATE TABLE IF NOT EXISTS buckets (
     speech_end_frame      INTEGER,
     optimal_offset_frames INTEGER,
     optimal_duration      DOUBLE PRECISION,
-    bucket_timestamp      TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+    bucket_timestamp      TIMESTAMPTZ      DEFAULT NOW(),
     UNIQUE (video_id, start_frame, end_frame)
 );
 
@@ -179,7 +179,7 @@ CREATE TABLE IF NOT EXISTS face_detections (
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS face_clusters (
     id                   SERIAL PRIMARY KEY,
-    video_id             INTEGER     REFERENCES videos(id),
+    video_id             INTEGER     REFERENCES videos(id) ON DELETE CASCADE,
     cluster_label        INTEGER     NOT NULL,
     centroid             BYTEA       NOT NULL,
     size                 INTEGER     NOT NULL,
@@ -191,6 +191,8 @@ CREATE TABLE IF NOT EXISTS face_clusters (
     nearest_sim          DOUBLE PRECISION,
     dismissed            BOOLEAN     NOT NULL DEFAULT FALSE,
     promoted_tag         TEXT,
+    scene_count          INTEGER     NOT NULL DEFAULT 0,
+    scene_ids            INTEGER[]   NOT NULL DEFAULT '{}',
     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -220,6 +222,30 @@ CREATE TABLE IF NOT EXISTS embeddings (
     frame_time DOUBLE PRECISION NOT NULL,
     embedding  BYTEA            NOT NULL,
     cluster_id INTEGER
+);
+
+
+-- ---------------------------------------------------------------------------
+-- lora_files
+-- Scanned LoRA model files from the training data directory.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS lora_files (
+    sha256         TEXT       NOT NULL PRIMARY KEY,
+    path           TEXT       NOT NULL,
+    rel_path       TEXT       NOT NULL,
+    filename       TEXT       NOT NULL,
+    size           BIGINT     NOT NULL,
+    modified       TEXT       NOT NULL,
+    model_name     TEXT,
+    ss_output_name TEXT,
+    base_model     TEXT,
+    step           INTEGER,
+    epoch          INTEGER,
+    software_name  TEXT,
+    software_ver   TEXT,
+    model_hash     TEXT,
+    format         TEXT,
+    indexed_at     TIMESTAMPTZ DEFAULT NOW()
 );
 
 
@@ -273,6 +299,7 @@ CREATE TABLE IF NOT EXISTS outputs (
     prompt      JSONB,               -- ComfyUI prompt (API/queue format)
     indexed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     liked_at    TIMESTAMPTZ,                         -- liked; liked items cannot be soft-deleted
+    nsfw_at     TIMESTAMPTZ,                         -- NSFW-flagged; NSFW items cannot be soft-deleted
     deleted_at  TIMESTAMPTZ                          -- soft delete; NULL = active
 );
 

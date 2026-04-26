@@ -647,7 +647,7 @@ function FavoritesTab({ editedJson, favorites, onUpdate, onRemoveFavorite, nodeI
 // Module-level cache so node_info is only fetched once per page load
 let _nodeInfoCache = null
 
-function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDelete, inTrash, onRestore, onLikeToggle }) {
+function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDelete, inTrash, onRestore, onLikeToggle, onNsfwToggle }) {
   const [data, setData] = useState(null)
   const [tab, setTab] = useState('favorites')
   const isVideo = (output.mime_type || '').startsWith('video/')
@@ -749,15 +749,21 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
         style={{ display: 'flex', flexDirection: 'column', padding: 0 }}
         onClick={e => e.stopPropagation()}
       >
-        {/* header */}
-        <div style={{ padding: '14px 20px 10px', borderBottom: '1px solid var(--border-subtle)',
-                      display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+        {/* header: nav + filename + close */}
+        <div className="video-modal-header" style={{ margin: 0, padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', gap: 8 }}>
           <button className="modal-btn modal-btn--cancel" style={{ flexShrink: 0, padding: '3px 10px' }}
                   disabled={!hasPrev} onClick={onPrev}>←</button>
           <button className="modal-btn modal-btn--cancel" style={{ flexShrink: 0, padding: '3px 10px' }}
                   disabled={!hasNext} onClick={onNext}>→</button>
-          <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--text)', overflow: 'hidden',
-                         textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{output.filename}</span>
+          <span className="video-modal-title" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{output.filename}</span>
+          <button className="modal-close-btn" onClick={onClose}>&times;</button>
+        </div>
+
+        {/* action bar */}
+        <div style={{
+          padding: '8px 16px', borderBottom: '1px solid var(--border-subtle)',
+          display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, flexWrap: 'wrap',
+        }}>
           <a
             href={`/output_image/${output.id}`}
             download={output.filename}
@@ -782,13 +788,22 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
               )}
             </>
           )}
+          <div style={{ flex: 1 }} />
           {!inTrash && (
-            <button
-              className={`modal-btn output-modal-like-btn${output.liked ? ' output-modal-like-btn--active' : ''}`}
-              style={{ flexShrink: 0 }}
-              onClick={() => onLikeToggle(output)}
-              title={output.liked ? 'Unlike' : 'Like — prevents deletion'}
-            >♥ {output.liked ? 'Liked' : 'Like'}</button>
+            <>
+              <button
+                className={`modal-btn output-modal-like-btn${output.liked ? ' output-modal-like-btn--active' : ''}`}
+                style={{ flexShrink: 0 }}
+                onClick={() => onLikeToggle(output)}
+                title={output.liked ? 'Unlike' : 'Like — prevents deletion'}
+              >♥ {output.liked ? 'Liked' : 'Like'}</button>
+              <button
+                className={`modal-btn output-modal-nsfw-btn${output.nsfw ? ' output-modal-nsfw-btn--active' : ''}`}
+                style={{ flexShrink: 0 }}
+                onClick={() => onNsfwToggle(output)}
+                title={output.nsfw ? 'Un-flag NSFW' : 'Mark as NSFW'}
+              >⚠ {output.nsfw ? 'NSFW' : 'NSFW?'}</button>
+            </>
           )}
           {inTrash ? (
             <button className="modal-btn modal-btn--save" style={{ flexShrink: 0 }} onClick={onRestore}>Restore</button>
@@ -801,7 +816,6 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
               title={output.liked ? 'Unlike before deleting' : 'Delete (Del)'}
             >Delete</button>
           )}
-          <button className="modal-btn modal-btn--cancel" style={{ flexShrink: 0 }} onClick={onClose}>Close</button>
         </div>
 
         {/* media */}
@@ -925,7 +939,7 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
 
 // ── Output card ──────────────────────────────────────────────────────────────
 
-function OutputCard({ output, onClick, inTrash, onRestore, onLikeToggle }) {
+function OutputCard({ output, onClick, inTrash, onRestore, onLikeToggle, onNsfwToggle }) {
   const [imgError, setImgError] = useState(false)
   const isImage = (output.mime_type || '').startsWith('image/')
   const isVideo = (output.mime_type || '').startsWith('video/')
@@ -949,11 +963,18 @@ function OutputCard({ output, onClick, inTrash, onRestore, onLikeToggle }) {
           <div className="output-card-play-badge">▶</div>
         )}
         {!inTrash && (
-          <button
-            className={`output-like-btn${output.liked ? ' output-like-btn--active' : ''}`}
-            onClick={e => { e.stopPropagation(); onLikeToggle(output) }}
-            title={output.liked ? 'Unlike' : 'Like'}
-          >♥</button>
+          <>
+            <button
+              className={`output-like-btn${output.liked ? ' output-like-btn--active' : ''}`}
+              onClick={e => { e.stopPropagation(); onLikeToggle(output) }}
+              title={output.liked ? 'Unlike' : 'Like'}
+            >♥</button>
+            <button
+              className={`output-nsfw-btn${output.nsfw ? ' output-nsfw-btn--active' : ''}`}
+              onClick={e => { e.stopPropagation(); onNsfwToggle(output) }}
+              title={output.nsfw ? 'Un-flag NSFW' : 'Mark as NSFW'}
+            >⚠</button>
+          </>
         )}
       </div>
       <div className="output-card-body">
@@ -987,11 +1008,18 @@ function RecycleBinView() {
   const [selectedIdx, setSelectedIdx] = useState(null)
   const [confirming, setConfirming] = useState(false)
   const [emptying, setEmptying]   = useState(false)
+  const [sort, setSort]           = useState('deleted')
+  const [dir, setDir]             = useState('desc')
+
+  const toggleSort = (col) => {
+    if (sort === col) setDir(d => d === 'desc' ? 'asc' : 'desc')
+    else setSort(col)
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await fetch('/api/outputs/trash')
+      const r = await fetch(`/api/outputs/trash?sort=${sort}&dir=${dir}`)
       const data = await r.json()
       setItems(data.outputs || [])
     } catch (e) {
@@ -999,7 +1027,7 @@ function RecycleBinView() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [sort, dir])
 
   useEffect(() => { load() }, [load])
 
@@ -1031,6 +1059,17 @@ function RecycleBinView() {
           {loading ? '…' : `${items.length} deleted file${items.length !== 1 ? 's' : ''}`}
         </span>
         <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Sort:</span>
+        <button onClick={() => toggleSort('deleted')}
+          style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border-subtle)',
+                   background: sort === 'deleted' ? 'var(--accent)' : 'transparent', color: sort === 'deleted' ? '#fff' : 'var(--text)' }}>
+          Deleted date {sort === 'deleted' ? (dir === 'desc' ? '↓' : '↑') : ''}
+        </button>
+        <button onClick={() => toggleSort('mtime')}
+          style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border-subtle)',
+                   background: sort === 'mtime' ? 'var(--accent)' : 'transparent', color: sort === 'mtime' ? '#fff' : 'var(--text)' }}>
+          File date {sort === 'mtime' ? (dir === 'desc' ? '↓' : '↑') : ''}
+        </button>
         {items.length > 0 && (
           confirming ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1203,6 +1242,14 @@ function OutputsView() {
     if (selected?.id === output.id) setSelected(updated)
   }
 
+  function handleNsfwToggle(output) {
+    const newNsfw = !output.nsfw
+    fetch(`/api/outputs/${output.id}/${newNsfw ? 'nsfw' : 'unnsfw'}`, { method: 'POST' })
+    const updated = { ...output, nsfw: newNsfw }
+    setOutputs(prev => prev.map(o => o.id === output.id ? updated : o))
+    if (selected?.id === output.id) setSelected(updated)
+  }
+
   return (
     <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       {/* toolbar */}
@@ -1285,6 +1332,7 @@ function OutputsView() {
             <OutputCard key={o.id} output={o}
               onClick={() => { setSelected(o); setSelectedIdx(i) }}
               onLikeToggle={handleLikeToggle}
+              onNsfwToggle={handleNsfwToggle}
             />
           ))}
         </div>
@@ -1306,6 +1354,7 @@ function OutputsView() {
           onNext={() => { const i = selectedIdx + 1; setSelected(outputs[i]); setSelectedIdx(i) }}
           onDelete={() => handleDelete(selected)}
           onLikeToggle={handleLikeToggle}
+          onNsfwToggle={handleNsfwToggle}
         />
       )}
     </div>
@@ -1319,11 +1368,18 @@ function LikedView() {
   const [loading, setLoading]       = useState(true)
   const [selected, setSelected]     = useState(null)
   const [selectedIdx, setSelectedIdx] = useState(null)
+  const [sort, setSort]             = useState('liked')
+  const [dir, setDir]               = useState('desc')
+
+  const toggleSort = (col) => {
+    if (sort === col) setDir(d => d === 'desc' ? 'asc' : 'desc')
+    else setSort(col)
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await fetch('/api/outputs/liked')
+      const r = await fetch(`/api/outputs/liked?sort=${sort}&dir=${dir}`)
       const d = await r.json()
       setItems(d.outputs ?? [])
     } catch (e) {
@@ -1331,7 +1387,7 @@ function LikedView() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [sort, dir])
 
   useEffect(() => { load() }, [load])
 
@@ -1346,6 +1402,14 @@ function LikedView() {
     }
   }
 
+  function handleNsfwToggle(output) {
+    const newNsfw = !output.nsfw
+    fetch(`/api/outputs/${output.id}/${newNsfw ? 'nsfw' : 'unnsfw'}`, { method: 'POST' })
+    const updated = { ...output, nsfw: newNsfw }
+    setItems(prev => prev.map(o => o.id === output.id ? updated : o))
+    if (selected?.id === output.id) setSelected(updated)
+  }
+
   return (
     <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       <div style={{
@@ -1355,6 +1419,18 @@ function LikedView() {
         <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>
           {loading ? '…' : `${items.length} liked file${items.length !== 1 ? 's' : ''}`}
         </span>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Sort:</span>
+        <button onClick={() => toggleSort('liked')}
+          style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border-subtle)',
+                   background: sort === 'liked' ? 'var(--accent)' : 'transparent', color: sort === 'liked' ? '#fff' : 'var(--text)' }}>
+          Liked date {sort === 'liked' ? (dir === 'desc' ? '↓' : '↑') : ''}
+        </button>
+        <button onClick={() => toggleSort('mtime')}
+          style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border-subtle)',
+                   background: sort === 'mtime' ? 'var(--accent)' : 'transparent', color: sort === 'mtime' ? '#fff' : 'var(--text)' }}>
+          File date {sort === 'mtime' ? (dir === 'desc' ? '↓' : '↑') : ''}
+        </button>
       </div>
 
       <div style={{ flex: 1, overflow: 'auto' }}>
@@ -1368,6 +1444,7 @@ function LikedView() {
             <OutputCard key={o.id} output={o}
               onClick={() => { setSelected(o); setSelectedIdx(i) }}
               onLikeToggle={handleUnlike}
+              onNsfwToggle={handleNsfwToggle}
             />
           ))}
         </div>
@@ -1383,8 +1460,176 @@ function LikedView() {
           onNext={() => { const i = selectedIdx + 1; setSelected(items[i]); setSelectedIdx(i) }}
           onDelete={null}
           onLikeToggle={handleUnlike}
+          onNsfwToggle={handleNsfwToggle}
         />
       )}
+    </div>
+  )
+}
+
+// ── NSFW view ─────────────────────────────────────────────────────────────────
+
+function NsfwView() {
+  const [items, setItems]           = useState([])
+  const [loading, setLoading]       = useState(true)
+  const [selected, setSelected]     = useState(null)
+  const [selectedIdx, setSelectedIdx] = useState(null)
+  const [sort, setSort]             = useState('nsfw')
+  const [dir, setDir]               = useState('desc')
+
+  const toggleSort = (col) => {
+    if (sort === col) setDir(d => d === 'desc' ? 'asc' : 'desc')
+    else setSort(col)
+  }
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const r = await fetch(`/api/outputs/nsfw?sort=${sort}&dir=${dir}`)
+      const d = await r.json()
+      setItems(d.outputs ?? [])
+    } catch (e) {
+      console.error('Failed to load NSFW outputs', e)
+    } finally {
+      setLoading(false)
+    }
+  }, [sort, dir])
+
+  useEffect(() => { load() }, [load])
+
+  function handleUnflag(output) {
+    fetch(`/api/outputs/${output.id}/unnsfw`, { method: 'POST' })
+    const next = items.filter(o => o.id !== output.id)
+    setItems(next)
+    if (selected?.id === output.id) {
+      const idx = items.findIndex(o => o.id === output.id)
+      if (next.length === 0) { setSelected(null); setSelectedIdx(null) }
+      else { const i = Math.min(idx, next.length - 1); setSelected(next[i]); setSelectedIdx(i) }
+    }
+  }
+
+  function handleLikeToggle(output) {
+    const newLiked = !output.liked
+    fetch(`/api/outputs/${output.id}/${newLiked ? 'like' : 'unlike'}`, { method: 'POST' })
+    const updated = { ...output, liked: newLiked }
+    setItems(prev => prev.map(o => o.id === output.id ? updated : o))
+    if (selected?.id === output.id) setSelected(updated)
+  }
+
+  return (
+    <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div style={{
+        padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)',
+        display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
+      }}>
+        <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+          {loading ? '…' : `${items.length} NSFW file${items.length !== 1 ? 's' : ''}`}
+        </span>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Sort:</span>
+        <button onClick={() => toggleSort('nsfw')}
+          style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border-subtle)',
+                   background: sort === 'nsfw' ? 'var(--accent)' : 'transparent', color: sort === 'nsfw' ? '#fff' : 'var(--text)' }}>
+          NSFW date {sort === 'nsfw' ? (dir === 'desc' ? '↓' : '↑') : ''}
+        </button>
+        <button onClick={() => toggleSort('mtime')}
+          style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border-subtle)',
+                   background: sort === 'mtime' ? 'var(--accent)' : 'transparent', color: sort === 'mtime' ? '#fff' : 'var(--text)' }}>
+          File date {sort === 'mtime' ? (dir === 'desc' ? '↓' : '↑') : ''}
+        </button>
+      </div>
+
+      <div style={{ flex: 1, overflow: 'auto' }}>
+        {!loading && items.length === 0 && (
+          <div style={{ padding: 32, color: 'var(--text-muted)', textAlign: 'center' }}>
+            No NSFW-flagged outputs yet. Click ⚠ on any output to flag it.
+          </div>
+        )}
+        <div className="outputs-grid">
+          {items.map((o, i) => (
+            <OutputCard key={o.id} output={o}
+              onClick={() => { setSelected(o); setSelectedIdx(i) }}
+              onNsfwToggle={handleUnflag}
+              onLikeToggle={handleLikeToggle}
+            />
+          ))}
+        </div>
+      </div>
+
+      {selected && (
+        <WorkflowModal
+          output={selected}
+          onClose={() => { setSelected(null); setSelectedIdx(null) }}
+          hasPrev={selectedIdx > 0}
+          hasNext={selectedIdx < items.length - 1}
+          onPrev={() => { const i = selectedIdx - 1; setSelected(items[i]); setSelectedIdx(i) }}
+          onNext={() => { const i = selectedIdx + 1; setSelected(items[i]); setSelectedIdx(i) }}
+          onDelete={null}
+          onNsfwToggle={handleUnflag}
+          onLikeToggle={handleLikeToggle}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── NSFW password gate ────────────────────────────────────────────────────────
+
+function NsfwGate({ onUnlocked }) {
+  const [pw, setPw]       = useState('')
+  const [error, setError] = useState(null)
+  const [busy, setBusy]   = useState(false)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setBusy(true); setError(null)
+    try {
+      const r = await fetch('/api/config/nsfw-unlock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pw }),
+      })
+      if (r.ok) { onUnlocked() }
+      else { setError('Incorrect password'); setPw('') }
+    } catch { setError('Request failed') }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div style={{
+      flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      <form onSubmit={handleSubmit} style={{
+        display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center',
+        padding: 32, borderRadius: 10, border: '1px solid var(--border)',
+        background: 'var(--bg-card, var(--bg))', minWidth: 260,
+      }}>
+        <div style={{ fontSize: 28 }}>⚠</div>
+        <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text)' }}>NSFW content</div>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center' }}>
+          Enter the NSFW password to view this tab.
+        </div>
+        <input
+          type="password"
+          value={pw}
+          onChange={e => { setPw(e.target.value); setError(null) }}
+          placeholder="Password…"
+          autoFocus
+          style={{
+            width: '100%', padding: '7px 12px', borderRadius: 6, fontSize: 13,
+            border: `1px solid ${error ? 'var(--error, #e55)' : 'var(--border)'}`,
+            background: 'var(--bg)', color: 'var(--text)', outline: 'none',
+            boxSizing: 'border-box',
+          }}
+        />
+        {error && <div style={{ fontSize: 12, color: 'var(--error, #e55)' }}>{error}</div>}
+        <button
+          type="submit"
+          disabled={!pw || busy}
+          className="modal-btn modal-btn--save"
+          style={{ width: '100%', opacity: !pw ? 0.4 : 1 }}
+        >{busy ? 'Checking…' : 'Unlock'}</button>
+      </form>
     </div>
   )
 }
@@ -1392,7 +1637,23 @@ function LikedView() {
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function OutputsPage() {
-  const [activeTab, setActiveTab] = useState('outputs')
+  const [activeTab, setActiveTab]     = useState('outputs')
+  const [nsfwEnabled, setNsfwEnabled] = useState(false)   // password is set in config
+  const [nsfwUnlocked, setNsfwUnlocked] = useState(false) // correct password entered this session
+
+  useEffect(() => {
+    fetch('/api/config')
+      .then(r => r.json())
+      .then(d => setNsfwEnabled(!!(d.nsfw_password || '').trim()))
+      .catch(() => {})
+  }, [])
+
+  const tabs = [
+    ['outputs', 'Outputs'],
+    ['liked', '♥ Liked'],
+    ...(nsfwEnabled ? [['nsfw', '⚠ NSFW']] : []),
+    ['trash', '🗑 Recycle Bin'],
+  ]
 
   return (
     <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -1401,7 +1662,7 @@ export default function OutputsPage() {
         padding: '0 16px', borderBottom: '1px solid var(--border-subtle)',
         display: 'flex', gap: 0, flexShrink: 0,
       }}>
-        {[['outputs', 'Outputs'], ['liked', '♥ Liked'], ['trash', '🗑 Recycle Bin']].map(([key, label]) => (
+        {tabs.map(([key, label]) => (
           <button
             key={key}
             onClick={() => setActiveTab(key)}
@@ -1419,6 +1680,8 @@ export default function OutputsPage() {
 
       {activeTab === 'outputs' ? <OutputsView />
         : activeTab === 'liked' ? <LikedView />
+        : activeTab === 'nsfw'
+          ? (nsfwUnlocked ? <NsfwView /> : <NsfwGate onUnlocked={() => setNsfwUnlocked(true)} />)
         : <RecycleBinView />}
     </div>
   )
