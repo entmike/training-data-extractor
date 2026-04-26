@@ -286,8 +286,27 @@ Examples:
     parser.add_argument(
         "--step",
         type=str,
-        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "subtitles", "debug-scenes", "debug-candidates", "auto-tag", "cluster-faces"],
+        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "subtitles", "debug-scenes", "debug-candidates", "auto-tag", "cluster-faces", "scan-outputs"],
         help="Run a specific pipeline step"
+    )
+    parser.add_argument(
+        "--outputs-dir",
+        type=str,
+        default=None,
+        help="Directory to scan for ComfyUI outputs (used with --step scan-outputs; default: ./output)"
+    )
+    parser.add_argument(
+        "--daemon",
+        action="store_true",
+        default=False,
+        help="Run scan-outputs in daemon mode, re-scanning continuously until killed"
+    )
+    parser.add_argument(
+        "--daemon-interval",
+        type=int,
+        default=30,
+        metavar="SECONDS",
+        help="Seconds between scans in daemon mode (default: 30)"
     )
     
     # Processing options
@@ -535,6 +554,15 @@ Examples:
         if args.step == "auto-tag":
             from .autotag.face_tag import run_auto_tag
             run_auto_tag(config, tag_filter=args.tag, video_filter=args.video)
+        elif args.step == "scan-outputs":
+            from .outputs.scan import scan_outputs, run_daemon
+            from .utils.io import Database
+            outputs_dir = Path(args.outputs_dir) if args.outputs_dir else Path.cwd() / "output"
+            db = Database(config.dsn)
+            if args.daemon:
+                run_daemon(outputs_dir, db, interval=args.daemon_interval)
+            else:
+                scan_outputs(outputs_dir, db)
         elif args.step:
             run_step(config, args.step)
         else:

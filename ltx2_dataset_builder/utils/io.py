@@ -67,6 +67,7 @@ class Database:
             "ALTER TABLE clip_items       ADD COLUMN IF NOT EXISTS denoise_mix    FLOAT   NOT NULL DEFAULT 1.0",
             "ALTER TABLE outputs          ADD COLUMN IF NOT EXISTS deleted_at     TIMESTAMPTZ",
             "ALTER TABLE outputs          ADD COLUMN IF NOT EXISTS liked_at       TIMESTAMPTZ",
+            "ALTER TABLE outputs          ADD COLUMN IF NOT EXISTS nsfw_at        TIMESTAMPTZ",
             "CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
             "CREATE TABLE IF NOT EXISTS prompt_favorites (id SERIAL PRIMARY KEY, node_id TEXT NOT NULL, class_type TEXT NOT NULL, input_key TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (node_id, class_type, input_key))",
             "ALTER TABLE prompt_favorites ADD COLUMN IF NOT EXISTS node_id TEXT NOT NULL DEFAULT ''",

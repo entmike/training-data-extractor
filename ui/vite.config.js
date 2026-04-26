@@ -18,6 +18,8 @@ export default defineConfig({
       '/bucket_clip': backend,
       '/bucket_waveform': backend,
       '/waveform': backend,
+      '/output_image': backend,
+      '/output_thumb': backend,
     },
   },
   build: {
