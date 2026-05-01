@@ -255,12 +255,16 @@ def run_auto_tag(
                 start_frame = int(round(scene["start_time"] * fps))
                 end_frame   = int(round(scene["end_time"]   * fps))
 
-            # Fast path: use cached embeddings if available
+            # Fast path: scene already processed by the embeddings step (cached rows
+            # exist — possibly only sentinels indicating "scanned, no faces found").
             cached = db.get_face_detections(scene["video_id"], start_frame, end_frame)
-            cached_with_emb = [r for r in cached if r.get("embedding")]
 
-            if cached_with_emb:
-                logger.debug(f"  Scene {scene_id}: using {len(cached_with_emb)} cached face detection(s)")
+            if cached:
+                cached_with_emb = [r for r in cached if r.get("embedding")]
+                logger.debug(
+                    f"  Scene {scene_id}: using {len(cached_with_emb)} cached face detection(s) "
+                    f"({len(cached) - len(cached_with_emb)} sentinel)"
+                )
                 for raw_emb in [embedding_from_bytes(bytes(r["embedding"])) for r in cached_with_emb]:
                     norm = np.linalg.norm(raw_emb)
                     if norm == 0:
@@ -285,6 +289,11 @@ def run_auto_tag(
                 for frame_t, frame_bgr in frames:
                     frame_rgb = frame_bgr[:, :, ::-1]
                     faces = analyzer.get(frame_rgb)
+                    frame_num = int(round(frame_t * fps))
+
+                    if not faces:
+                        db.add_face_detection(video_id=scene["video_id"], frame_number=frame_num)
+                        continue
 
                     for face in faces:
                         bbox = face.bbox
@@ -292,7 +301,7 @@ def run_auto_tag(
                         pose = face.pose
                         db.add_face_detection(
                             video_id=scene["video_id"],
-                            frame_number=int(round(frame_t * fps)),
+                            frame_number=frame_num,
                             bbox_area=bbox_area,
                             pose_yaw=float(pose[0]) if pose is not None else None,
                             pose_pitch=float(pose[1]) if pose is not None else None,

@@ -139,25 +139,25 @@ def run_pipeline(config: PipelineConfig) -> None:
     logger.info("Pipeline completed successfully!")
 
 
-def run_step(config: PipelineConfig, step: str) -> None:
+def run_step(config: PipelineConfig, step: str, **kwargs) -> None:
     """
     Run a single pipeline step.
-    
+
     Args:
         config: Pipeline configuration
         step: Step name to run
     """
     logger = logging.getLogger(__name__)
     config.ensure_dirs()
-    
+
     if step == "index":
         logger.info("Running: Index videos")
         index_videos(config)
-        
+
     elif step == "scenes":
         logger.info("Running: Detect scenes")
-        detect_all_scenes(config)
-        
+        detect_all_scenes(config, video_filter=kwargs.get("video"))
+
     elif step == "captions":
         logger.info("Running: Caption scenes with Qwen3")
         caption_all_scenes(config)
@@ -199,6 +199,11 @@ def run_step(config: PipelineConfig, step: str) -> None:
         from .subtitles.extract import extract_all_subtitles
         logger.info("Running: Extract subtitles")
         extract_all_subtitles(config)
+
+    elif step == "scan-faces":
+        from .faces.scan import scan_face_embeddings
+        logger.info("Running: Scan face embeddings")
+        scan_face_embeddings(config, video_filter=kwargs.get("video"))
 
     elif step == "cluster-faces":
         from .cluster.faces import cluster_all_faces
@@ -286,7 +291,7 @@ Examples:
     parser.add_argument(
         "--step",
         type=str,
-        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "subtitles", "debug-scenes", "debug-candidates", "auto-tag", "cluster-faces", "scan-outputs"],
+        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "subtitles", "debug-scenes", "debug-candidates", "auto-tag", "scan-faces", "cluster-faces", "scan-outputs"],
         help="Run a specific pipeline step"
     )
     parser.add_argument(
@@ -564,7 +569,7 @@ Examples:
             else:
                 scan_outputs(outputs_dir, db)
         elif args.step:
-            run_step(config, args.step)
+            run_step(config, args.step, video=args.video)
         else:
             run_pipeline(config)
         return 0

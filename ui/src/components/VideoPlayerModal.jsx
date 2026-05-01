@@ -16,6 +16,7 @@ export default function VideoPlayerModal({ player, onClose }) {
   const addBtnRef     = useRef(null)
   const saveTimer     = useRef(null)
   const mouseDownOnOverlay = useRef(false)
+  const [copied, setCopied] = useState(false)
 
   const { tagMap, refreshTags } = useContext(AppContext)
   const { sceneId, videoPath, startTime, endTime, fps = 24, frameOffset = 0, startFrame, endFrame: initialEndFrame, videoTotalFrames = 0, blurhash, videoWidth = 0, videoHeight = 0 } = player
@@ -605,6 +606,25 @@ export default function VideoPlayerModal({ player, onClose }) {
     }
   }
 
+  // ── Permalink ──────────────────────────────────────────
+  async function handleShare() {
+    const url = `${window.location.origin}/scene/${sceneId}`
+    try {
+      await navigator.clipboard.writeText(url)
+    } catch {
+      // Fallback for non-secure contexts (e.g. HTTP localhost)
+      const ta = document.createElement('textarea')
+      ta.value = url
+      ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px'
+      document.body.appendChild(ta)
+      ta.select()
+      try { document.execCommand('copy') } catch { /* ignore */ }
+      ta.remove()
+    }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
   // ── Render ─────────────────────────────────────────────
   return (
     <div
@@ -615,7 +635,22 @@ export default function VideoPlayerModal({ player, onClose }) {
       <div className="video-modal-content">
         <div className="video-modal-header">
           <span className="video-modal-title">{title}</span>
-          <button className="modal-close-btn" onClick={onClose}>&times;</button>
+          <div className="video-modal-actions">
+            <button
+              className="modal-share-btn"
+              onClick={handleShare}
+              title={copied ? 'Copied!' : 'Copy scene permalink'}
+            >
+              {copied ? '✓' : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/>
+                  <polyline points="16 6 12 2 8 6"/>
+                  <line x1="12" y1="2" x2="12" y2="15"/>
+                </svg>
+              )}
+            </button>
+            <button className="modal-close-btn" onClick={onClose}>&times;</button>
+          </div>
         </div>
 
         {/* Video — hidden when scene exceeds 600 frames */}

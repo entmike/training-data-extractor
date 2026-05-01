@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import JsonView from '@uiw/react-json-view'
 import { darkTheme } from '@uiw/react-json-view/dark'
+import ComfyQueuePage from './ComfyQueuePage'
 
 const PAGE_SIZE = 50
 
@@ -939,7 +940,7 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
 
 // ── Output card ──────────────────────────────────────────────────────────────
 
-function OutputCard({ output, onClick, inTrash, onRestore, onLikeToggle, onNsfwToggle }) {
+function OutputCard({ output, onClick, inTrash, onRestore, onDelete, onLikeToggle, onNsfwToggle }) {
   const [imgError, setImgError] = useState(false)
   const isImage = (output.mime_type || '').startsWith('image/')
   const isVideo = (output.mime_type || '').startsWith('video/')
@@ -974,6 +975,14 @@ function OutputCard({ output, onClick, inTrash, onRestore, onLikeToggle, onNsfwT
               onClick={e => { e.stopPropagation(); onNsfwToggle(output) }}
               title={output.nsfw ? 'Un-flag NSFW' : 'Mark as NSFW'}
             >⚠</button>
+            {onDelete && !output.liked && (
+              <button
+                className="output-nsfw-btn"
+                style={{ color: 'var(--error, #e55)' }}
+                onClick={e => { e.stopPropagation(); onDelete() }}
+                title="Delete"
+              >🗑</button>
+            )}
           </>
         )}
       </div>
@@ -1476,6 +1485,7 @@ function NsfwView() {
   const [selectedIdx, setSelectedIdx] = useState(null)
   const [sort, setSort]             = useState('nsfw')
   const [dir, setDir]               = useState('desc')
+  const [deleting, setDeleting]     = useState(null) // output.id being deleted
 
   const toggleSort = (col) => {
     if (sort === col) setDir(d => d === 'desc' ? 'asc' : 'desc')
@@ -1506,6 +1516,23 @@ function NsfwView() {
       if (next.length === 0) { setSelected(null); setSelectedIdx(null) }
       else { const i = Math.min(idx, next.length - 1); setSelected(next[i]); setSelectedIdx(i) }
     }
+  }
+
+  function handleDelete(output) {
+    if (output.liked) return
+    setDeleting(output.id)
+    fetch(`/api/outputs/${output.id}/delete`, { method: 'POST' })
+      .then(() => {
+        const idx = items.findIndex(o => o.id === output.id)
+        const next = items.filter(o => o.id !== output.id)
+        setItems(next)
+        if (selected?.id === output.id) {
+          if (next.length === 0) { setSelected(null); setSelectedIdx(null) }
+          else { const i = Math.min(idx, next.length - 1); setSelected(next[i]); setSelectedIdx(i) }
+        }
+      })
+      .catch(e => console.error('Failed to delete NSFW output', e))
+      .finally(() => setDeleting(null))
   }
 
   function handleLikeToggle(output) {
@@ -1549,6 +1576,7 @@ function NsfwView() {
           {items.map((o, i) => (
             <OutputCard key={o.id} output={o}
               onClick={() => { setSelected(o); setSelectedIdx(i) }}
+              onDelete={() => handleDelete(o)}
               onNsfwToggle={handleUnflag}
               onLikeToggle={handleLikeToggle}
             />
@@ -1564,7 +1592,8 @@ function NsfwView() {
           hasNext={selectedIdx < items.length - 1}
           onPrev={() => { const i = selectedIdx - 1; setSelected(items[i]); setSelectedIdx(i) }}
           onNext={() => { const i = selectedIdx + 1; setSelected(items[i]); setSelectedIdx(i) }}
-          onDelete={null}
+          inTrash={false}
+          onDelete={() => handleDelete(selected)}
           onNsfwToggle={handleUnflag}
           onLikeToggle={handleLikeToggle}
         />
@@ -1653,6 +1682,7 @@ export default function OutputsPage() {
     ['liked', '♥ Liked'],
     ...(nsfwEnabled ? [['nsfw', '⚠ NSFW']] : []),
     ['trash', '🗑 Recycle Bin'],
+    ['queue', 'ComfyUI Queue'],
   ]
 
   return (
@@ -1682,6 +1712,7 @@ export default function OutputsPage() {
         : activeTab === 'liked' ? <LikedView />
         : activeTab === 'nsfw'
           ? (nsfwUnlocked ? <NsfwView /> : <NsfwGate onUnlocked={() => setNsfwUnlocked(true)} />)
+        : activeTab === 'queue' ? <ComfyQueuePage />
         : <RecycleBinView />}
     </div>
   )

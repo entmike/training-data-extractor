@@ -91,8 +91,13 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
   }
 
   function selectClip(col) {
-    setSelectedId(col.id)
-    onClipSelect?.(col.id)
+    if (col.id === selectedId) {
+      setSelectedId(null)
+      onClipSelect?.(null)
+    } else {
+      setSelectedId(col.id)
+      onClipSelect?.(col.id)
+    }
   }
 
   async function createClip() {
@@ -429,7 +434,7 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
                 />
               </>
             ) : (
-              <div className="clips-empty">Select a clip to view its items.</div>
+              <div className="videos-empty">Select a clip</div>
             )}
           </div>
         </div>

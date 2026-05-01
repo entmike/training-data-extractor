@@ -345,11 +345,36 @@ def serve_clip(scene_id: int):
     if duration <= 0:
         return jsonify({"error": "Invalid time range"}), 400
 
+    # If the source has HEVC/AVC bitstream Frame Cropping (e.g. anamorphic 4K WEBDLs
+    # that crop ~276 lines off the active picture), ffmpeg auto-applies the crop
+    # while cv2 (used for thumbnails) does not. Pad the crop back so the clip
+    # matches the thumbnail's coded-grid view, then force SAR=1 so libx264 doesn't
+    # emit anamorphic flags the browser interprets unevenly.
+    pad_filter = None
+    try:
+        probe = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+             '-show_entries', 'stream_side_data=side_data_type,crop_top,crop_bottom,crop_left,crop_right',
+             '-of', 'json', str(video_file)],
+            capture_output=True, text=True, timeout=10,
+        )
+        sd_list = json.loads(probe.stdout or '{}').get('streams', [{}])[0].get('side_data_list', [])
+        for sd in sd_list:
+            if sd.get('side_data_type') == 'Frame Cropping':
+                t = int(sd.get('crop_top', 0)); b = int(sd.get('crop_bottom', 0))
+                l = int(sd.get('crop_left', 0)); r = int(sd.get('crop_right', 0))
+                if t or b or l or r:
+                    pad_filter = f'pad=iw+{l+r}:ih+{t+b}:{l}:{t}:black,setsar=1'
+                break
+    except Exception:
+        pass
+
     cmd = [
         'ffmpeg',
         '-ss', f'{start_time:.6f}',
         '-i', str(video_file),
         '-t', f'{duration:.6f}',
+        *(['-vf', pad_filter] if pad_filter else []),
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-crf', '23',
@@ -729,6 +754,43 @@ def api_stats():
     """).fetchone()
     conn.close()
     return jsonify(dict(stats))
+
+
+@app.route('/api/scene/<int:scene_id>')
+def get_scene(scene_id: int):
+    """Get scene data for direct-linking to a scene preview."""
+    conn = get_db_connection()
+    row = conn.execute("""
+        SELECT s.id, s.start_time, s.end_time, s.start_frame, s.end_frame,
+               s.blurhash, s.rating, s.caption,
+               s.video_id,
+               v.path as video_path, v.fps, v.frame_offset,
+               v.width as video_width, v.height as video_height
+        FROM scenes s
+        JOIN videos v ON s.video_id = v.id
+        WHERE s.id = %s
+    """, (scene_id,)).fetchone()
+    conn.close()
+
+    if row is None:
+        return jsonify({"error": "Scene not found"}), 404
+
+    return jsonify({
+        "id": row["id"],
+        "start_time": row["start_time"],
+        "end_time": row["end_time"],
+        "start_frame": row["start_frame"],
+        "end_frame": row["end_frame"],
+        "blurhash": row["blurhash"],
+        "rating": row["rating"],
+        "caption": row["caption"],
+        "video_id": row["video_id"],
+        "video_path": row["video_path"],
+        "fps": row["fps"],
+        "frame_offset": row["frame_offset"],
+        "video_width": row["video_width"],
+        "video_height": row["video_height"],
+    })
 
 
 @app.route('/api/caption/<int:scene_id>', methods=['GET'])
@@ -2543,11 +2605,17 @@ def _is_hdr_video(video_path: Path) -> bool:
         s = streams[0]
         transfer = s.get('color_transfer', '')
         pix_fmt  = s.get('pix_fmt', '')
+        # Explicit SDR transfers — trust the metadata even for 10-bit Blu-ray rips
+        # (e.g. HEVC Main 10 with bt709 is SDR, not HDR).
+        sdr_transfers = {'bt709', 'smpte170m', 'bt470bg', 'bt470m',
+                         'iec61966-2-1', 'iec61966-2-4', 'linear'}
+        if transfer in sdr_transfers:
+            return False
         # HDR transfers: smpte2084 (PQ/HDR10), arib-std-b67 (HLG)
         hdr_transfers = {'smpte2084', 'arib-std-b67', 'smpte428', 'bt2020-10', 'bt2020-12'}
         if transfer in hdr_transfers:
             return True
-        # 10-bit pixel formats are a strong indicator even without explicit transfer metadata
+        # Transfer missing/unknown — fall back to bit depth as a heuristic
         if '10le' in pix_fmt or '10be' in pix_fmt or '12le' in pix_fmt or '12be' in pix_fmt:
             return True
         return False

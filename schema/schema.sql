@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS scenes (
     rating               INTEGER          NOT NULL DEFAULT 2,
     bucket_ineligible    INTEGER          NOT NULL DEFAULT 0,
     subtitles            TEXT,                            -- extracted from MKV text tracks
+    detected             BOOLEAN          NOT NULL DEFAULT TRUE,  -- TRUE=original detect, FALSE=fill-gaps
     UNIQUE (video_id, start_time, end_time)
 );
 

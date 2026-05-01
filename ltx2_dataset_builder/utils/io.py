@@ -176,14 +176,15 @@ class Database:
                     else None
                 )
                 default_rating = 1 if (frame_count is not None and frame_count < 24) else 2
+                detected = scene.get("detected", True)
                 conn.execute("""
                     INSERT INTO scenes
-                        (video_id, start_time, end_time, duration, start_frame, end_frame, rating)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        (video_id, start_time, end_time, duration, start_frame, end_frame, rating, detected)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (video_id, start_time, end_time) DO NOTHING
                 """, (
                     video_id, scene["start_time"], scene["end_time"], scene["duration"],
-                    start_frame, end_frame, default_rating,
+                    start_frame, end_frame, default_rating, detected,
                 ))
                 row = conn.execute(
                     "SELECT id FROM scenes WHERE video_id = %s AND start_time = %s AND end_time = %s",
@@ -418,6 +419,18 @@ class Database:
                 SELECT 1 FROM face_detections
                 WHERE video_id = %s AND frame_number >= %s AND frame_number <= %s
                   AND embedding IS NOT NULL
+                LIMIT 1
+            """, (video_id, frame_number_min, frame_number_max)).fetchone()
+            return row is not None
+
+    def has_scanned_frames(self, video_id: int, frame_number_min: int, frame_number_max: int) -> bool:
+        """Return True if any face_detections row exists in this range — including sentinel
+        rows (embedding NULL) written when a scanned frame had no faces. Used to decide
+        whether a scene has already been processed by the embeddings step."""
+        with self._connection() as conn:
+            row = conn.execute("""
+                SELECT 1 FROM face_detections
+                WHERE video_id = %s AND frame_number >= %s AND frame_number <= %s
                 LIMIT 1
             """, (video_id, frame_number_min, frame_number_max)).fetchone()
             return row is not None

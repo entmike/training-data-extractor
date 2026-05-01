@@ -15,7 +15,7 @@ class SceneConfig:
     """Scene detection configuration."""
     min_duration: float = 2.0  # Minimum scene duration in seconds
     max_duration: float = 8.0  # Maximum scene duration in seconds
-    threshold: float = 3.0  # Adaptive detection threshold for PySceneDetect (AdaptiveDetector)
+    threshold: float = 27.0  # ContentDetector threshold for PySceneDetect (lower = more cuts)
     min_scene_len: int = 15  # Minimum scene length in frames
 
 

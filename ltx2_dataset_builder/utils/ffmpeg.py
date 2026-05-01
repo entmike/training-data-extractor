@@ -53,12 +53,23 @@ def get_video_metadata(video_path: Path) -> Dict[str, Any]:
         duration = float(data.get("format", {}).get("duration", 0))
         if duration == 0 and "duration" in video_stream:
             duration = float(video_stream["duration"])
-        
+
+        width  = int(video_stream.get("width", 0))
+        height = int(video_stream.get("height", 0))
+
+        # Honor HEVC/AVC bitstream Frame Cropping — ffmpeg applies it during decode,
+        # so reported width/height must match the cropped output, not the coded macroblock size.
+        for sd in video_stream.get("side_data_list", []) or []:
+            if sd.get("side_data_type") == "Frame Cropping":
+                width  -= int(sd.get("crop_left", 0)) + int(sd.get("crop_right", 0))
+                height -= int(sd.get("crop_top",  0)) + int(sd.get("crop_bottom", 0))
+                break
+
         return {
             "duration": duration,
             "fps": fps,
-            "width": int(video_stream.get("width", 0)),
-            "height": int(video_stream.get("height", 0)),
+            "width": width,
+            "height": height,
             "codec": video_stream.get("codec_name", "unknown"),
             "bit_rate": int(data.get("format", {}).get("bit_rate", 0)),
             "frame_count": int(video_stream.get("nb_frames", int(duration * fps))),

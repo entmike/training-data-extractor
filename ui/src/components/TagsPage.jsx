@@ -23,10 +23,8 @@ export default function TagsPage() {
     fetch('/api/tags/all')
       .then(r => r.json())
       .then(d => {
-        const t = d.tags || []
-        setTags(t)
+        setTags(d.tags || [])
         setLoading(false)
-        if (t.length > 0 && !tagParam) navigate(`/tags/${encodeURIComponent(t[0].tag)}`, { replace: true })
       })
   }, [])
 
@@ -43,7 +41,7 @@ export default function TagsPage() {
   }, [selectedTag])
 
   function selectTag(tag) {
-    navigate(`/tags/${encodeURIComponent(tag)}`)
+    navigate(tag === selectedTag ? '/tags' : `/tags/${encodeURIComponent(tag)}`)
   }
 
   function handleTagUpdated(oldTag, updated) {

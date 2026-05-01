@@ -1,4 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
+
+function fmtBytes(b) {
+  if (b < 1024) return `${b} B`
+  if (b < 1024 ** 2) return `${(b / 1024).toFixed(1)} KB`
+  if (b < 1024 ** 3) return `${(b / 1024 ** 2).toFixed(1)} MB`
+  return `${(b / 1024 ** 3).toFixed(2)} GB`
+}
 
 const CONFIG_FIELDS = [
   {
@@ -97,6 +105,109 @@ function ConfigField({ field, value, onSave }) {
           <span style={{ fontSize: 12, color: 'var(--error, #e55)' }}>Error saving</span>
         )}
       </div>
+    </div>
+  )
+}
+
+function ClearCacheModal({ sizeLabel, onConfirm, onCancel }) {
+  const [typed, setTyped] = useState('')
+  const inputRef = useRef(null)
+
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  function onKey(e) {
+    if (e.key === 'Escape') onCancel()
+    if (e.key === 'Enter' && typed === sizeLabel) onConfirm()
+  }
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-box" style={{ maxWidth: 380 }} onClick={e => e.stopPropagation()}>
+        <div className="modal-title">Clear preview cache?</div>
+        <p className="modal-body-text">
+          This will delete all cached preview images ({sizeLabel}). They will be regenerated on demand.
+        </p>
+        <p className="modal-body-text">
+          Type <code>{sizeLabel}</code> to confirm:
+        </p>
+        <input
+          ref={inputRef}
+          className="modal-video-select"
+          value={typed}
+          onChange={e => setTyped(e.target.value)}
+          onKeyDown={onKey}
+          placeholder={sizeLabel}
+          spellCheck={false}
+        />
+        <div className="modal-actions">
+          <button className="modal-btn modal-btn--cancel" onClick={onCancel}>Cancel</button>
+          <button
+            className="modal-btn modal-btn--confirm"
+            style={{ background: typed === sizeLabel ? '#ef4444' : undefined }}
+            disabled={typed !== sizeLabel}
+            onClick={onConfirm}
+          >
+            Clear Cache
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function PreviewCacheSection() {
+  const [cacheSize, setCacheSize] = useState(null)   // null = unknown, false = clearing
+  const [confirmOpen, setConfirmOpen] = useState(false)
+
+  function refresh() {
+    setCacheSize(null)
+    fetch('/api/cache/previews')
+      .then(r => r.json())
+      .then(d => setCacheSize(d.size_bytes ?? 0))
+      .catch(() => setCacheSize(0))
+  }
+
+  useEffect(refresh, [])
+
+  async function clearCache() {
+    setConfirmOpen(false)
+    setCacheSize(false)
+    await fetch('/api/cache/previews', { method: 'DELETE' })
+    setCacheSize(0)
+  }
+
+  const sizeLabel = cacheSize === null ? '…'
+    : cacheSize === false ? 'Clearing…'
+    : fmtBytes(cacheSize)
+  const canClear = cacheSize !== null && cacheSize !== false && cacheSize > 0
+
+  return (
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text)', marginBottom: 4 }}>
+        Preview Cache
+      </div>
+      <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--text-muted)' }}>
+        Cached scene/clip preview images on disk. Safe to clear — they regenerate on demand.
+      </p>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button
+          onClick={() => setConfirmOpen(true)}
+          disabled={!canClear}
+          className="modal-btn modal-btn--confirm"
+          style={{ flexShrink: 0, background: canClear ? '#ef4444' : undefined }}
+        >
+          Clear Cache ({sizeLabel})
+        </button>
+      </div>
+
+      {confirmOpen && cacheSize > 0 && (
+        <ClearCacheModal
+          sizeLabel={fmtBytes(cacheSize)}
+          onConfirm={clearCache}
+          onCancel={() => setConfirmOpen(false)}
+        />
+      )}
     </div>
   )
 }
@@ -225,6 +336,7 @@ export default function ConfigPage() {
               {CACHE_SECTIONS.map(section => (
                 <CacheSection key={section.key} section={section} />
               ))}
+              <PreviewCacheSection />
             </div>
           </>
         )}

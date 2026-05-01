@@ -23,7 +23,7 @@ export default function VideosPage({ tagMap, allTags }) {
   const [videos, setVideos] = useState([])
   const [loading, setLoading] = useState(true)
   const [isGridLoading, setIsGridLoading] = useState(false)
-  const [detailCollapsed, setDetailCollapsed] = useState(false)
+  const [detailCollapsed, setDetailCollapsed] = useState(true)
   const [detailTab, setDetailTab] = useState('info')
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState(null)  // null | { videoId, stats } | { error }
@@ -64,9 +64,6 @@ export default function VideosPage({ tagMap, allTags }) {
         )
         setVideos(vids)
         setLoading(false)
-        if (!videoIdParam && vids.length > 0) {
-          navigate(`/videos/${vids[0].id}`, { replace: true })
-        }
       })
   }, [])
 
@@ -180,7 +177,10 @@ export default function VideosPage({ tagMap, allTags }) {
             <div
               key={v.id}
               className={`video-sidebar-item${v.id === videoId ? ' video-sidebar-item--active' : ''}`}
-              onClick={() => { setImportResult(null); navigate(`/videos/${v.id}`) }}
+              onClick={() => {
+                setImportResult(null)
+                navigate(v.id === videoId ? '/videos' : `/videos/${v.id}`)
+              }}
             >
               <span className="video-sidebar-name">{v.name}</span>
               <span className="video-sidebar-count">{v.scene_count}</span>

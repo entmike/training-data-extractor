@@ -14,7 +14,10 @@ export default defineConfig({
       '/api': backend,
       '/preview': backend,
       '/scene_preview': backend,
-      '/clip': backend,
+      // Regex so `/clip/<id>` proxies to Flask but `/clips`, `/clips/<id>`
+      // (the SPA route) stay with Vite.
+      '^/clip/[0-9]': backend,
+      '/clip_item_preview': backend,
       '/bucket_clip': backend,
       '/bucket_waveform': backend,
       '/waveform': backend,
