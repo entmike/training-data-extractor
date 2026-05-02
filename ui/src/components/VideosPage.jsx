@@ -31,6 +31,10 @@ export default function VideosPage({ tagMap, allTags }) {
   const [pendingImportFile, setPendingImportFile] = useState(null)  // File awaiting video selection
   const [videoPickModalOpen, setVideoPickModalOpen] = useState(false)
   const [videoPickId, setVideoPickId] = useState(null)
+  const uploadVideoRef = useRef(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploadResult, setUploadResult] = useState(null)  // null | { name } | { error }
 
   // Filters
   const [activeIncludeTags, setActiveIncludeTags] = useState(new Set())
@@ -133,6 +137,35 @@ export default function VideosPage({ tagMap, allTags }) {
     await doImport(file, vid)
   }
 
+  function handleUploadVideo(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setUploadResult(null)
+    setUploading(true)
+    setUploadProgress(0)
+    const fd = new FormData()
+    fd.append('file', file)
+    const xhr = new XMLHttpRequest()
+    xhr.upload.onprogress = ev => {
+      if (ev.lengthComputable) setUploadProgress(Math.round(ev.loaded / ev.total * 100))
+    }
+    xhr.onload = () => {
+      setUploading(false)
+      setUploadProgress(0)
+      const d = JSON.parse(xhr.responseText)
+      if (xhr.status === 200) {
+        setUploadResult({ name: d.name })
+      } else {
+        setUploadResult({ error: d.error || 'Upload failed' })
+      }
+    }
+    xhr.onerror = () => { setUploading(false); setUploadResult({ error: 'Upload failed' }) }
+    xhr.open('POST', '/api/videos/upload')
+    xhr.send(fd)
+  }
+
+
   function openDropdown(mode, ref) {
     const rect = ref.current.getBoundingClientRect()
     setDropdown({ mode, pos: { top: rect.bottom + window.scrollY + 4, left: rect.left + window.scrollX } })
@@ -210,6 +243,33 @@ export default function VideosPage({ tagMap, allTags }) {
                     &nbsp;·&nbsp;{importResult.stats.tags_added} tags
                     &nbsp;·&nbsp;{importResult.stats.clip_items_added} clips
                   </div>
+            )}
+          </div>
+
+          {/* Upload raw video */}
+          <div className="sidebar-import-zone">
+            <input
+              ref={uploadVideoRef}
+              type="file"
+              accept=".mp4,.mkv,.avi,.mov,.webm,.m4v,.wmv"
+              style={{ display: 'none' }}
+              onChange={handleUploadVideo}
+            />
+            {uploading ? (
+              <div className="sidebar-upload-progress">
+                <div className="sidebar-upload-progress-bar" style={{ width: `${uploadProgress}%` }} />
+                <span>Uploading… {uploadProgress}%</span>
+              </div>
+            ) : (
+              <button
+                className="sidebar-import-btn"
+                onClick={() => { setUploadResult(null); uploadVideoRef.current?.click() }}
+              >+ Upload video</button>
+            )}
+            {uploadResult && (
+              uploadResult.error
+                ? <div className="import-result import-result--error">{uploadResult.error}</div>
+                : <div className="import-result import-result--ok">Uploaded: {uploadResult.name}</div>
             )}
           </div>
         </div>
@@ -329,7 +389,7 @@ export default function VideosPage({ tagMap, allTags }) {
                   </>
                 )}
                 {!detailCollapsed && detailTab === 'settings' && (
-                  <VideoSettings video={selected} onDeleted={onVideoDeleted} />
+                  <VideoSettings video={selected} onSaved={onVideoSaved} onDeleted={onVideoDeleted} />
                 )}
               </div>
               <div className="videos-scenes-panel">
@@ -522,17 +582,41 @@ function VideoDetail({ video, onSaved }) {
   )
 }
 
-function VideoSettings({ video, onDeleted }) {
+function VideoSettings({ video, onSaved, onDeleted }) {
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [deleteConfirm,   setDeleteConfirm]   = useState('')
   const [deleting,        setDeleting]        = useState(false)
   const [deleteError,     setDeleteError]     = useState('')
 
+  const initialOverride = video.fps_override == null ? '' : String(video.fps_override)
+  const [fpsDraft,  setFpsDraft]  = useState(initialOverride)
+  const [fpsStatus, setFpsStatus] = useState('')
+
   useEffect(() => {
     setShowDeleteModal(false)
     setDeleteConfirm('')
     setDeleteError('')
-  }, [video.id])
+    setFpsDraft(video.fps_override == null ? '' : String(video.fps_override))
+    setFpsStatus('')
+  }, [video.id, video.fps_override])
+
+  async function saveFpsOverride(value) {
+    setFpsStatus('Saving…')
+    try {
+      const r = await fetch(`/api/videos/${video.id}/fps-override`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fps_override: value === '' ? null : value }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Save failed')
+      onSaved?.({ id: video.id, fps_override: d.fps_override })
+      setFpsStatus(d.fps_override == null ? '✓ Cleared' : '✓ Saved')
+      setTimeout(() => setFpsStatus(''), 3000)
+    } catch (err) {
+      setFpsStatus(err.message || 'Error')
+    }
+  }
 
   const confirmTitle = video.name || video.path.split('/').pop().replace(/\.[^.]+$/, '')
   const deleteReady  = deleteConfirm === confirmTitle
@@ -552,9 +636,42 @@ function VideoSettings({ video, onDeleted }) {
     }
   }
 
+  const detectedFps = video.fps ? parseFloat(video.fps).toFixed(3) : '—'
+  const fpsDirty = fpsDraft !== initialOverride
+
   return (
     <div className="video-detail">
       <div className="video-detail-fields">
+        <div className="video-detail-field video-detail-field--full">
+          <label className="video-detail-label">
+            FPS override
+            <span className="video-detail-label-hint"> — used for scene/clip preview playback math and as the source rate before export re-encodes to 24 fps. Detected: <strong>{detectedFps}</strong></span>
+          </label>
+          <div className="video-detail-input-row">
+            <input
+              className="video-detail-input"
+              value={fpsDraft}
+              placeholder={`Use detected (${detectedFps})`}
+              onChange={e => { setFpsDraft(e.target.value); setFpsStatus('') }}
+              onKeyDown={e => { if (e.key === 'Enter' && fpsDirty) saveFpsOverride(fpsDraft) }}
+              inputMode="decimal"
+            />
+            <span className="video-detail-status">{fpsStatus}</span>
+            {video.fps_override != null && (
+              <button
+                className="save-btn"
+                onClick={() => { setFpsDraft(''); saveFpsOverride('') }}
+                title="Clear override and use detected FPS"
+              >Clear</button>
+            )}
+            <button
+              className="save-btn"
+              disabled={!fpsDirty}
+              onClick={() => saveFpsOverride(fpsDraft)}
+            >Save</button>
+          </div>
+        </div>
+
         <div className="video-detail-field video-detail-field--full">
           <label className="video-detail-label">Export</label>
           <div className="video-detail-input-row">

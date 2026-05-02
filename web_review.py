@@ -54,6 +54,7 @@ DEBUG_SCENES_DIR  = _CACHE_DIR / "previews"
 WAVEFORMS_DIR     = _CACHE_DIR / "waveforms"
 CLIPS_DIR         = _CACHE_DIR / "clips"
 CLUSTER_CACHE_DIR = _CACHE_DIR / "clusters"
+SOURCE_DIR        = _resolve(config.get("source_dir", "./vids"))
 
 # ── PostgreSQL connection pool ────────────────────────────────────────────────
 
@@ -187,7 +188,7 @@ def clip_item_preview(item_id: int):
     conn = get_db_connection()
     row = conn.execute("""
         SELECT ci.start_frame, ci.end_frame,
-               v.path as video_path, v.fps, v.frame_offset
+               v.path as video_path, COALESCE(v.fps_override, v.fps) AS fps, v.frame_offset
         FROM clip_items ci
         JOIN videos v ON ci.video_id = v.id
         WHERE ci.id = %s
@@ -232,7 +233,7 @@ def _serve_scene_preview(scene_id: int, size: Optional[str]) -> Response:
     """Shared logic for all scene_preview routes."""
     conn = get_db_connection()
     row = conn.execute("""
-        SELECT s.*, v.path as video_path, v.fps, v.frame_offset
+        SELECT s.*, v.path as video_path, v.fps, v.fps_override, v.frame_offset
         FROM scenes s
         JOIN videos v ON s.video_id = v.id
         WHERE s.id = %s
@@ -243,14 +244,15 @@ def _serve_scene_preview(scene_id: int, size: Optional[str]) -> Response:
         return jsonify({"error": "Scene not found"}), 404
 
     video_path = Path(row["video_path"])
-    fps = row["fps"] or 24.0
+    # Use raw container fps for frame-index math (cv2 seeks by actual frame index)
+    container_fps = row["fps"] or 24.0
     frame_offset = row["frame_offset"] or 0
 
     start_frame = row["start_frame"]
     end_frame = row["end_frame"]
     if start_frame is None or end_frame is None:
-        start_frame = int(row["start_time"] * fps)
-        end_frame = int(row["end_time"] * fps)
+        start_frame = int(row["start_time"] * container_fps)
+        end_frame = int(row["end_time"] * container_fps)
 
     frame_width = _PREVIEW_SIZES.get(size) if size else None
     suffix = f"_{size}" if size else ""
@@ -269,7 +271,7 @@ def _serve_scene_preview(scene_id: int, size: Optional[str]) -> Response:
             video_path=video_path,
             start_frame=start_frame,
             end_frame=end_frame,
-            fps=fps,
+            fps=container_fps,
             frame_offset=frame_offset,
             frame_width=frame_width,
         )
@@ -306,7 +308,8 @@ def serve_clip(scene_id: int):
     conn = get_db_connection()
     row = conn.execute("""
         SELECT s.start_time, s.end_time, s.start_frame, s.end_frame,
-               v.path as video_path, v.fps, v.frame_offset
+               v.path as video_path, COALESCE(v.fps_override, v.fps) AS fps,
+               v.fps_override, v.frame_offset
         FROM scenes s
         JOIN videos v ON s.video_id = v.id
         WHERE s.id = %s
@@ -327,6 +330,7 @@ def serve_clip(scene_id: int):
         return send_file(cache_path, mimetype='video/mp4', conditional=True)
 
     fps = row["fps"] or 24.0
+    fps_override = row["fps_override"]
     frame_offset = row["frame_offset"] or 0
 
     # Derive timestamps from frame numbers for precision; fall back to stored times
@@ -371,10 +375,12 @@ def serve_clip(scene_id: int):
 
     cmd = [
         'ffmpeg',
+        *(['-r', str(fps_override)] if fps_override else []),
         '-ss', f'{start_time:.6f}',
         '-i', str(video_file),
         '-t', f'{duration:.6f}',
         *(['-vf', pad_filter] if pad_filter else []),
+        *(['-r', str(fps_override)] if fps_override else []),
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-crf', '23',
@@ -507,7 +513,7 @@ def serve_waveform(scene_id: int):
     conn = get_db_connection()
     row = conn.execute("""
         SELECT s.start_time, s.end_time, s.start_frame, s.end_frame,
-               v.path as video_path, v.fps, v.frame_offset
+               v.path as video_path, COALESCE(v.fps_override, v.fps) AS fps, v.frame_offset
         FROM scenes s
         JOIN videos v ON s.video_id = v.id
         WHERE s.id = %s
@@ -635,7 +641,7 @@ def get_scenes():
             else "s.video_id, s.id"
         )
         base_query = f"""
-            SELECT s.*, v.path as video_path, v.fps, v.frame_offset, v.width as video_width, v.height as video_height, v.duration as video_duration,
+            SELECT s.*, v.path as video_path, COALESCE(v.fps_override, v.fps) AS fps, v.frame_offset, v.width as video_width, v.height as video_height, v.duration as video_duration,
                 (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) as scene_idx,
                 (SELECT COUNT(*) FROM clip_items ci WHERE ci.scene_id = s.id) as clip_count,
                 (SELECT COUNT(*) FROM tag_references tr WHERE tr.video_id = s.video_id AND tr.frame_number >= s.start_frame AND tr.frame_number <= s.end_frame) as face_ref_count,
@@ -764,7 +770,7 @@ def get_scene(scene_id: int):
         SELECT s.id, s.start_time, s.end_time, s.start_frame, s.end_frame,
                s.blurhash, s.rating, s.caption,
                s.video_id,
-               v.path as video_path, v.fps, v.frame_offset,
+               v.path as video_path, COALESCE(v.fps_override, v.fps) AS fps, v.frame_offset,
                v.width as video_width, v.height as video_height
         FROM scenes s
         JOIN videos v ON s.video_id = v.id
@@ -1268,7 +1274,7 @@ def list_clusters():
                 FROM face_detections fd
                 JOIN videos v ON v.id = fd.video_id
                 JOIN scenes s ON s.video_id = fd.video_id
-                  AND (fd.frame_number - COALESCE(v.frame_offset, 0))::float / v.fps
+                  AND (fd.frame_number - COALESCE(v.frame_offset, 0))::float / COALESCE(v.fps_override, v.fps)
                       BETWEEN s.start_time AND s.end_time
                 WHERE fd.id = ANY(fc.member_detection_ids)
                ) AS scene_count
@@ -1277,7 +1283,7 @@ def list_clusters():
                FROM face_detections fd
                JOIN videos v ON v.id = fd.video_id
                JOIN scenes s ON s.video_id = fd.video_id
-                 AND (fd.frame_number - COALESCE(v.frame_offset, 0))::float / v.fps
+                 AND (fd.frame_number - COALESCE(v.frame_offset, 0))::float / COALESCE(v.fps_override, v.fps)
                      BETWEEN s.start_time AND s.end_time
                WHERE fd.id = ANY(fc.member_detection_ids)
               ) >= %s"""
@@ -1381,7 +1387,7 @@ def promote_cluster(cluster_id: int):
         # Prefer single-face frames, then take best-from-each-scene up to 5
         candidates = conn.execute("""
             SELECT fd.id, fd.video_id, fd.frame_number,
-                   v.path, v.fps,
+                   v.path, COALESCE(v.fps_override, v.fps) AS fps,
                    (SELECT COUNT(*) FROM face_detections fd2
                     WHERE fd2.video_id = fd.video_id
                       AND fd2.frame_number = fd.frame_number) AS face_count,
@@ -1389,7 +1395,7 @@ def promote_cluster(cluster_id: int):
             FROM face_detections fd
             JOIN videos v ON v.id = fd.video_id
             LEFT JOIN scenes s ON s.video_id = fd.video_id
-              AND (fd.frame_number - COALESCE(v.frame_offset, 0))::float / v.fps
+              AND (fd.frame_number - COALESCE(v.frame_offset, 0))::float / COALESCE(v.fps_override, v.fps)
                   BETWEEN s.start_time AND s.end_time
             WHERE fd.id = ANY(%s)
             ORDER BY face_count ASC, fd.det_score DESC
@@ -1616,7 +1622,7 @@ def cluster_scenes(cluster_key: str):
 
     rows = conn.execute("""
         SELECT DISTINCT ON (s.id)
-               s.*, v.path AS video_path, v.fps, v.frame_offset, v.duration AS video_duration,
+               s.*, v.path AS video_path, COALESCE(v.fps_override, v.fps) AS fps, v.frame_offset, v.duration AS video_duration,
                (SELECT COUNT(*) FROM scenes s2 WHERE s2.video_id = s.video_id AND s2.id < s.id) AS scene_idx,
                (SELECT COUNT(*) FROM clip_items ci WHERE ci.scene_id = s.id) AS clip_count,
                (SELECT COUNT(*) FROM tag_references tr WHERE tr.video_id = s.video_id AND tr.frame_number >= s.start_frame AND tr.frame_number <= s.end_frame) AS face_ref_count,
@@ -1626,7 +1632,7 @@ def cluster_scenes(cluster_key: str):
         FROM face_detections fd
         JOIN videos v ON v.id = fd.video_id
         JOIN scenes s ON s.video_id = fd.video_id
-          AND (fd.frame_number - COALESCE(v.frame_offset, 0))::float / v.fps
+          AND (fd.frame_number - COALESCE(v.frame_offset, 0))::float / COALESCE(v.fps_override, v.fps)
               BETWEEN s.start_time AND s.end_time
         WHERE fd.id = ANY(%s)
         ORDER BY s.id, v.path, s.start_time
@@ -1693,7 +1699,7 @@ def split_scene(scene_id: int):
     """Split a long scene into segments of up to 600 frames each."""
     conn = get_db_connection()
     row = conn.execute("""
-        SELECT s.video_id, s.start_frame, s.end_frame, s.rating, v.fps
+        SELECT s.video_id, s.start_frame, s.end_frame, s.rating, COALESCE(v.fps_override, v.fps) AS fps
         FROM scenes s JOIN videos v ON s.video_id = v.id
         WHERE s.id = %s
     """, (scene_id,)).fetchone()
@@ -1783,7 +1789,7 @@ def update_scene_boundary(scene_id: int):
 
     row = conn.execute("""
         SELECT s.id, s.video_id, s.start_frame, s.end_frame,
-               v.fps, v.duration AS video_duration
+               COALESCE(v.fps_override, v.fps) AS fps, v.duration AS video_duration
         FROM scenes s
         JOIN videos v ON s.video_id = v.id
         WHERE s.id = %s
@@ -1923,6 +1929,7 @@ def get_videos():
             "hash": v["hash"],
             "duration": v.get("duration"),
             "fps": v.get("fps"),
+            "fps_override": v.get("fps_override"),
             "width": v.get("width"),
             "height": v.get("height"),
             "codec": v.get("codec"),
@@ -1977,6 +1984,65 @@ def set_video_name(video_id: int):
     conn.close()
     return jsonify({"video_id": video_id, "name": name or ""})
 
+
+@app.route('/api/videos/<int:video_id>/fps-override', methods=['PUT'])
+def set_video_fps_override(video_id: int):
+    """Set or clear the FPS override used for clip/preview playback math and export
+    timing. The export pipeline always re-encodes to 24 fps; the override changes
+    what FPS the source frames are interpreted at before that conversion."""
+    data = request.get_json() or {}
+    raw = data.get('fps_override')
+    if raw is None or raw == '':
+        override = None
+    else:
+        try:
+            override = float(raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "fps_override must be a positive number or null"}), 400
+        if override <= 0:
+            return jsonify({"error": "fps_override must be a positive number or null"}), 400
+    conn = get_db_connection()
+    cur = conn.execute(
+        "UPDATE videos SET fps_override = %s WHERE id = %s RETURNING fps, fps_override, path",
+        (override, video_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "Video not found"}), 404
+    conn.commit()
+    conn.close()
+
+    # Purge cached clips for this video so they re-encode at the new fps
+    video_stem = Path(row['path']).stem
+    for clip in CLIPS_DIR.glob(f"{video_stem}_*.mp4"):
+        clip.unlink(missing_ok=True)
+
+    return jsonify({"video_id": video_id, "fps": row['fps'], "fps_override": row['fps_override']})
+
+
+ALLOWED_VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv'}
+
+@app.route('/api/videos/upload', methods=['POST'])
+def upload_video():
+    """Upload a video file into the source_dir."""
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({"error": "Empty filename"}), 400
+
+    ext = Path(f.filename).suffix.lower()
+    if ext not in ALLOWED_VIDEO_EXTENSIONS:
+        return jsonify({"error": f"Unsupported file type: {ext}"}), 400
+
+    SOURCE_DIR.mkdir(parents=True, exist_ok=True)
+    dest = SOURCE_DIR / f.filename
+    if dest.exists():
+        return jsonify({"error": f"{f.filename} already exists in source directory"}), 409
+
+    f.save(str(dest))
+    return jsonify({"filename": f.filename, "path": str(dest)}), 201
 
 
 @app.route('/api/videos/<int:video_id>', methods=['DELETE'])
@@ -2281,7 +2347,7 @@ def update_bucket(scene_id: int):
         return jsonify({"error": "Bucket not found"}), 404
 
     video = conn.execute("""
-        SELECT v.fps, v.frame_offset FROM videos v
+        SELECT COALESCE(v.fps_override, v.fps) AS fps, v.frame_offset FROM videos v
         JOIN scenes s ON s.video_id = v.id WHERE s.id = %s
     """, (scene_id,)).fetchone()
     scene = conn.execute("SELECT start_frame, end_frame, start_time, end_time FROM scenes WHERE id = %s", (scene_id,)).fetchone()
@@ -2350,7 +2416,7 @@ def get_bucket_data(scene_id: int):
     result = dict(bucket)
 
     scene = conn.execute("SELECT start_frame, end_frame, start_time, end_time FROM scenes WHERE id = %s", (scene_id,)).fetchone()
-    fps = conn.execute("SELECT v.fps FROM videos v JOIN scenes s ON s.video_id = v.id WHERE s.id = %s", (scene_id,)).fetchone()
+    fps = conn.execute("SELECT COALESCE(v.fps_override, v.fps) AS fps FROM videos v JOIN scenes s ON s.video_id = v.id WHERE s.id = %s", (scene_id,)).fetchone()
     if scene:
         if scene["start_frame"] is not None and scene["end_frame"] is not None:
             result["scene_frame_count"] = scene["end_frame"] - scene["start_frame"]
@@ -2380,7 +2446,7 @@ def serve_bucket_clip(scene_id: int):
     
     # Get video info
     video_row = conn.execute("""
-        SELECT v.path as video_path, v.fps, v.frame_offset
+        SELECT v.path as video_path, COALESCE(v.fps_override, v.fps) AS fps, v.frame_offset
         FROM videos v
         JOIN buckets b ON b.video_id = v.id
         WHERE b.scene_id = %s
@@ -2455,7 +2521,7 @@ def serve_bucket_waveform(scene_id: int):
     
     # Get video info
     video_row = conn.execute("""
-        SELECT v.path as video_path, v.fps, v.frame_offset
+        SELECT v.path as video_path, COALESCE(v.fps_override, v.fps) AS fps, v.frame_offset
         FROM videos v
         JOIN buckets b ON b.video_id = v.id
         WHERE b.scene_id = %s
@@ -2653,6 +2719,7 @@ def _build_export_cmd(video_file: Path, start_time: float, duration: float,
             '-t', f'{duration:.6f}',
             '-map', '0:v', '-map', '1:a',
             '-vf', vf,
+            '-r', '24',
             '-c:v', 'libx264',
             '-preset', 'fast',
             '-crf', '18',
@@ -2673,6 +2740,7 @@ def _build_export_cmd(video_file: Path, start_time: float, duration: float,
         '-i', str(video_file),
         '-t', f'{duration:.6f}',
         '-vf', vf,
+        '-r', '24',
         '-c:v', 'libx264',
         '-preset', 'fast',
         '-crf', '18',
@@ -2702,7 +2770,7 @@ def export_clip_stream(clip_id: int):
 
     rows = conn.execute("""
         SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame, ci.mute, ci.denoise, ci.denoise_mix,
-               v.path as video_path, v.fps, v.frame_offset,
+               v.path as video_path, COALESCE(v.fps_override, v.fps) AS fps, v.frame_offset,
                COALESCE(NULLIF(ci.caption, ''), s.caption) AS caption
         FROM clip_items ci
         JOIN videos v ON ci.video_id = v.id
@@ -2816,7 +2884,7 @@ def get_clip_items(clip_id: int):
     rows = conn.execute(f"""
         SELECT ci.id, ci.scene_id, ci.video_id, ci.start_frame, ci.end_frame, ci.mute, ci.denoise, ci.denoise_mix, ci.created_at,
                ci.caption as item_caption,
-               v.path as video_path, v.fps, v.frame_offset,
+               v.path as video_path, COALESCE(v.fps_override, v.fps) AS fps, v.frame_offset,
                COALESCE(v.name, '') as video_name_custom,
                s.caption as scene_caption, s.start_time, s.end_time, s.rating, s.blurhash,
                s.start_frame as scene_start_frame, s.end_frame as scene_end_frame,
@@ -2972,7 +3040,7 @@ def clip_item_processed_preview(clip_id: int, item_id: int):
     conn = get_db_connection()
     row = conn.execute("""
         SELECT ci.start_frame, ci.end_frame, ci.mute, ci.denoise, ci.denoise_mix,
-               v.path as video_path, v.fps, v.frame_offset
+               v.path as video_path, COALESCE(v.fps_override, v.fps) AS fps, v.frame_offset
         FROM clip_items ci
         JOIN videos v ON ci.video_id = v.id
         WHERE ci.id = %s AND ci.clip_id = %s
@@ -3073,7 +3141,7 @@ def get_scene_clip_items(scene_id: int):
                ci.start_frame, ci.end_frame, ci.created_at,
                ci.caption as item_caption,
                c.name as clip_name,
-               v.path as video_path, v.fps, v.frame_offset,
+               v.path as video_path, COALESCE(v.fps_override, v.fps) AS fps, v.frame_offset,
                COALESCE(v.name, '') as video_name_custom,
                s.caption as scene_caption, s.start_time, s.end_time, s.rating, s.blurhash,
                s.start_frame as scene_start_frame, s.end_frame as scene_end_frame

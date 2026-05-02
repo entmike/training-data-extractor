@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS videos (
     path         TEXT UNIQUE NOT NULL,
     hash         TEXT NOT NULL,
     duration     DOUBLE PRECISION,
-    fps          DOUBLE PRECISION,
+    fps          DOUBLE PRECISION,                       -- detected from container metadata
+    fps_override DOUBLE PRECISION,                       -- if set, used instead of fps for playback/export math
     width        INTEGER,
     height       INTEGER,
     codec        TEXT,

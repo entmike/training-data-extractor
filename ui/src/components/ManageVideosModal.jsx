@@ -5,17 +5,64 @@ export default function ManageVideosModal({ onClose }) {
   const [loading, setLoading] = useState(true)
   const [selectedId, setSelectedId] = useState(null)
   const mouseDownOnOverlay = useRef(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadStatus, setUploadStatus] = useState('')
+  const [uploadProgress, setUploadProgress] = useState(null)
+  const fileInputRef = useRef(null)
 
-  useEffect(() => {
-    fetch('/api/videos')
+  function loadVideos() {
+    return fetch('/api/videos')
       .then(r => r.json())
       .then(d => {
         const vids = d.videos || []
         setVideos(vids)
-        if (vids.length > 0) setSelectedId(vids[0].id)
+        if (vids.length > 0) setSelectedId(id => id ?? vids[0].id)
         setLoading(false)
       })
-  }, [])
+  }
+
+  useEffect(() => { loadVideos() }, [])
+
+  async function handleUpload(file) {
+    if (!file) return
+    setUploading(true)
+    setUploadStatus(`Uploading ${file.name}…`)
+    setUploadProgress(0)
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    try {
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', '/api/videos/upload')
+        xhr.upload.onprogress = e => {
+          if (e.lengthComputable) setUploadProgress(Math.round((e.loaded / e.total) * 100))
+        }
+        xhr.onload = () => {
+          if (xhr.status === 201) resolve(JSON.parse(xhr.responseText))
+          else reject(new Error(JSON.parse(xhr.responseText)?.error || 'Upload failed'))
+        }
+        xhr.onerror = () => reject(new Error('Network error'))
+        xhr.send(formData)
+      })
+      setUploadStatus(`✓ ${file.name} uploaded`)
+      setUploadProgress(null)
+      await loadVideos()
+    } catch (e) {
+      setUploadStatus(`Error: ${e.message}`)
+      setUploadProgress(null)
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  function onDrop(e) {
+    e.preventDefault()
+    const file = e.dataTransfer.files[0]
+    if (file) handleUpload(file)
+  }
 
   useEffect(() => {
     function onKey(e) { if (e.key === 'Escape') onClose() }
@@ -31,6 +78,30 @@ export default function ManageVideosModal({ onClose }) {
         <div className="modal-header">
           <h2>Videos</h2>
           <button className="modal-close-btn" onClick={onClose}>&times;</button>
+        </div>
+
+        {/* Upload area */}
+        <div
+          className={`video-upload-area${uploading ? ' video-upload-area--uploading' : ''}`}
+          onDragOver={e => e.preventDefault()}
+          onDrop={onDrop}
+          onClick={() => !uploading && fileInputRef.current?.click()}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".mp4,.mkv,.avi,.mov,.webm,.m4v,.wmv"
+            style={{ display: 'none' }}
+            onChange={e => handleUpload(e.target.files[0])}
+          />
+          {uploading ? (
+            <div className="video-upload-progress">
+              <div className="video-upload-progress-bar" style={{ width: `${uploadProgress ?? 0}%` }} />
+              <span>{uploadStatus}</span>
+            </div>
+          ) : (
+            <span>{uploadStatus || '⬆ Drop a video file here or click to upload'}</span>
+          )}
         </div>
 
         {loading ? (

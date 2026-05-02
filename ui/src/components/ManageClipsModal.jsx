@@ -396,7 +396,7 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
                       className="clip-export-btn"
                       onClick={exportClip}
                       disabled={exportProgress != null || items.length === 0}
-                      title="Extract clips + captions and download as zip"
+                      title="Extract clips + captions and download as zip (output is always 24 fps)"
                     >Export zip</button>
                   </>}
                   onPlay={scene => setEditingItem(items.find(i => i.scene_id === scene.id) ?? null)}
