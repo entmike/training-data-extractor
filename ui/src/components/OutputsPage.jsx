@@ -615,26 +615,23 @@ function FavoritesTab({ editedJson, favorites, onUpdate, onRemoveFavorite, nodeI
           {group.items.map(m => {
             const spec = getInputSpec(nodeInfo, m.class_type, m.input_key)
             return (
-              <div key={`${m.nodeId}.${m.input_key}`}
-                   style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <div key={`${m.nodeId}.${m.input_key}`} className="outputs-fav-row">
                 <button
                   onClick={() => onRemoveFavorite(m.nodeId, m.class_type, m.input_key)}
                   title="Remove from favorites"
-                  style={{ background: 'none', border: 'none', cursor: 'pointer',
-                           color: '#facc15', fontSize: 14, padding: 0, flexShrink: 0, lineHeight: 1 }}
+                  className="outputs-fav-star"
                 >★</button>
-                <span style={{ fontSize: 12, color: 'var(--text-muted)', width: 160,
-                               flexShrink: 0, fontFamily: 'monospace', overflow: 'hidden',
-                               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                      title={m.input_key}>
+                <span className="outputs-fav-key" title={m.input_key}>
                   {m.input_key}
                 </span>
-                <SmartInput
-                  spec={spec}
-                  value={m.value}
-                  onChange={v => onUpdate(setAtPath(editedJson, m.path, v))}
-                  inputKey={m.input_key}
-                />
+                <div className="outputs-fav-value">
+                  <SmartInput
+                    spec={spec}
+                    value={m.value}
+                    onChange={v => onUpdate(setAtPath(editedJson, m.path, v))}
+                    inputKey={m.input_key}
+                  />
+                </div>
               </div>
             )
           })}

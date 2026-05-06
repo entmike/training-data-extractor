@@ -3704,6 +3704,60 @@ html, body {
 .output-modal-nsfw-btn:hover { color: #f97316; border-color: #f97316; }
 .output-modal-nsfw-btn--active { color: #f97316 !important; border-color: #f97316 !important; }
 
+/* Output workflow modal — Parameters tab favorited rows */
+.outputs-fav-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+.outputs-fav-star {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #facc15;
+  font-size: 14px;
+  padding: 0;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.outputs-fav-key {
+  font-size: 12px;
+  color: var(--text-muted);
+  width: 160px;
+  flex-shrink: 0;
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.outputs-fav-value {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* Children of SmartInput — wrappers, inputs, selects — must shrink. */
+.outputs-fav-value > * { flex: 1; min-width: 0; }
+.outputs-fav-value input,
+.outputs-fav-value textarea,
+.outputs-fav-value select {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+@media (max-width: 540px) {
+  .outputs-fav-row { flex-wrap: wrap; row-gap: 4px; }
+  .outputs-fav-key {
+    width: calc(100% - 22px);
+    flex: 0 0 calc(100% - 22px);
+  }
+  .outputs-fav-value { flex: 1 0 100%; }
+}
+
 /* ----- Cleanup: previously-orphaned classes referenced by JSX with no rules ----- */
 
 /* Header inner wrapper */

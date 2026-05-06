@@ -727,6 +727,7 @@ export default function VideoPlayerModal({ player, onClose, pageMode = false }) 
                 src={`/clip/${sceneId}`}
                 loop
                 muted={muted}
+                playsInline
                 onPlay={handlePlay}
                 onPause={handlePause}
                 onEnded={handleEnded}
