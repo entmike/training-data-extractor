@@ -3742,7 +3742,7 @@ html, body {
   position: fixed;
   bottom: 16px;
   right: 16px;
-  z-index: 1300;
+  z-index: 1400;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -3906,7 +3906,7 @@ html, body {
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,.55);
-  z-index: 1100;
+  z-index: 1300;
   animation: drawer-fade-in .15s ease-out;
 }
 @keyframes drawer-fade-in { from { opacity: 0; } to { opacity: 1; } }
@@ -3920,7 +3920,7 @@ html, body {
   background: var(--bg-card);
   border-left: 1px solid var(--border);
   box-shadow: -8px 0 24px rgba(0,0,0,.45);
-  z-index: 1101;
+  z-index: 1301;
   display: flex;
   flex-direction: column;
   transform: translateX(100%);
