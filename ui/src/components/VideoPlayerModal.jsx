@@ -5,7 +5,7 @@ import TagDropdown from './TagDropdown'
 import FrameCountStepper from './FrameCountStepper'
 import { blurhashToDataURL } from './BlurhashCanvas'
 
-export default function VideoPlayerModal({ player, onClose }) {
+export default function VideoPlayerModal({ player, onClose, pageMode = false }) {
   const videoRef      = useRef(null)
   const canvasRef     = useRef(null)
   const audioCtxRef   = useRef(null)
@@ -135,10 +135,35 @@ export default function VideoPlayerModal({ player, onClose }) {
 
   // ── Keyboard ───────────────────────────────────────────
   useEffect(() => {
-    function handleKey(e) { if (e.key === 'Escape' && !dropdownPos) onClose() }
+    function handleKey(e) {
+      if (e.key === 'Escape' && !dropdownPos) { onClose(); return }
+      if (e.key !== '[' && e.key !== ']') return
+      const t = e.target
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      if (!videoRef.current || !bucketData || playEntireSceneRef.current) return
+      e.preventDefault()
+      const minDur  = 24 / fps
+      const playT   = videoRef.current.currentTime
+      const start   = bucketOffsetRef.current
+      const end     = start + bucketDurationRef.current
+      if (e.key === '[') {
+        const newOff = Math.max(0, Math.min(end - minDur, playT))
+        const newDur = end - newOff
+        setBucketOffset(newOff); bucketOffsetRef.current = newOff
+        bucketDurationRef.current = newDur
+        setBucketData(prev => prev ? { ...prev, optimal_offset_frames: Math.round(newOff * fps), optimal_duration: newDur, frame_count: Math.round(newDur * fps) } : prev)
+        saveBucketOffsetNow(newOff, Math.round(newDur * fps))
+      } else {
+        const newEnd = Math.max(start + minDur, Math.min(duration, playT))
+        const newDur = newEnd - start
+        bucketDurationRef.current = newDur
+        setBucketData(prev => prev ? { ...prev, optimal_duration: newDur, frame_count: Math.round(newDur * fps) } : prev)
+        saveBucketOffsetNow(start, Math.round(newDur * fps))
+      }
+    }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
-  }, [onClose, dropdownPos])
+  }, [onClose, dropdownPos, bucketData, fps, duration])
 
   // ── Cleanup ────────────────────────────────────────────
   useEffect(() => {
@@ -626,14 +651,26 @@ export default function VideoPlayerModal({ player, onClose }) {
   }
 
   // ── Render ─────────────────────────────────────────────
+  const wrapperProps = pageMode ? {
+    className: 'video-page-wrap',
+  } : {
+    className: 'video-modal-overlay',
+    onMouseDown: e => { mouseDownOnOverlay.current = e.target === e.currentTarget },
+    onClick:     e => { if (mouseDownOnOverlay.current && e.target === e.currentTarget) onClose() },
+  }
   return (
-    <div
-      className="video-modal-overlay"
-      onMouseDown={e => { mouseDownOnOverlay.current = e.target === e.currentTarget }}
-      onClick={e => { if (mouseDownOnOverlay.current && e.target === e.currentTarget) onClose() }}
-    >
-      <div className="video-modal-content">
+    <div {...wrapperProps}>
+      <div className={pageMode ? 'video-page-content' : 'video-modal-content'}>
         <div className="video-modal-header">
+          {pageMode && (
+            <button className="video-page-back-btn" onClick={onClose} title="Back to list">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="19" y1="12" x2="5" y2="12"/>
+                <polyline points="12 19 5 12 12 5"/>
+              </svg>
+              <span>Back</span>
+            </button>
+          )}
           <span className="video-modal-title">{title}</span>
           <div className="video-modal-actions">
             <button
@@ -649,7 +686,7 @@ export default function VideoPlayerModal({ player, onClose }) {
                 </svg>
               )}
             </button>
-            <button className="modal-close-btn" onClick={onClose}>&times;</button>
+            {!pageMode && <button className="modal-close-btn" onClick={onClose}>&times;</button>}
           </div>
         </div>
 

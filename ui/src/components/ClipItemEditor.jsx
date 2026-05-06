@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import FrameCountStepper from './FrameCountStepper'
+import Header from './Header'
 
 function fmtSecs(s) {
   s = Math.floor(s || 0)
@@ -13,7 +14,6 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
   const cropWrapRef = useRef(null)
   const timeRafRef  = useRef(null)
   const seekingRef  = useRef(false)
-  const mouseDownOnOverlay = useRef(false)
 
   const fps            = item.fps || 24
   const frameOffset    = item.frame_offset || 0
@@ -301,18 +301,22 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
   const isDirty  = startOff !== savedStart || endOff !== savedEnd
 
   return createPortal(
-    <div
-      className="video-modal-overlay"
-      onMouseDown={e => { mouseDownOnOverlay.current = e.target === e.currentTarget }}
-      onClick={e => { if (mouseDownOnOverlay.current && e.target === e.currentTarget) onClose() }}
-    >
-      <div className="video-modal-content cie-modal">
-        <div className="video-modal-header">
-          <span className="video-modal-title">
-            Edit clip item — {item.video_name} · scene #{item.scene_id}
-          </span>
-          <button className="modal-close-btn" onClick={onClose}>&times;</button>
-        </div>
+    <div className="scene-page-overlay">
+      <Header isLoading={false} />
+      <div className="video-page-wrap">
+        <div className="video-page-content">
+          <div className="video-modal-header">
+            <button className="video-page-back-btn" onClick={onClose} title="Back">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="19" y1="12" x2="5" y2="12"/>
+                <polyline points="12 19 5 12 12 5"/>
+              </svg>
+              <span>Back</span>
+            </button>
+            <span className="video-modal-title">
+              Edit clip item — {item.video_name} · scene #{item.scene_id}
+            </span>
+          </div>
 
         {/* Video tabs */}
         <div className="cie-video-tabs">
@@ -530,6 +534,7 @@ export default function ClipItemEditor({ item, clipId, onClose, onSaved }) {
           </div>
         </div>
 
+        </div>
       </div>
     </div>,
     document.body

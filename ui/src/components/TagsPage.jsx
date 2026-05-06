@@ -13,6 +13,7 @@ export default function TagsPage() {
   const [activeTab, setActiveTab] = useState('scenes')
   const [allRefs, setAllRefs] = useState(null) // all refs for selected tag (null = not fetched)
   const [unverifiedOnly, setUnverifiedOnly] = useState(false)
+  const [mobilePickerOpen, setMobilePickerOpen] = useState(false)
 
   const faceRefs = (allRefs || []).filter(r => !r.embedding_type || r.embedding_type === 'insightface')
   const clipRefs = (allRefs || []).filter(r => r.embedding_type === 'clip')
@@ -41,6 +42,7 @@ export default function TagsPage() {
   }, [selectedTag])
 
   function selectTag(tag) {
+    setMobilePickerOpen(false)
     navigate(tag === selectedTag ? '/tags' : `/tags/${encodeURIComponent(tag)}`)
   }
 
@@ -54,10 +56,24 @@ export default function TagsPage() {
 
   return (
     <div className="videos-page">
+      <button
+        type="button"
+        className="list-mobile-picker"
+        onClick={() => setMobilePickerOpen(o => !o)}
+        aria-expanded={mobilePickerOpen}
+      >
+        <span className="list-mobile-picker__label">
+          {selected ? (selected.display_name || selected.tag) : (tags.length === 0 ? 'No tags' : 'Choose tag…')}
+        </span>
+        <span className="list-mobile-picker__chev" aria-hidden="true">{mobilePickerOpen ? '▾' : '▸'}</span>
+      </button>
+      {mobilePickerOpen && (
+        <div className="list-mobile-backdrop" onClick={() => setMobilePickerOpen(false)} />
+      )}
       <div className="videos-layout">
 
         {/* Sidebar */}
-        <div className="videos-sidebar">
+        <div className={`videos-sidebar${mobilePickerOpen ? ' videos-sidebar--open' : ''}`}>
           {loading ? (
             [1,2,3,4].map(n => (
               <div key={n} className="video-sidebar-item video-sidebar-item--skeleton">

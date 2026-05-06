@@ -1,54 +1,25 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-
-const POLL_MS = 3000
+import { useState, useContext } from 'react'
+import { AppContext } from '../context'
 
 function fmtId(id) {
   return id ? id.slice(0, 8) : '—'
 }
 
 export default function ComfyQueuePage() {
-  const [queue, setQueue]     = useState(null)   // { running, pending } | null
-  const [history, setHistory] = useState(null)   // { history } | null
-  const [error, setError]     = useState(null)
+  const {
+    comfyQueue: queue,
+    comfyHistory: history,
+    comfyProgress: progress,
+    comfyError: error,
+    deleteQueueItem,
+    clearComfyQueue,
+  } = useContext(AppContext)
+
   const [clearing, setClearing] = useState(false)
-  const timerRef = useRef(null)
-
-  const fetchQueue = useCallback(async () => {
-    try {
-      const [qr, hr] = await Promise.all([
-        fetch('/api/comfyui/queue'),
-        fetch('/api/comfyui/history?limit=15'),
-      ])
-      const qd = await qr.json()
-      const hd = await hr.json()
-      if (qd.error) { setError(qd.error); setQueue(null); return }
-      setError(null)
-      setQueue(qd)
-      if (!hd.error) setHistory(hd)
-    } catch (e) {
-      setError(String(e))
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchQueue()
-    timerRef.current = setInterval(fetchQueue, POLL_MS)
-    return () => clearInterval(timerRef.current)
-  }, [fetchQueue])
-
-  async function deleteItem(prompt_id) {
-    await fetch('/api/comfyui/queue/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt_id }),
-    })
-    fetchQueue()
-  }
 
   async function clearQueue() {
     setClearing(true)
-    await fetch('/api/comfyui/queue/clear', { method: 'POST' })
-    await fetchQueue()
+    await clearComfyQueue()
     setClearing(false)
   }
 
@@ -56,7 +27,7 @@ export default function ComfyQueuePage() {
     <div className="cq-page">
       <div className="cq-error">
         {error.includes('not configured')
-          ? <><strong>ComfyUI endpoint not configured.</strong><br />Set it in <a href="/config">Config</a> first.</>
+          ? <><strong>ComfyUI endpoint not configured.</strong><br />Set it in Config first.</>
           : <><strong>Could not reach ComfyUI:</strong> {error}</>}
       </div>
     </div>
@@ -87,15 +58,53 @@ export default function ComfyQueuePage() {
           <div className="cq-empty">Loading…</div>
         ) : running.length === 0 ? (
           <div className="cq-empty">Idle</div>
-        ) : running.map(item => (
-          <div key={item.prompt_id} className="cq-item cq-item--running">
-            <span className="cq-spinner" />
-            <div className="cq-item-body">
-              <span className="cq-item-title">{item.title}</span>
-              <span className="cq-item-meta">{fmtId(item.prompt_id)} · {item.node_count} nodes</span>
+        ) : running.map(item => {
+          const prog = progress?.prompt_id === item.prompt_id ? progress : null
+          const pct  = (prog && prog.max > 0) ? Math.round((prog.value / prog.max) * 100) : null
+          const nodeMeta = prog?.node ? (item.node_meta?.[prog.node] ?? null) : null
+          const nodeLabel = nodeMeta?.title || nodeMeta?.class_type || (prog?.node ? `Node ${prog.node}` : null)
+          const isSampling = prog && prog.max > 0
+
+          return (
+            <div key={item.prompt_id} className="cq-item cq-item--running">
+              <span className="cq-spinner" />
+              <div className="cq-item-body">
+                <span className="cq-item-title">{item.title}</span>
+                <span className="cq-item-meta">{fmtId(item.prompt_id)} · {item.node_count} nodes</span>
+
+                {prog && item.node_count > 0 && prog.node && !isSampling && (
+                  <div className="cq-progress">
+                    <div className="cq-progress-bar cq-progress-bar--node">
+                      <div className="cq-progress-fill cq-progress-fill--node"
+                           style={{ width: `${Math.min(100, Math.round(((prog.node_value || 1) / item.node_count) * 100))}%` }} />
+                    </div>
+                    <div className="cq-progress-label">
+                      {nodeLabel && <span className="cq-progress-node">{nodeLabel}</span>}
+                      <span className="cq-progress-pct cq-progress-pct--node">
+                        node {prog.node_value || '?'} / {item.node_count}
+                        {prog.node_value > 0 && <>&nbsp;({Math.min(100, Math.round((prog.node_value / item.node_count) * 100))}%)</>}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {isSampling && (
+                  <div className="cq-progress">
+                    <div className="cq-progress-bar">
+                      <div className="cq-progress-fill" style={{ width: `${pct}%` }} />
+                    </div>
+                    <div className="cq-progress-label">
+                      {nodeLabel && <span className="cq-progress-node">{nodeLabel}</span>}
+                      <span className="cq-progress-pct">
+                        step {prog.value} / {prog.max} &nbsp;({pct}%)
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </section>
 
       {/* Pending */}
@@ -112,7 +121,7 @@ export default function ComfyQueuePage() {
               <span className="cq-item-title">{item.title}</span>
               <span className="cq-item-meta">{fmtId(item.prompt_id)} · {item.node_count} nodes</span>
             </div>
-            <button className="cq-delete-btn" onClick={() => deleteItem(item.prompt_id)} title="Remove from queue">
+            <button className="cq-delete-btn" onClick={() => deleteQueueItem(item.prompt_id)} title="Remove from queue">
               ✕
             </button>
           </div>

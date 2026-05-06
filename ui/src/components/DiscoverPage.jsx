@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef, useContext } from 'react'
-import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { AppContext } from '../context'
-import TagDropdown from './TagDropdown'
 
 const PAGE_SIZE = 48
 
@@ -80,6 +78,7 @@ export default function DiscoverPage() {
       if (!r.ok) throw new Error(d.error || 'Failed')
       setPromoteState(s => ({ ...s, [id]: { input: '', status: 'done' } }))
       setAllClusters(prev => prev.map(c => c.id === id ? { ...c, promoted_tag: tag } : c))
+      refreshTags()
     } catch {
       setPromoteState(s => ({ ...s, [id]: { ...s[id], status: 'error' } }))
     }
@@ -179,28 +178,13 @@ export default function DiscoverPage() {
 
 function ClusterCard({ cluster, promoteInput, promoteStatus, onPromoteInput, onPromote, onDismiss }) {
   const { tagMap } = useContext(AppContext)
+  const { refreshTags } = useContext(AppContext)
   const navigate = useNavigate()
   const sampleCount = Math.min(4, (cluster.sample_frame_numbers || []).length)
   const isPromoted  = !!cluster.promoted_tag
   const isDismissed = cluster.dismissed
 
   const inputRef = useRef(null)
-  const [pickerPos, setPickerPos] = useState(null)
-
-  function openPicker() {
-    if (!inputRef.current) return
-    const rect = inputRef.current.getBoundingClientRect()
-    setPickerPos({ top: rect.bottom + window.scrollY + 4, left: rect.left + window.scrollX })
-  }
-
-  function onSelect(tag) {
-    onPromoteInput(tag)
-    setPickerPos(null)
-    // Focus back so user can confirm with Enter
-    setTimeout(() => inputRef.current?.focus(), 0)
-  }
-
-  const tagSuggestions = Object.values(tagMap).map(t => ({ tag: t.tag, display_name: t.display_name || t.tag }))
 
   return (
     <div className={`discover-card${isDismissed ? ' discover-card--dismissed' : ''}${isPromoted ? ' discover-card--promoted' : ''}`}>
@@ -241,12 +225,8 @@ function ClusterCard({ cluster, promoteInput, promoteStatus, onPromoteInput, onP
               className="discover-promote-input"
               placeholder="tag name…"
               value={promoteInput}
-              onChange={e => { onPromoteInput(e.target.value); if (!pickerPos) openPicker() }}
-              onFocus={openPicker}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !pickerPos) onPromote()
-                if (e.key === 'Escape') setPickerPos(null)
-              }}
+              onChange={e => onPromoteInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') onPromote() }}
               disabled={promoteStatus === 'saving'}
             />
             <button
@@ -259,16 +239,6 @@ function ClusterCard({ cluster, promoteInput, promoteStatus, onPromoteInput, onP
           </div>
           <button className="discover-dismiss-btn" onClick={onDismiss} title="Dismiss">✕</button>
         </div>
-      )}
-
-      {pickerPos && createPortal(
-        <TagDropdown
-          position={pickerPos}
-          suggestions={tagSuggestions}
-          onSelect={onSelect}
-          onClose={() => setPickerPos(null)}
-        />,
-        document.body
       )}
     </div>
   )

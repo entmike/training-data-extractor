@@ -342,3 +342,26 @@ CREATE TABLE IF NOT EXISTS comfyui_cache (
     data       JSONB        NOT NULL,
     updated_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
+
+
+-- ---------------------------------------------------------------------------
+-- comfy_queue
+-- ComfyUI prompt jobs observed via polling /queue.
+-- Each row is a single prompt submission keyed by its server-assigned prompt_id.
+-- workflow = GUI workflow graph (extra_data.extra_pnginfo.workflow)
+-- prompt   = API-format prompt (the node dict ComfyUI executes)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS comfy_queue (
+    prompt_id     TEXT        PRIMARY KEY,
+    number        BIGINT,                                 -- ComfyUI queue ordinal
+    status        TEXT        NOT NULL DEFAULT 'pending', -- pending | running | completed
+    title         TEXT,
+    node_count    INTEGER,
+    client_id     TEXT,                                   -- extra_data.client_id, if present
+    workflow      JSONB,                                  -- GUI workflow graph
+    prompt        JSONB,                                  -- API-format prompt (nodes dict)
+    extra_data    JSONB,                                  -- raw extra_data minus extra_pnginfo
+    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at  TIMESTAMPTZ
+);

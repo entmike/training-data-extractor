@@ -871,6 +871,76 @@ class Database:
                 """, (tag, tag)).fetchall()
             return [dict(r) for r in rows]
 
+    # ── ComfyUI queue operations ──────────────────────────────────────────────
+
+    def get_config_value(self, key: str) -> Optional[str]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM config WHERE key = %s", (key,)
+            ).fetchone()
+            return row['value'] if row else None
+
+    def upsert_comfy_queue_job(
+        self,
+        prompt_id: str,
+        number: Optional[int],
+        status: str,
+        title: Optional[str],
+        node_count: Optional[int],
+        client_id: Optional[str],
+        workflow: Optional[dict],
+        prompt: Optional[dict],
+        extra_data: Optional[dict],
+    ) -> bool:
+        """Insert a new queue job, or refresh last_seen_at + status on an existing one.
+
+        Returns True when the row was newly inserted, False when it already existed.
+        """
+        wf_json = json.dumps(workflow) if workflow is not None else None
+        pr_json = json.dumps(prompt) if prompt is not None else None
+        ex_json = json.dumps(extra_data) if extra_data is not None else None
+        with self._connection() as conn:
+            cur = conn.execute("""
+                INSERT INTO comfy_queue
+                    (prompt_id, number, status, title, node_count, client_id,
+                     workflow, prompt, extra_data)
+                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb)
+                ON CONFLICT (prompt_id) DO UPDATE SET
+                    number       = COALESCE(EXCLUDED.number, comfy_queue.number),
+                    status       = EXCLUDED.status,
+                    title        = COALESCE(EXCLUDED.title, comfy_queue.title),
+                    node_count   = COALESCE(EXCLUDED.node_count, comfy_queue.node_count),
+                    client_id    = COALESCE(EXCLUDED.client_id, comfy_queue.client_id),
+                    last_seen_at = NOW()
+                RETURNING (xmax = 0) AS inserted
+            """, (prompt_id, number, status, title, node_count, client_id,
+                  wf_json, pr_json, ex_json))
+            row = cur.fetchone()
+            conn.commit()
+            return bool(row['inserted'])
+
+    def mark_comfy_queue_completed(self, active_prompt_ids: List[str]) -> int:
+        """Mark every non-completed job whose prompt_id is NOT in *active_prompt_ids*
+        as completed (sets completed_at = NOW()).  Returns the number affected."""
+        with self._connection() as conn:
+            if active_prompt_ids:
+                cur = conn.execute("""
+                    UPDATE comfy_queue
+                       SET status       = 'completed',
+                           completed_at = NOW()
+                     WHERE completed_at IS NULL
+                       AND prompt_id <> ALL(%s)
+                """, (list(active_prompt_ids),))
+            else:
+                cur = conn.execute("""
+                    UPDATE comfy_queue
+                       SET status       = 'completed',
+                           completed_at = NOW()
+                     WHERE completed_at IS NULL
+                """)
+            conn.commit()
+            return cur.rowcount or 0
+
 
 def write_jsonl(path: Path, entries: Iterator[Dict[str, Any]]) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)

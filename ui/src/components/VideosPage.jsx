@@ -36,6 +36,11 @@ export default function VideosPage({ tagMap, allTags }) {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadResult, setUploadResult] = useState(null)  // null | { name } | { error }
 
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshResult, setRefreshResult] = useState(null)  // null | { indexed } | { error }
+
+  const [mobilePickerOpen, setMobilePickerOpen] = useState(false)
+
   // Filters
   const [activeIncludeTags, setActiveIncludeTags] = useState(new Set())
   const [activeExcludeTags, setActiveExcludeTags] = useState(new Set())
@@ -50,6 +55,38 @@ export default function VideosPage({ tagMap, allTags }) {
   const excludeAddRef = useRef(null)
 
   const videoId = videoIdParam ? Number(videoIdParam) : null
+
+  // Expanded folder state — persisted; root folder expanded by default
+  const [expandedFolders, setExpandedFolders] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('expandedFolders') || '[""]')) }
+    catch { return new Set(['']) }
+  })
+
+  function toggleFolder(folder) {
+    setExpandedFolders(prev => {
+      const next = new Set(prev)
+      next.has(folder) ? next.delete(folder) : next.add(folder)
+      try { localStorage.setItem('expandedFolders', JSON.stringify([...next])) } catch {}
+      return next
+    })
+  }
+
+  // Group videos by parent directory
+  const videosByFolder = useMemo(() => {
+    const map = new Map()
+    for (const v of videos) {
+      const parts = (v.path || '').split('/')
+      const folder = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+      if (!map.has(folder)) map.set(folder, [])
+      map.get(folder).push(v)
+    }
+    // Sort folders alphabetically; empty string (root) last
+    return new Map([...map.entries()].sort(([a], [b]) => {
+      if (a === '') return 1
+      if (b === '') return -1
+      return a.localeCompare(b)
+    }))
+  }, [videos])
 
   useEffect(() => {
     if (videoId == null) { setVideoTags([]); return }
@@ -137,6 +174,31 @@ export default function VideosPage({ tagMap, allTags }) {
     await doImport(file, vid)
   }
 
+  async function handleRefresh() {
+    setRefreshing(true)
+    setRefreshResult(null)
+    try {
+      const r = await fetch('/api/videos/refresh', { method: 'POST' })
+      const d = await r.json()
+      if (!r.ok) {
+        setRefreshResult({ error: d.error || 'Refresh failed' })
+        return
+      }
+      const listRes = await fetch('/api/videos')
+      const listData = await listRes.json()
+      const vids = (listData.videos || []).slice().sort((a, b) =>
+        (a.name || a.path).localeCompare(b.name || b.path)
+      )
+      const prevCount = videos.length
+      setVideos(vids)
+      setRefreshResult({ indexed: d.indexed, added: Math.max(0, vids.length - prevCount) })
+    } catch {
+      setRefreshResult({ error: 'Request failed' })
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
   function handleUploadVideo(e) {
     const file = e.target.files?.[0]
     e.target.value = ''
@@ -195,9 +257,27 @@ export default function VideosPage({ tagMap, allTags }) {
 
   return (
     <div className="videos-page">
+      {/* Mobile picker bar — only visible on phone-sized screens */}
+      <button
+        type="button"
+        className="list-mobile-picker"
+        onClick={() => setMobilePickerOpen(o => !o)}
+        aria-expanded={mobilePickerOpen}
+      >
+        <span className="list-mobile-picker__label">
+          {selected ? selected.name : (videos.length === 0 ? 'No videos' : 'Choose video…')}
+        </span>
+        <span className="list-mobile-picker__chev" aria-hidden="true">{mobilePickerOpen ? '▾' : '▸'}</span>
+      </button>
+      {mobilePickerOpen && (
+        <div
+          className="list-mobile-backdrop"
+          onClick={() => setMobilePickerOpen(false)}
+        />
+      )}
       <div className="videos-layout">
         {/* Sidebar */}
-        <div className="videos-sidebar">
+        <div className={`videos-sidebar${mobilePickerOpen ? ' videos-sidebar--open' : ''}`}>
           {loading ? (
             [1,2,3].map(n => (
               <div key={n} className="video-sidebar-item video-sidebar-item--skeleton">
@@ -206,20 +286,58 @@ export default function VideosPage({ tagMap, allTags }) {
                 <span className="skeleton skeleton--text" style={{ width: 36 }} />
               </div>
             ))
-          ) : videos.map(v => (
-            <div
-              key={v.id}
-              className={`video-sidebar-item${v.id === videoId ? ' video-sidebar-item--active' : ''}`}
-              onClick={() => {
-                setImportResult(null)
-                navigate(v.id === videoId ? '/videos' : `/videos/${v.id}`)
-              }}
-            >
-              <span className="video-sidebar-name">{v.name}</span>
-              <span className="video-sidebar-count">{v.scene_count}</span>
-              <span className="video-sidebar-frames" title="Total frames">{v.total_frames > 0 ? `${v.total_frames.toLocaleString()}f` : ''}</span>
-            </div>
-          ))}
+          ) : [...videosByFolder.entries()].map(([folder, folderVideos]) => {
+            const collapsed = !expandedFolders.has(folder)
+            const folderLabel = folder ? folder.split('/').pop() : '/'
+            const hasActive = folderVideos.some(v => v.id === videoId)
+            return (
+              <div key={folder || '__root__'} className="video-folder-group">
+                <div
+                  className={`video-folder-header${hasActive ? ' video-folder-header--active' : ''}`}
+                  onClick={() => toggleFolder(folder)}
+                  title={folder || '/'}
+                >
+                  <span className="video-folder-chevron">{collapsed ? '▸' : '▾'}</span>
+                  <span className="video-folder-name">{folderLabel}</span>
+                  <span className="video-folder-count">{folderVideos.length}</span>
+                </div>
+                {!collapsed && folderVideos.map(v => (
+                  <div
+                    key={v.id}
+                    className={`video-sidebar-item video-sidebar-item--nested${v.id === videoId ? ' video-sidebar-item--active' : ''}`}
+                    onClick={() => {
+                      setImportResult(null)
+                      setMobilePickerOpen(false)
+                      navigate(v.id === videoId ? '/videos' : `/videos/${v.id}`)
+                    }}
+                  >
+                    <span className="video-sidebar-name">{v.name}</span>
+                    <span className="video-sidebar-count">{v.scene_count}</span>
+                    <span className="video-sidebar-frames" title="Total frames">{v.total_frames > 0 ? `${v.total_frames.toLocaleString()}f` : ''}</span>
+                  </div>
+                ))}
+              </div>
+            )
+          })}
+
+          {/* Refresh — re-scan source directory for new files */}
+          <div className="sidebar-import-zone">
+            <button
+              className="sidebar-import-btn"
+              disabled={refreshing}
+              onClick={handleRefresh}
+              title="Scan the source directory for new video files"
+            >{refreshing ? 'Scanning…' : '↻ Refresh'}</button>
+            {refreshResult && (
+              refreshResult.error
+                ? <div className="import-result import-result--error">{refreshResult.error}</div>
+                : <div className="import-result import-result--ok">
+                    {refreshResult.added > 0
+                      ? `+${refreshResult.added} new · ${refreshResult.indexed} total`
+                      : `No new videos · ${refreshResult.indexed} total`}
+                  </div>
+            )}
+          </div>
 
           {/* Import from zip */}
           <div className="sidebar-import-zone">
@@ -458,6 +576,10 @@ function VideoDetail({ video, onSaved }) {
   const [nameStatus,   setNameStatus]   = useState('')
   const [promptStatus, setPromptStatus] = useState('')
 
+  const [scanOverride, setScanOverride] = useState(false)
+  const [scanning,     setScanning]     = useState(false)
+  const [scanResult,   setScanResult]   = useState(null)  // null | { scenes, cleared } | { error }
+
   useEffect(() => {
     setName(video.name || '')
     setPrompt(video.prompt || '')
@@ -465,7 +587,34 @@ function VideoDetail({ video, onSaved }) {
     setSavedPrompt(video.prompt || '')
     setNameStatus('')
     setPromptStatus('')
+    setScanOverride(false)
+    setScanResult(null)
   }, [video.id])
+
+  async function scanScenes() {
+    if (scanOverride && !window.confirm(
+      `Override existing scenes for "${video.name || video.path}"?\n\n` +
+      `This will permanently delete existing scenes, candidates, samples, ` +
+      `and buckets for this video, then re-run scene detection.`
+    )) return
+    setScanning(true)
+    setScanResult(null)
+    try {
+      const r = await fetch(`/api/videos/${video.id}/scan-scenes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ override: scanOverride }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setScanResult({ error: d.error || 'Scan failed' }); return }
+      onSaved?.({ id: video.id, scene_count: d.scenes })
+      setScanResult({ scenes: d.scenes, cleared: d.cleared_scenes })
+    } catch {
+      setScanResult({ error: 'Request failed' })
+    } finally {
+      setScanning(false)
+    }
+  }
 
   const pct = video.scene_count > 0
     ? Math.round((video.captioned / video.scene_count) * 100) : 0
@@ -519,6 +668,9 @@ function VideoDetail({ video, onSaved }) {
           <div className="progress-bar-wrap" style={{ height: 4, borderRadius: 2, marginTop: 4 }}>
             <div className="progress-bar" style={{ width: `${pct}%` }} />
           </div>
+          {video.face_count > 0 && (
+            <span className="video-detail-face-count">👤 {video.face_count.toLocaleString()} face embeddings</span>
+          )}
         </div>
       </div>
 
@@ -537,6 +689,36 @@ function VideoDetail({ video, onSaved }) {
         <div className="video-detail-field">
           <label className="video-detail-label">Hash</label>
           <input className="video-detail-input" value={(video.hash || '').slice(0, 16) + '…'} readOnly title={video.hash} />
+        </div>
+
+        <div className="video-detail-field video-detail-field--full">
+          <label className="video-detail-label">Scene detection</label>
+          <div className="video-detail-input-row">
+            <button
+              className="save-btn"
+              disabled={scanning}
+              onClick={scanScenes}
+            >{scanning ? 'Scanning…' : 'Scan scenes'}</button>
+            <label className="video-detail-checkbox">
+              <input
+                type="checkbox"
+                checked={scanOverride}
+                onChange={e => setScanOverride(e.target.checked)}
+                disabled={scanning}
+              />
+              <span>Override existing scenes</span>
+            </label>
+            <span className="video-detail-status">
+              {scanResult && (
+                scanResult.error
+                  ? <span className="video-detail-status--error">{scanResult.error}</span>
+                  : <span>
+                      ✓ {scanResult.scenes} scenes
+                      {scanResult.cleared > 0 ? ` (cleared ${scanResult.cleared})` : ''}
+                    </span>
+              )}
+            </span>
+          </div>
         </div>
 
         <div className="video-detail-field video-detail-field--full">
@@ -587,18 +769,54 @@ function VideoSettings({ video, onSaved, onDeleted }) {
   const [deleteConfirm,   setDeleteConfirm]   = useState('')
   const [deleting,        setDeleting]        = useState(false)
   const [deleteError,     setDeleteError]     = useState('')
+  const [deleteFile,      setDeleteFile]      = useState(false)
 
   const initialOverride = video.fps_override == null ? '' : String(video.fps_override)
   const [fpsDraft,  setFpsDraft]  = useState(initialOverride)
   const [fpsStatus, setFpsStatus] = useState('')
 
+  const initialFilename = video.path ? video.path.split('/').pop() : ''
+  const [filenameDraft, setFilenameDraft] = useState(initialFilename)
+  const [renameStatus,  setRenameStatus]  = useState('')
+  const [renaming,      setRenaming]      = useState(false)
+
   useEffect(() => {
     setShowDeleteModal(false)
     setDeleteConfirm('')
     setDeleteError('')
+    setDeleteFile(false)
     setFpsDraft(video.fps_override == null ? '' : String(video.fps_override))
     setFpsStatus('')
-  }, [video.id, video.fps_override])
+    setFilenameDraft(video.path ? video.path.split('/').pop() : '')
+    setRenameStatus('')
+    setRenaming(false)
+  }, [video.id, video.fps_override, video.path])
+
+  async function renameFile() {
+    const trimmed = filenameDraft.trim()
+    if (!trimmed || trimmed === initialFilename) return
+    setRenaming(true)
+    setRenameStatus('Renaming…')
+    try {
+      const r = await fetch(`/api/videos/${video.id}/rename`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: trimmed }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Rename failed')
+      // If the displayed name was the old basename (no custom display name set),
+      // follow the rename. Otherwise keep the user's custom name.
+      const nextName = video.name === initialFilename ? d.name : video.name
+      onSaved?.({ id: video.id, path: d.path, name: nextName })
+      setRenameStatus('✓ Renamed')
+      setTimeout(() => setRenameStatus(''), 3000)
+    } catch (err) {
+      setRenameStatus(err.message || 'Error')
+    } finally {
+      setRenaming(false)
+    }
+  }
 
   async function saveFpsOverride(value) {
     setFpsStatus('Saving…')
@@ -626,7 +844,8 @@ function VideoSettings({ video, onSaved, onDeleted }) {
     setDeleting(true)
     setDeleteError('')
     try {
-      const r = await fetch(`/api/videos/${video.id}`, { method: 'DELETE' })
+      const url = `/api/videos/${video.id}${deleteFile ? '?delete_file=1' : ''}`
+      const r = await fetch(url, { method: 'DELETE' })
       const data = await r.json()
       if (!r.ok) throw new Error(data.error || 'Delete failed')
       onDeleted(video.id)
@@ -639,9 +858,34 @@ function VideoSettings({ video, onSaved, onDeleted }) {
   const detectedFps = video.fps ? parseFloat(video.fps).toFixed(3) : '—'
   const fpsDirty = fpsDraft !== initialOverride
 
+  const filenameDirty = filenameDraft.trim() !== initialFilename && filenameDraft.trim().length > 0
+
   return (
     <div className="video-detail">
       <div className="video-detail-fields">
+        <div className="video-detail-field video-detail-field--full">
+          <label className="video-detail-label">
+            Filename
+            <span className="video-detail-label-hint"> — rename the source file on disk; cached clips and waveforms move with it</span>
+          </label>
+          <div className="video-detail-input-row">
+            <input
+              className="video-detail-input"
+              value={filenameDraft}
+              placeholder={initialFilename}
+              onChange={e => { setFilenameDraft(e.target.value); setRenameStatus('') }}
+              onKeyDown={e => { if (e.key === 'Enter' && filenameDirty && !renaming) renameFile() }}
+              disabled={renaming}
+            />
+            <span className="video-detail-status">{renameStatus}</span>
+            <button
+              className="save-btn"
+              disabled={!filenameDirty || renaming}
+              onClick={renameFile}
+            >Rename</button>
+          </div>
+        </div>
+
         <div className="video-detail-field video-detail-field--full">
           <label className="video-detail-label">
             FPS override
@@ -695,8 +939,16 @@ function VideoSettings({ video, onSaved, onDeleted }) {
             <h3 className="delete-video-title">Delete video from database?</h3>
             <p className="delete-video-body">
               This will permanently remove <strong>{confirmTitle}</strong> and all its scenes, tags, buckets, and clip memberships from the database.
-              The source video file will not be touched.
             </p>
+            <label className="delete-video-file-label">
+              <input
+                type="checkbox"
+                checked={deleteFile}
+                onChange={e => setDeleteFile(e.target.checked)}
+              />
+              <span>Delete video file from disk</span>
+              {deleteFile && <span className="delete-video-file-warn"> ⚠ This cannot be undone</span>}
+            </label>
             <p className="delete-video-body">Type <strong>{confirmTitle}</strong> to confirm:</p>
             <input
               className="delete-video-input"
@@ -708,9 +960,9 @@ function VideoSettings({ video, onSaved, onDeleted }) {
             />
             {deleteError && <p className="delete-video-error">{deleteError}</p>}
             <div className="delete-video-actions">
-              <button className="delete-video-cancel" onClick={() => { setShowDeleteModal(false); setDeleteConfirm('') }} disabled={deleting}>Cancel</button>
+              <button className="delete-video-cancel" onClick={() => { setShowDeleteModal(false); setDeleteConfirm(''); setDeleteFile(false) }} disabled={deleting}>Cancel</button>
               <button className="delete-video-confirm" onClick={doDelete} disabled={!deleteReady || deleting}>
-                {deleting ? 'Deleting…' : 'Delete'}
+                {deleting ? 'Deleting…' : deleteFile ? 'Delete DB + File' : 'Delete'}
               </button>
             </div>
           </div>

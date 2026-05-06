@@ -189,6 +189,21 @@ def detect_scenes_in_video(
             if d is not None
         ]
 
+        # Fallback: if no cuts were detected treat the whole video as one scene
+        if not scenes:
+            end_time = total_frames / fps if fps else 0.0
+            fallback = {
+                "start_time": 0.0,
+                "end_time": end_time,
+                "duration": end_time,
+                "start_frame": 0,
+                "end_frame": total_frames,
+            }
+            scenes = [fallback]
+            logger.info(f"No scene cuts detected — treating entire video as 1 scene ({end_time:.1f}s)")
+            if flush_callback:
+                flush_callback(scenes)
+
         logger.info(f"Detected {len(scenes)} scenes")
         return scenes
 

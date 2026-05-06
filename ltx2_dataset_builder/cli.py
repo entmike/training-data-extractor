@@ -291,7 +291,7 @@ Examples:
     parser.add_argument(
         "--step",
         type=str,
-        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "subtitles", "debug-scenes", "debug-candidates", "auto-tag", "scan-faces", "cluster-faces", "scan-outputs"],
+        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "subtitles", "debug-scenes", "debug-candidates", "auto-tag", "scan-faces", "cluster-faces", "scan-outputs", "scan-comfy-queue"],
         help="Run a specific pipeline step"
     )
     parser.add_argument(
@@ -312,6 +312,12 @@ Examples:
         default=30,
         metavar="SECONDS",
         help="Seconds between scans in daemon mode (default: 30)"
+    )
+    parser.add_argument(
+        "--comfy-endpoint",
+        type=str,
+        default=None,
+        help="ComfyUI base URL override for --step scan-comfy-queue (default: read from config.comfyui_endpoint)"
     )
     
     # Processing options
@@ -568,6 +574,18 @@ Examples:
                 run_daemon(outputs_dir, db, interval=args.daemon_interval)
             else:
                 scan_outputs(outputs_dir, db)
+        elif args.step == "scan-comfy-queue":
+            from .comfy.queue_poll import run_daemon as run_queue_daemon, poll_once
+            from .utils.io import Database
+            db = Database(config.dsn)
+            if args.daemon:
+                run_queue_daemon(db, interval=args.daemon_interval, endpoint_override=args.comfy_endpoint)
+            else:
+                endpoint = args.comfy_endpoint or db.get_config_value('comfyui_endpoint')
+                if not endpoint:
+                    logger.error("ComfyUI endpoint not configured (config.comfyui_endpoint) and --comfy-endpoint not provided")
+                    return 1
+                poll_once(db, endpoint.rstrip('/'))
         elif args.step:
             run_step(config, args.step, video=args.video)
         else:

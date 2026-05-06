@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useContext } from 'react'
 import { createPortal } from 'react-dom'
 import JsonView from '@uiw/react-json-view'
 import { darkTheme } from '@uiw/react-json-view/dark'
-import ComfyQueuePage from './ComfyQueuePage'
+import Header from './Header'
+import { AppContext } from '../context'
 
 const PAGE_SIZE = 50
 
@@ -744,20 +745,27 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
   ]
 
   return createPortal(
-    <div className="video-modal-overlay" onClick={onClose}>
-      <div
-        className="video-modal-content"
-        style={{ display: 'flex', flexDirection: 'column', padding: 0 }}
-        onClick={e => e.stopPropagation()}
-      >
-        {/* header: nav + filename + close */}
+    <div className="scene-page-overlay">
+      <Header isLoading={false} />
+      <div className="video-page-wrap">
+        <div
+          className="video-page-content"
+          style={{ display: 'flex', flexDirection: 'column', padding: 0 }}
+        >
+        {/* header: back + nav + filename */}
         <div className="video-modal-header" style={{ margin: 0, padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', gap: 8 }}>
+          <button className="video-page-back-btn" onClick={onClose} title="Back to list">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="19" y1="12" x2="5" y2="12"/>
+              <polyline points="12 19 5 12 12 5"/>
+            </svg>
+            <span>Back</span>
+          </button>
           <button className="modal-btn modal-btn--cancel" style={{ flexShrink: 0, padding: '3px 10px' }}
                   disabled={!hasPrev} onClick={onPrev}>←</button>
           <button className="modal-btn modal-btn--cancel" style={{ flexShrink: 0, padding: '3px 10px' }}
                   disabled={!hasNext} onClick={onNext}>→</button>
           <span className="video-modal-title" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{output.filename}</span>
-          <button className="modal-close-btn" onClick={onClose}>&times;</button>
         </div>
 
         {/* action bar */}
@@ -932,6 +940,7 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
             <div style={{ padding: 16, color: 'var(--text-muted)' }}>No {tab} data embedded in this file.</div>
           )}
         </div>
+        </div>
       </div>
     </div>,
     document.body
@@ -1010,7 +1019,7 @@ function OutputCard({ output, onClick, inTrash, onRestore, onDelete, onLikeToggl
 
 // ── Recycle bin view ─────────────────────────────────────────────────────────
 
-function RecycleBinView() {
+function RecycleBinView({ hideNsfw }) {
   const [items, setItems]     = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected]   = useState(null)
@@ -1019,6 +1028,9 @@ function RecycleBinView() {
   const [emptying, setEmptying]   = useState(false)
   const [sort, setSort]           = useState('deleted')
   const [dir, setDir]             = useState('desc')
+
+  const visibleItems = hideNsfw ? items.filter(o => !o.nsfw) : items
+  const hiddenCount  = items.length - visibleItems.length
 
   const toggleSort = (col) => {
     if (sort === col) setDir(d => d === 'desc' ? 'asc' : 'desc')
@@ -1065,7 +1077,12 @@ function RecycleBinView() {
       <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)',
                     display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
         <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>
-          {loading ? '…' : `${items.length} deleted file${items.length !== 1 ? 's' : ''}`}
+          {loading ? '…' : `${visibleItems.length} deleted file${visibleItems.length !== 1 ? 's' : ''}`}
+          {!loading && hiddenCount > 0 && (
+            <span style={{ marginLeft: 6, fontStyle: 'italic' }}>
+              ({hiddenCount} NSFW hidden)
+            </span>
+          )}
         </span>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Sort:</span>
@@ -1113,11 +1130,13 @@ function RecycleBinView() {
         {loading && (
           <div style={{ padding: 32, color: 'var(--text-muted)', textAlign: 'center' }}>Loading…</div>
         )}
-        {!loading && items.length === 0 && (
-          <div style={{ padding: 32, color: 'var(--text-muted)', textAlign: 'center' }}>Recycle bin is empty.</div>
+        {!loading && visibleItems.length === 0 && (
+          <div style={{ padding: 32, color: 'var(--text-muted)', textAlign: 'center' }}>
+            {hiddenCount > 0 ? 'No non-NSFW deleted files. Unlock the NSFW tab to view hidden items.' : 'Recycle bin is empty.'}
+          </div>
         )}
         <div className="outputs-grid">
-          {items.map((o, i) => (
+          {visibleItems.map((o, i) => (
             <OutputCard
               key={o.id}
               output={o}
@@ -1135,9 +1154,9 @@ function RecycleBinView() {
           inTrash
           onClose={() => { setSelected(null); setSelectedIdx(null) }}
           hasPrev={selectedIdx > 0}
-          hasNext={selectedIdx < items.length - 1}
-          onPrev={() => { const i = selectedIdx - 1; setSelected(items[i]); setSelectedIdx(i) }}
-          onNext={() => { const i = selectedIdx + 1; setSelected(items[i]); setSelectedIdx(i) }}
+          hasNext={selectedIdx < visibleItems.length - 1}
+          onPrev={() => { const i = selectedIdx - 1; setSelected(visibleItems[i]); setSelectedIdx(i) }}
+          onNext={() => { const i = selectedIdx + 1; setSelected(visibleItems[i]); setSelectedIdx(i) }}
           onRestore={() => handleRestore(selected)}
         />
       )}
@@ -1254,9 +1273,21 @@ function OutputsView() {
   function handleNsfwToggle(output) {
     const newNsfw = !output.nsfw
     fetch(`/api/outputs/${output.id}/${newNsfw ? 'nsfw' : 'unnsfw'}`, { method: 'POST' })
-    const updated = { ...output, nsfw: newNsfw }
-    setOutputs(prev => prev.map(o => o.id === output.id ? updated : o))
-    if (selected?.id === output.id) setSelected(updated)
+    if (newNsfw) {
+      // Remove immediately from the outputs list
+      const idx = outputs.findIndex(o => o.id === output.id)
+      const next = outputs.filter(o => o.id !== output.id)
+      setOutputs(next)
+      setTotal(t => (t ?? 1) - 1)
+      if (selected?.id === output.id) {
+        if (next.length === 0) { setSelected(null); setSelectedIdx(null) }
+        else { const i = Math.min(idx, next.length - 1); setSelected(next[i]); setSelectedIdx(i) }
+      }
+    } else {
+      const updated = { ...output, nsfw: false }
+      setOutputs(prev => prev.map(o => o.id === output.id ? updated : o))
+      if (selected?.id === output.id) setSelected(updated)
+    }
   }
 
   return (
@@ -1414,9 +1445,19 @@ function LikedView() {
   function handleNsfwToggle(output) {
     const newNsfw = !output.nsfw
     fetch(`/api/outputs/${output.id}/${newNsfw ? 'nsfw' : 'unnsfw'}`, { method: 'POST' })
-    const updated = { ...output, nsfw: newNsfw }
-    setItems(prev => prev.map(o => o.id === output.id ? updated : o))
-    if (selected?.id === output.id) setSelected(updated)
+    if (newNsfw) {
+      const idx = items.findIndex(o => o.id === output.id)
+      const next = items.filter(o => o.id !== output.id)
+      setItems(next)
+      if (selected?.id === output.id) {
+        if (next.length === 0) { setSelected(null); setSelectedIdx(null) }
+        else { const i = Math.min(idx, next.length - 1); setSelected(next[i]); setSelectedIdx(i) }
+      }
+    } else {
+      const updated = { ...output, nsfw: false }
+      setItems(prev => prev.map(o => o.id === output.id ? updated : o))
+      if (selected?.id === output.id) setSelected(updated)
+    }
   }
 
   return (
@@ -1666,23 +1707,15 @@ function NsfwGate({ onUnlocked }) {
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function OutputsPage() {
-  const [activeTab, setActiveTab]     = useState('outputs')
-  const [nsfwEnabled, setNsfwEnabled] = useState(false)   // password is set in config
-  const [nsfwUnlocked, setNsfwUnlocked] = useState(false) // correct password entered this session
-
-  useEffect(() => {
-    fetch('/api/config')
-      .then(r => r.json())
-      .then(d => setNsfwEnabled(!!(d.nsfw_password || '').trim()))
-      .catch(() => {})
-  }, [])
+  const [activeTab, setActiveTab]       = useState('outputs')
+  const [nsfwUnlocked, setNsfwUnlocked] = useState(false)
+  const { nsfwEnabled } = useContext(AppContext)
 
   const tabs = [
     ['outputs', 'Outputs'],
     ['liked', '♥ Liked'],
     ...(nsfwEnabled ? [['nsfw', '⚠ NSFW']] : []),
     ['trash', '🗑 Recycle Bin'],
-    ['queue', 'ComfyUI Queue'],
   ]
 
   return (
@@ -1712,8 +1745,7 @@ export default function OutputsPage() {
         : activeTab === 'liked' ? <LikedView />
         : activeTab === 'nsfw'
           ? (nsfwUnlocked ? <NsfwView /> : <NsfwGate onUnlocked={() => setNsfwUnlocked(true)} />)
-        : activeTab === 'queue' ? <ComfyQueuePage />
-        : <RecycleBinView />}
+        : <RecycleBinView hideNsfw={nsfwEnabled && !nsfwUnlocked} />}
     </div>
   )
 }

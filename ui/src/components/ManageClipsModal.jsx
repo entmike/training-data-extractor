@@ -30,7 +30,7 @@ function itemToScene(item, clipId) {
   }
 }
 
-export default function ManageClipsModal({ tagMap, onClose, initialClipId, onClipSelect }) {
+export default function ManageClipsModal({ tagMap, onClose, initialClipId, initialItemId, onClipSelect, onItemSelect }) {
   const [clips, setClips] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [items, setItems] = useState([])
@@ -40,7 +40,6 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
   const [creating, setCreating] = useState(false)
   const [renamingId, setRenamingId] = useState(null)
   const [renameDraft, setRenameDraft] = useState('')
-  const [editingItem, setEditingItem] = useState(null)
   const [exportProgress, setExportProgress] = useState(null) // null | { done, total }
   const [exportError, setExportError] = useState('')
   const [clearingCaptions, setClearingCaptions] = useState(false)
@@ -48,10 +47,13 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
   const [savingPrompt, setSavingPrompt] = useState(false)
   const [detailCollapsed, setDetailCollapsed] = useState(false)
   const [sort, setSort] = useState('')
+  const [mobilePickerOpen, setMobilePickerOpen] = useState(false)
 
   useEffect(() => {
     fetchClips()
   }, [])
+
+  const editingItem = initialItemId != null ? items.find(i => i.id === initialItemId) || null : null
 
   useEffect(() => {
     function onKey(e) { if (e.key === 'Escape' && !editingItem) onClose() }
@@ -91,6 +93,7 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
   }
 
   function selectClip(col) {
+    setMobilePickerOpen(false)
     if (col.id === selectedId) {
       setSelectedId(null)
       onClipSelect?.(null)
@@ -255,9 +258,23 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
   return (
     <>
     <div className="clips-page">
+        <button
+          type="button"
+          className="list-mobile-picker"
+          onClick={() => setMobilePickerOpen(o => !o)}
+          aria-expanded={mobilePickerOpen}
+        >
+          <span className="list-mobile-picker__label">
+            {selectedCol ? selectedCol.name : (clips.length === 0 ? 'No clips' : 'Choose clip…')}
+          </span>
+          <span className="list-mobile-picker__chev" aria-hidden="true">{mobilePickerOpen ? '▾' : '▸'}</span>
+        </button>
+        {mobilePickerOpen && (
+          <div className="list-mobile-backdrop" onClick={() => setMobilePickerOpen(false)} />
+        )}
         <div className="clips-layout">
           {/* Left sidebar: clip list */}
-          <div className="clips-sidebar">
+          <div className={`clips-sidebar${mobilePickerOpen ? ' clips-sidebar--open' : ''}`}>
             <div className="clips-list">
               {loadingClips ? (
                 [1,2,3].map(n => (
@@ -399,7 +416,10 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
                       title="Extract clips + captions and download as zip (output is always 24 fps)"
                     >Export zip</button>
                   </>}
-                  onPlay={scene => setEditingItem(items.find(i => i.scene_id === scene.id) ?? null)}
+                  onPlay={scene => {
+                    const item = items.find(i => i.scene_id === scene.id)
+                    if (item) onItemSelect?.(selectedId, item.id)
+                  }}
                   renderOverlay={scene => {
                     const item = items.find(i => i.scene_id === scene.id)
                     return (
@@ -444,8 +464,8 @@ export default function ManageClipsModal({ tagMap, onClose, initialClipId, onCli
       <ClipItemEditor
         item={editingItem}
         clipId={selectedId}
-        onClose={() => setEditingItem(null)}
-        onSaved={updated => { handleItemSaved(updated); setEditingItem(prev => ({ ...prev, ...updated })) }}
+        onClose={() => onItemSelect?.(selectedId, null)}
+        onSaved={updated => handleItemSaved(updated)}
       />
     )}
     {exportProgress != null && createPortal(

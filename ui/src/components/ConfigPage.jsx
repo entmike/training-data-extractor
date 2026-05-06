@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useContext } from 'react'
 import { createPortal } from 'react-dom'
+import { AppContext } from '../context'
 
 function fmtBytes(b) {
   if (b < 1024) return `${b} B`
@@ -212,6 +213,145 @@ function PreviewCacheSection() {
   )
 }
 
+function OutputsCleanupSection() {
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState(null)   // null | { checked, removed, skipped_parent_missing } | { error }
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [preview, setPreview] = useState(null)  // null | 'loading' | { checked, would_remove, skipped_parent_missing } | { error }
+  const [force, setForce] = useState(false)
+
+  async function fetchCleanup(extra) {
+    const r = await fetch('/api/outputs/cleanup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force, ...extra }),
+    })
+    const d = await r.json()
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`)
+    return d
+  }
+
+  async function openConfirm() {
+    setResult(null)
+    setConfirmOpen(true)
+    setPreview('loading')
+    try {
+      setPreview(await fetchCleanup({ dry_run: true }))
+    } catch (e) {
+      setPreview({ error: e.message })
+    }
+  }
+
+  async function run() {
+    setConfirmOpen(false)
+    setRunning(true)
+    setResult(null)
+    try {
+      setResult(await fetchCleanup({ dry_run: false }))
+    } catch (e) {
+      setResult({ error: e.message })
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  // Re-run preview when force toggles while modal is open
+  useEffect(() => {
+    if (!confirmOpen) return
+    let cancelled = false
+    setPreview('loading')
+    fetchCleanup({ dry_run: true })
+      .then(d => { if (!cancelled) setPreview(d) })
+      .catch(e => { if (!cancelled) setPreview({ error: e.message }) })
+    return () => { cancelled = true }
+  }, [force])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text)', marginBottom: 4 }}>
+        Outputs
+      </div>
+      <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--text-muted)' }}>
+        Remove DB records for output files that no longer exist on disk.
+        Records whose parent directory is missing entirely (e.g. unmounted drive) are skipped.
+      </p>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button
+          onClick={openConfirm}
+          disabled={running}
+          className="modal-btn modal-btn--confirm"
+          style={{ flexShrink: 0, background: running ? undefined : '#ef4444' }}
+        >
+          {running ? 'Cleaning…' : 'Clean up Outputs'}
+        </button>
+        <label style={{ display: 'flex', gap: 6, alignItems: 'center',
+                        fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={force}
+            onChange={e => setForce(e.target.checked)}
+          />
+          <span>Also remove records whose parent directory is missing</span>
+        </label>
+        {result && !result.error && (
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            Checked <span style={{ color: 'var(--text)' }}>{result.checked.toLocaleString()}</span>
+            {' · '}removed <span style={{ color: 'var(--text)' }}>{result.removed.toLocaleString()}</span>
+            {result.skipped_parent_missing > 0 && (
+              <> · skipped <span style={{ color: 'var(--text)' }}>{result.skipped_parent_missing.toLocaleString()}</span> (parent dir missing)</>
+            )}
+          </span>
+        )}
+        {result?.error && (
+          <span style={{ fontSize: 12, color: 'var(--error, #e55)' }}>{result.error}</span>
+        )}
+      </div>
+
+      {confirmOpen && createPortal(
+        <div className="modal-overlay" onClick={() => setConfirmOpen(false)}>
+          <div className="modal-box" style={{ maxWidth: 380 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-title">Clean up Outputs?</div>
+            <p className="modal-body-text">
+              {preview === 'loading' && <>Counting stale records…</>}
+              {preview && preview !== 'loading' && !preview.error && (
+                <>
+                  <strong>{preview.would_remove.toLocaleString()}</strong> of{' '}
+                  <strong>{preview.checked.toLocaleString()}</strong> records will be permanently removed.
+                  {!force && preview.skipped_parent_missing > 0 && (
+                    <> <strong>{preview.skipped_parent_missing.toLocaleString()}</strong> additional records
+                    will be skipped because their parent directory is missing (likely an unmounted drive).</>
+                  )}
+                  {force && (
+                    <> <strong>Force mode is on</strong> — records whose parent directory is missing are
+                    also being removed. Make sure that drive isn't temporarily unmounted.</>
+                  )}
+                </>
+              )}
+              {preview?.error && (
+                <span style={{ color: 'var(--error, #e55)' }}>Preview failed: {preview.error}</span>
+              )}
+            </p>
+            <div className="modal-actions">
+              <button className="modal-btn modal-btn--cancel" onClick={() => setConfirmOpen(false)}>Cancel</button>
+              <button
+                className="modal-btn modal-btn--confirm"
+                style={{ background: '#ef4444' }}
+                onClick={run}
+                disabled={preview === 'loading' || preview?.error || (preview && preview.would_remove === 0)}
+              >
+                {preview && preview !== 'loading' && !preview.error
+                  ? `Remove ${preview.would_remove.toLocaleString()}`
+                  : 'Clean up'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  )
+}
+
 function fmtDate(iso) {
   if (!iso) return null
   return new Date(iso).toLocaleString(undefined, {
@@ -289,6 +429,7 @@ function CacheSection({ section }) {
 export default function ConfigPage() {
   const [config, setConfig] = useState({})
   const [loading, setLoading] = useState(true)
+  const { setNsfwEnabled } = useContext(AppContext)
 
   useEffect(() => {
     fetch('/api/config')
@@ -299,48 +440,52 @@ export default function ConfigPage() {
 
   function handleSave(key, value) {
     setConfig(prev => ({ ...prev, [key]: value }))
+    if (key === 'nsfw_password') {
+      setNsfwEnabled(!!(value || '').trim())
+    }
   }
 
   return (
-    <div style={{ flex: 1, overflow: 'auto' }}>
-      <div style={{ maxWidth: 640, margin: '0 auto', padding: '32px 24px' }}>
-        <h2 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 700, color: 'var(--text)' }}>
-          Configuration
-        </h2>
-        <p style={{ margin: '0 0 32px', fontSize: 13, color: 'var(--text-muted)' }}>
-          Settings are persisted in the database.
-        </p>
+    <div>
+      {loading ? (
+        <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
+      ) : (
+        <>
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 28 }}>
+            {CONFIG_FIELDS.map(field => (
+              <ConfigField
+                key={field.key}
+                field={field}
+                value={config[field.key] ?? ''}
+                onSave={handleSave}
+              />
+            ))}
+          </div>
 
-        {loading ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
-        ) : (
-          <>
-            <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 28 }}>
-              {CONFIG_FIELDS.map(field => (
-                <ConfigField
-                  key={field.key}
-                  field={field}
-                  value={config[field.key] ?? ''}
-                  onSave={handleSave}
-                />
-              ))}
-            </div>
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 24, marginTop: 8 }}>
+            <h3 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>
+              ComfyUI Cache
+            </h3>
+            <p style={{ margin: '0 0 20px', fontSize: 12, color: 'var(--text-muted)' }}>
+              Cached data from your ComfyUI instance. Refresh to fetch the latest.
+            </p>
+            {CACHE_SECTIONS.map(section => (
+              <CacheSection key={section.key} section={section} />
+            ))}
+            <PreviewCacheSection />
+          </div>
 
-            <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 24, marginTop: 8 }}>
-              <h3 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>
-                ComfyUI Cache
-              </h3>
-              <p style={{ margin: '0 0 20px', fontSize: 12, color: 'var(--text-muted)' }}>
-                Cached data from your ComfyUI instance. Refresh to fetch the latest.
-              </p>
-              {CACHE_SECTIONS.map(section => (
-                <CacheSection key={section.key} section={section} />
-              ))}
-              <PreviewCacheSection />
-            </div>
-          </>
-        )}
-      </div>
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 24, marginTop: 8 }}>
+            <h3 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>
+              Maintenance
+            </h3>
+            <p style={{ margin: '0 0 20px', fontSize: 12, color: 'var(--text-muted)' }}>
+              One-shot cleanups for stale DB records.
+            </p>
+            <OutputsCleanupSection />
+          </div>
+        </>
+      )}
     </div>
   )
 }

@@ -111,7 +111,7 @@ class PipelineConfig:
 
     # Video formats to process
     video_extensions: List[str] = field(
-        default_factory=lambda: [".mkv", ".mp4", ".avi", ".mov", ".webm"]
+        default_factory=lambda: [".mkv", ".mp4", ".avi", ".mov", ".webm", ".m4v"]
     )
 
     # Sub-configurations

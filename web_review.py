@@ -1320,9 +1320,9 @@ def run_clustering():
     """Trigger face embedding clustering and store results in face_clusters."""
     from ltx2_dataset_builder.cluster.faces import cluster_all_faces
     from ltx2_dataset_builder.config import PipelineConfig
-    import os, shutil
+    import shutil
     cfg = PipelineConfig()
-    cfg.pg_dsn = os.environ.get('DATABASE_URL')
+    cfg.pg_dsn = _get_dsn()
     try:
         count = cluster_all_faces(cfg)
         if CLUSTER_CACHE_DIR.exists():
@@ -1367,6 +1367,15 @@ def promote_cluster(cluster_id: int):
     if not row:
         conn.close()
         return jsonify({'error': 'Cluster not found'}), 404
+
+    # Auto-create tag definition if it doesn't exist yet
+    auto_display_name = ' '.join(w.capitalize() for w in tag.replace('-', ' ').replace('_', ' ').split())
+    conn.execute(
+        "INSERT INTO tag_definitions (tag, display_name, description) VALUES (%s, %s, %s) "
+        "ON CONFLICT(tag) DO NOTHING",
+        (tag, auto_display_name, '')
+    )
+    conn.commit()
 
     # Check existing refs for this tag
     existing_refs = conn.execute(
@@ -1476,7 +1485,7 @@ def promote_cluster(cluster_id: int):
     conn.execute("UPDATE face_clusters SET promoted_tag = %s, stable_key = %s WHERE id = %s", (tag, tag, cluster_id))
     conn.commit()
     conn.close()
-    return jsonify({'tag': tag, 'ref_ids': ref_ids, 'refs_created': len(ref_ids)})
+    return jsonify({'tag': tag, 'ref_ids': ref_ids, 'refs_created': len(ref_ids), 'display_name': auto_display_name})
 
 
 @app.route('/api/clusters/<int:cluster_id>/sample/<int:sample_index>')
@@ -1911,7 +1920,8 @@ def get_videos():
                COUNT(s.id) as scene_count,
                SUM(CASE WHEN s.caption IS NOT NULL AND s.caption != ''
                         AND substr(s.caption, 1, 2) != '__' THEN 1 ELSE 0 END) as captioned,
-               COALESCE(SUM(s.end_frame - s.start_frame), 0) as total_frames
+               COALESCE(SUM(s.end_frame - s.start_frame), 0) as total_frames,
+               (SELECT COUNT(*) FROM face_detections fd WHERE fd.video_id = v.id) as face_count
         FROM videos v
         LEFT JOIN scenes s ON s.video_id = v.id
         GROUP BY v.id
@@ -1939,6 +1949,7 @@ def get_videos():
             "scene_count": v.get("scene_count") or 0,
             "captioned": v.get("captioned") or 0,
             "total_frames": v.get("total_frames") or 0,
+            "face_count": v.get("face_count") or 0,
         })
     return jsonify({"videos": result})
 
@@ -2023,6 +2034,186 @@ def set_video_fps_override(video_id: int):
 
 ALLOWED_VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv'}
 
+
+@app.route('/api/videos/<int:video_id>/rename', methods=['PUT'])
+def rename_video_file(video_id: int):
+    """Rename the source file on disk and update the stored path.
+
+    Body: {"filename": "new-basename.mkv"}. Filename is a basename only; the
+    file stays in its current directory. Cache artifacts that key off the file
+    stem (clip mp4s, waveform pngs) are renamed to match so we don't orphan or
+    re-encode them."""
+    data = request.get_json() or {}
+    raw = (data.get('filename') or '').strip()
+    if not raw:
+        return jsonify({"error": "Missing filename"}), 400
+    if '/' in raw or '\\' in raw or raw in ('.', '..') or raw.startswith('.'):
+        return jsonify({"error": "Filename must be a basename without path separators"}), 400
+    new_name = Path(raw).name
+    if new_name != raw:
+        return jsonify({"error": "Filename must be a basename without path separators"}), 400
+    if Path(new_name).suffix.lower() not in ALLOWED_VIDEO_EXTENSIONS:
+        return jsonify({"error": f"Unsupported file extension: {Path(new_name).suffix}"}), 400
+
+    conn = get_db_connection()
+    row = conn.execute("SELECT id, path FROM videos WHERE id = %s", (video_id,)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "Video not found"}), 404
+
+    old_path = Path(row['path'])
+    new_path = old_path.parent / new_name
+    if new_path == old_path:
+        conn.close()
+        return jsonify({"video_id": video_id, "path": str(old_path), "name": old_path.name})
+
+    if new_path.exists():
+        conn.close()
+        return jsonify({"error": f"{new_name} already exists in the source directory"}), 409
+    if not old_path.exists():
+        conn.close()
+        return jsonify({"error": f"Source file not found: {old_path}"}), 404
+
+    try:
+        old_path.rename(new_path)
+    except OSError as e:
+        conn.close()
+        return jsonify({"error": f"Rename failed: {e}"}), 500
+
+    # Conflict check on path (different videos can't share a path)
+    dup = conn.execute(
+        "SELECT id FROM videos WHERE path = %s AND id != %s", (str(new_path), video_id)
+    ).fetchone()
+    if dup:
+        # Roll back the rename to avoid divergence
+        try: new_path.rename(old_path)
+        except OSError: pass
+        conn.close()
+        return jsonify({"error": "Another video already uses that path"}), 409
+
+    conn.execute("UPDATE videos SET path = %s WHERE id = %s", (str(new_path), video_id))
+    conn.commit()
+    conn.close()
+
+    # Rename cache artifacts that key off the stem
+    old_stem = old_path.stem
+    new_stem = new_path.stem
+    if old_stem != new_stem:
+        for cache_dir in (CLIPS_DIR, WAVEFORMS_DIR):
+            if not cache_dir.exists():
+                continue
+            for f in cache_dir.glob(f"{old_stem}_*"):
+                rest = f.name[len(old_stem):]  # keeps the leading "_"
+                target = f.with_name(f"{new_stem}{rest}")
+                if not target.exists():
+                    try: f.rename(target)
+                    except OSError: pass
+
+    return jsonify({"video_id": video_id, "path": str(new_path), "name": new_path.name})
+
+
+@app.route('/api/videos/<int:video_id>/scan-scenes', methods=['POST'])
+def scan_scenes_for_video(video_id: int):
+    """Run scene detection for a single video.
+
+    Body: { "override": bool }  — if true, existing scenes (and dependents:
+    candidates, samples, buckets) are deleted first so detection re-runs from
+    scratch.  If false (default) and scenes already exist, no work is done.
+    """
+    body     = request.get_json(silent=True) or {}
+    override = bool(body.get('override'))
+
+    conn = get_db_connection()
+    video = conn.execute(
+        "SELECT id, path FROM videos WHERE id = %s", (video_id,)
+    ).fetchone()
+    if not video:
+        conn.close()
+        return jsonify({"error": "Video not found"}), 404
+    video_path_str = video["path"]
+    video_stem     = Path(video_path_str).stem
+
+    cleared_scenes = 0
+    if override:
+        scene_rows = conn.execute(
+            "SELECT id FROM scenes WHERE video_id = %s", (video_id,)
+        ).fetchall()
+        scene_ids = [r["id"] for r in scene_rows]
+        cleared_scenes = len(scene_ids)
+
+        candidate_rows = conn.execute(
+            "SELECT id FROM candidates WHERE video_id = %s", (video_id,)
+        ).fetchall()
+        candidate_ids = [r["id"] for r in candidate_rows]
+        if candidate_ids:
+            cph = ",".join(["%s"] * len(candidate_ids))
+            conn.execute(f"DELETE FROM samples WHERE candidate_id IN ({cph})", candidate_ids)
+        conn.execute("DELETE FROM candidates WHERE video_id = %s", (video_id,))
+        conn.execute("DELETE FROM buckets    WHERE video_id = %s", (video_id,))
+        conn.execute("DELETE FROM scenes     WHERE video_id = %s", (video_id,))
+        conn.commit()
+
+        for sid in scene_ids:
+            for path in [
+                DEBUG_SCENES_DIR / f"scene_{sid}.jpg",
+                WAVEFORMS_DIR    / f"{video_stem}_{sid}.png",
+                CLIPS_DIR        / f"{video_stem}_{sid}.mp4",
+                CLIPS_DIR        / f"{video_stem}_bucket_{sid}.mp4",
+            ]:
+                try:
+                    if path.exists():
+                        path.unlink()
+                except OSError:
+                    pass
+    conn.close()
+
+    from ltx2_dataset_builder.config import PipelineConfig
+    from ltx2_dataset_builder.scenes.detect import detect_and_cache_scenes
+    cfg = PipelineConfig.from_yaml(CONFIG_PATH) if CONFIG_PATH.exists() else PipelineConfig()
+    cfg.pg_dsn = _get_dsn()
+    cfg.ensure_dirs()
+
+    video_path = Path(video_path_str)
+    if not video_path.is_absolute():
+        video_path = _HERE / video_path
+    if not video_path.exists():
+        return jsonify({"error": f"Video file not found on disk: {video_path}"}), 404
+
+    try:
+        scenes = detect_and_cache_scenes(video_id, video_path, cfg, show_progress=False)
+    except Exception as e:
+        app.logger.exception("Scene scan failed for video %s", video_id)
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({
+        "video_id":       video_id,
+        "override":       override,
+        "cleared_scenes": cleared_scenes,
+        "scenes":         len(scenes),
+    })
+
+
+@app.route('/api/videos/refresh', methods=['POST'])
+def refresh_videos():
+    """Scan the configured source directory for new video files and index them.
+
+    Equivalent to running the `index` pipeline step from the CLI.
+    """
+    from ltx2_dataset_builder.config import PipelineConfig
+    from ltx2_dataset_builder.ingestion.index_videos import index_videos
+    cfg = PipelineConfig.from_yaml(CONFIG_PATH) if CONFIG_PATH.exists() else PipelineConfig()
+    cfg.pg_dsn = _get_dsn()
+    try:
+        results = index_videos(cfg)
+    except Exception as e:
+        app.logger.exception("Video refresh failed")
+        return jsonify({'error': str(e)}), 500
+    return jsonify({
+        'source_dir': str(cfg.source_dir),
+        'indexed':    len(results),
+    })
+
+
 @app.route('/api/videos/upload', methods=['POST'])
 def upload_video():
     """Upload a video file into the source_dir."""
@@ -2047,7 +2238,10 @@ def upload_video():
 
 @app.route('/api/videos/<int:video_id>', methods=['DELETE'])
 def delete_video(video_id: int):
-    """Delete a video and all associated DB rows and cache files (not the source file)."""
+    """Delete a video and all associated DB rows and cache files.
+    Pass ?delete_file=1 to also delete the source video file from disk.
+    """
+    delete_file = request.args.get('delete_file', '0') == '1'
     conn = get_db_connection()
 
     video = conn.execute(
@@ -2114,12 +2308,22 @@ def delete_video(video_id: int):
             path.unlink()
             deleted_files += 1
 
+    # ── Source file deletion (optional) ──────────────────────
+    source_file_deleted = False
+    if delete_file:
+        source_path = _HERE / video["path"]
+        if source_path.exists():
+            source_path.unlink()
+            source_file_deleted = True
+
     return jsonify({
         "success": True,
         "video_id": video_id,
         "scenes_deleted": len(scene_ids),
         "cache_files_deleted": deleted_files,
+        "source_file_deleted": source_file_deleted,
     })
+
 
 
 @app.route('/api/videos/<int:video_id>/export', methods=['GET'])
@@ -3361,6 +3565,68 @@ def restore_output(output_id: int):
     return jsonify({'success': True})
 
 
+@app.route('/api/outputs/cleanup', methods=['POST'])
+def cleanup_outputs():
+    """Hard-delete output records whose files no longer exist on disk.
+
+    By default, records whose entire parent directory is missing (e.g. an
+    unmounted drive) are skipped — that case looks the same as "all files
+    deleted" but is almost always transient. Pass {"force": true} in the
+    body to bypass that guard and remove those records too."""
+    body = request.get_json(silent=True) or {}
+    force = bool(body.get('force'))
+    dry_run = bool(body.get('dry_run'))
+
+    conn = get_db_connection()
+    rows = conn.execute("SELECT id, path FROM outputs").fetchall()
+
+    to_remove: list[int] = []
+    skipped_parent_missing = 0
+    parent_cache: dict[str, bool] = {}
+    for r in rows:
+        p = Path(r['path'])
+        parent_key = str(p.parent)
+        if parent_key not in parent_cache:
+            try:
+                parent_cache[parent_key] = p.parent.is_dir()
+            except OSError:
+                parent_cache[parent_key] = False
+        if not parent_cache[parent_key]:
+            if force:
+                to_remove.append(r['id'])
+            else:
+                skipped_parent_missing += 1
+            continue
+        try:
+            exists = p.exists()
+        except OSError:
+            exists = False
+        if not exists:
+            to_remove.append(r['id'])
+
+    if to_remove and not dry_run:
+        ph = ','.join(['%s'] * len(to_remove))
+        conn.execute(f"DELETE FROM outputs WHERE id IN ({ph})", to_remove)
+        conn.commit()
+    conn.close()
+
+    if not dry_run:
+        for oid in to_remove:
+            thumb = _OUTPUT_THUMB_DIR / f'{oid}.jpg'
+            try: thumb.unlink()
+            except OSError: pass
+            with _output_path_lock:
+                _output_path_cache.pop(oid, None)
+
+    return jsonify({
+        'checked': len(rows),
+        'removed': 0 if dry_run else len(to_remove),
+        'would_remove': len(to_remove),
+        'skipped_parent_missing': skipped_parent_missing,
+        'dry_run': dry_run,
+    })
+
+
 @app.route('/api/outputs/liked', methods=['GET'])
 def get_liked_outputs():
     sort = request.args.get('sort', 'liked')   # 'liked' | 'mtime'
@@ -3633,6 +3899,88 @@ def _comfyui_post(path: str, body: dict, timeout: int = 10):
         return json.loads(raw) if raw.strip() else {}
 
 
+# ── ComfyUI WebSocket progress cache ─────────────────────────────────────────
+# Background thread connects to ComfyUI /ws and caches the last progress event.
+
+import threading as _threading
+import uuid as _uuid
+
+_comfyui_progress_cache: dict = {'value': 0, 'max': 0, 'prompt_id': None, 'node': None,
+                                 'node_value': 0, 'node_max': 0}
+_comfyui_ws_lock = _threading.Lock()
+_comfyui_ws_thread: '_threading.Thread | None' = None
+_comfyui_ws_client_id = str(_uuid.uuid4())
+
+
+def _comfyui_ws_run(endpoint: str):
+    """Long-running WebSocket listener; updates _comfyui_progress_cache."""
+    import websocket as _ws
+    ws_url = endpoint.replace('http://', 'ws://').replace('https://', 'wss://')
+    ws_url = f"{ws_url}/ws?clientId={_comfyui_ws_client_id}"
+
+    def on_message(ws, raw):
+        global _comfyui_progress_cache
+        try:
+            msg = json.loads(raw)
+            mtype = msg.get('type')
+            data  = msg.get('data', {})
+            if mtype == 'progress':
+                with _comfyui_ws_lock:
+                    node = str(data.get('node', '') or '')
+                    # If node_value is still 0 but we have a node, we connected mid-job;
+                    # bump it to at least 1 so the bar becomes visible.
+                    nv = _comfyui_progress_cache.get('node_value', 0)
+                    if nv == 0 and node:
+                        nv = 1
+                    _comfyui_progress_cache.update({
+                        'value':      data.get('value', 0),
+                        'max':        data.get('max', 0),
+                        'prompt_id':  data.get('prompt_id'),
+                        'node':       node,
+                        'node_value': nv,
+                    })
+            elif mtype == 'executing':
+                node = data.get('node')
+                with _comfyui_ws_lock:
+                    if node is not None:
+                        _comfyui_progress_cache['node'] = str(node)
+                        _comfyui_progress_cache['node_value'] = _comfyui_progress_cache.get('node_value', 0) + 1
+            elif mtype == 'execution_start':
+                with _comfyui_ws_lock:
+                    _comfyui_progress_cache = {'value': 0, 'max': 0,
+                                               'prompt_id': data.get('prompt_id'), 'node': None,
+                                               'node_value': 0, 'node_max': 0}
+            elif mtype in ('execution_success', 'execution_error', 'execution_interrupted'):
+                with _comfyui_ws_lock:
+                    _comfyui_progress_cache = {'value': 0, 'max': 0, 'prompt_id': None, 'node': None,
+                                               'node_value': 0, 'node_max': 0}
+        except Exception:
+            pass
+
+    def on_error(ws, err):
+        pass
+
+    def on_close(ws, *_):
+        pass
+
+    wsc = _ws.WebSocketApp(ws_url, on_message=on_message, on_error=on_error, on_close=on_close)
+    wsc.run_forever(reconnect=5)
+
+
+def _ensure_comfyui_ws():
+    """Start the WebSocket listener thread if not already running."""
+    global _comfyui_ws_thread
+    if _comfyui_ws_thread and _comfyui_ws_thread.is_alive():
+        return
+    try:
+        endpoint = _comfyui_endpoint()
+    except Exception:
+        return
+    t = _threading.Thread(target=_comfyui_ws_run, args=(endpoint,), daemon=True, name='comfyui-ws')
+    t.start()
+    _comfyui_ws_thread = t
+
+
 def _fmt_queue_item(item):
     """Normalise a raw ComfyUI queue tuple into a display-friendly dict."""
     number, prompt_id, nodes, extra_data, _ = item
@@ -3653,16 +4001,28 @@ def _fmt_queue_item(item):
                         break
         except Exception:
             pass
+    # Build a lightweight node map: id → { class_type, title } for progress display
+    node_meta = {}
+    try:
+        for nid, n in (nodes.items() if isinstance(nodes, dict) else []):
+            node_meta[str(nid)] = {
+                'class_type': n.get('class_type', ''),
+                'title': (n.get('_meta') or {}).get('title') or n.get('class_type', ''),
+            }
+    except Exception:
+        pass
     return {
         'number':    number,
         'prompt_id': prompt_id,
         'title':     title or f'Job #{number}',
         'node_count': node_count,
+        'node_meta':  node_meta,
     }
 
 
 @app.route('/api/comfyui/queue', methods=['GET'])
 def comfyui_queue():
+    _ensure_comfyui_ws()   # start WS listener on first queue poll
     try:
         data = _comfyui_get('/queue')
     except ValueError as e:
@@ -3722,6 +4082,12 @@ def comfyui_queue_clear():
     except Exception as e:
         return jsonify({'error': str(e)}), 502
     return jsonify({'cleared': True})
+
+
+@app.route('/api/comfyui/progress', methods=['GET'])
+def comfyui_progress():
+    with _comfyui_ws_lock:
+        return jsonify(dict(_comfyui_progress_cache))
 
 
 if __name__ == '__main__':
