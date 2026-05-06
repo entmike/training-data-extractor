@@ -422,11 +422,12 @@ def save_buckets_to_db(
         for bucket in buckets:
             try:
                 cursor = conn.execute("""
-                    INSERT OR IGNORE INTO buckets
-                    (video_id, scene_id, start_time, end_time, duration, 
+                    INSERT INTO buckets
+                    (video_id, scene_id, start_time, end_time, duration,
                      start_frame, end_frame, frame_count, speech_score,
                      speech_start_frame, speech_end_frame, optimal_offset_frames, optimal_duration, bucket_timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (video_id, start_frame, end_frame) DO NOTHING
                 """, (
                     video_id,
                     bucket.get("scene_id"),
@@ -446,7 +447,7 @@ def save_buckets_to_db(
                 
                 # Get the ID (inserted or existing)
                 row = conn.execute(
-                    "SELECT id FROM buckets WHERE video_id = ? AND start_frame = ? AND end_frame = ?",
+                    "SELECT id FROM buckets WHERE video_id = %s AND start_frame = %s AND end_frame = %s",
                     (video_id, bucket["start_frame"], bucket["end_frame"])
                 ).fetchone()
                 
