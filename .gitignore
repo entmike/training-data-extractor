@@ -21,6 +21,10 @@ output/
 ui/node_modules/
 ui/dist/
 
+# Local scripts & project docs
+oc.sh
+CLAUDE.md
+
 # Misc
 .DS_Store
 *.log
