@@ -747,7 +747,7 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
       <div className="video-page-wrap">
         <div
           className="video-page-content"
-          style={{ display: 'flex', flexDirection: 'column', padding: 0 }}
+          style={{ padding: 0 }}
         >
         {/* header: back + nav + filename */}
         <div className="video-modal-header" style={{ margin: 0, padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', gap: 8 }}>
@@ -866,7 +866,7 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
         )}
 
         {/* metadata + workflow */}
-        <div style={{ flex: 1, overflow: 'auto', padding: '14px 20px 20px' }}>
+        <div style={{ padding: '14px 20px 20px' }}>
           {/* meta row */}
           <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 12,
                         color: 'var(--text-muted)', marginBottom: 16, lineHeight: 1.8 }}>

@@ -1127,7 +1127,6 @@ html, body {
 
 .video-modal-content video {
   width: 100%;
-  max-height: 60vh;
   background: #000;
   border-radius: 8px;
   display: block;
@@ -2028,7 +2027,6 @@ html, body {
 .modal-video {
   width: 100%;
   height: auto;
-  max-height: 60vh;
   display: block;
   object-fit: contain;
 }
@@ -3866,10 +3864,9 @@ html, body {
 }
 .video-page-content {
   flex: 1;
-  display: flex;
-  flex-direction: column;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   position: relative;
   width: 100%;
   max-width: 1200px;
