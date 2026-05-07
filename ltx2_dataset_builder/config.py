@@ -22,16 +22,19 @@ class SceneConfig:
 @dataclass
 class FaceConfig:
     """Face detection and identity gating configuration."""
-    min_face_presence: float = 0.5  # Minimum fraction of frames with face
-    min_face_size: int = 64  # Minimum face size in pixels
-    detection_threshold: float = 0.5  # Face detection confidence threshold
-    embedding_model: str = "buffalo_l"  # InsightFace model for embeddings
-    similarity_threshold: float = 0.4  # Cosine similarity threshold for identity
-    sample_frames: int = 5  # Number of frames to sample per clip for face detection
+    min_face_presence: float = 0.5
+    min_face_size: int = 64
+    detection_threshold: float = 0.5
+    embedding_model: str = "buffalo_l"
+    similarity_threshold: float = 0.4
+    sample_frames: int = 5
     # Auto-tagging settings (--step auto-tag)
-    auto_tag_threshold: float = 0.4          # InsightFace cosine similarity to count a vote
-    auto_tag_frames_per_scene: int = 5       # Frames sampled per scene
-    auto_tag_min_votes: int = 1              # Min matching frames to apply tag
+    auto_tag_threshold: float = 0.4
+    auto_tag_frames_per_scene: int = 5
+    auto_tag_min_votes: int = 1
+    # Clustering parameters (--step cluster-faces)
+    cluster_eps: float = 0.3       # DBSCAN cosine distance (lower = tighter clusters)
+    cluster_min_samples: int = 3   # Minimum faces per cluster
     # CLIP settings (for animated/stylized characters)
     clip_model: str = "openai/clip-vit-large-patch14"
     clip_auto_tag_threshold: float = 0.85    # CLIP cosine similarity threshold (sims are higher than InsightFace)

@@ -28,8 +28,8 @@ KNOWN_TAG_SIM_THRESHOLD = 0.50
 def cluster_all_faces(
     config: PipelineConfig,
     video_id: Optional[int] = None,
-    eps: float = 0.4,
-    min_samples: int = 5,
+    eps: Optional[float] = None,
+    min_samples: Optional[int] = None,
 ) -> int:
     """
     Load face embeddings from face_detections, cluster with DBSCAN, compare
@@ -38,12 +38,14 @@ def cluster_all_faces(
     Args:
         config: Pipeline configuration
         video_id: If set, restrict to a single video; otherwise cluster all videos
-        eps: DBSCAN cosine distance threshold (0.4 ≈ similarity 0.6)
-        min_samples: Minimum face detections to form a cluster
+        eps: Override DBSCAN cosine distance threshold (default: config.face.cluster_eps)
+        min_samples: Override minimum faces per cluster (default: config.face.cluster_min_samples)
 
     Returns:
         Number of clusters found (excluding noise)
     """
+    eps = eps if eps is not None else config.face.cluster_eps
+    min_samples = min_samples if min_samples is not None else config.face.cluster_min_samples
     db = Database(config.dsn)
 
     # 1. Load all face embeddings (with video/frame context)

@@ -208,7 +208,23 @@ def run_step(config: PipelineConfig, step: str, **kwargs) -> None:
     elif step == "cluster-faces":
         from .cluster.faces import cluster_all_faces
         logger.info("Running: Cluster face embeddings")
-        cluster_all_faces(config)
+        video_filter = kwargs.get("video")
+        if video_filter:
+            # Resolve video name to video_id
+            from .utils.io import Database
+            db = Database(config.dsn)
+            videos = db.get_all_videos()
+            video_id = None
+            for v in videos:
+                if v["path"].endswith(video_filter) or str(v["id"]) == video_filter:
+                    video_id = v["id"]
+                    break
+            if video_id is None:
+                logger.error(f"Video '{video_filter}' not found")
+                return
+            cluster_all_faces(config, video_id=video_id)
+        else:
+            cluster_all_faces(config)
 
     elif step == "blurhash":
         from .scenes.blurhash import compute_all_blurhashes

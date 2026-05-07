@@ -651,9 +651,16 @@ def caption_all_scenes(
             caption = run_scene_inference(inputs, use_audio_in_video=use_audio)
             finished_at = _now_utc()
         except Exception as e:
+            err_msg = str(e)
             logger.error(f"Failed to caption {_log_label(work_item)}: {e}")
-            _save_caption(work_item, f"__error__: {e}",
-                          started_at=started_at, finished_at=_now_utc())
+            # CUDA OOM is unrecoverable within this run — skip, don't retry
+            if "CUDA out of memory" in err_msg or "out of memory" in err_msg.lower():
+                logger.warning(f"CUDA OOM — skipping {_log_label(work_item)}")
+                _save_caption(work_item, "__skip__",
+                               started_at=started_at, finished_at=_now_utc())
+            else:
+                _save_caption(work_item, f"__error__: {e}",
+                               started_at=started_at, finished_at=_now_utc())
             work_item = _pick_next_work_item(db, video_id)
             if work_item is None:
                 break

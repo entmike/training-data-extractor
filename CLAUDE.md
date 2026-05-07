@@ -15,15 +15,19 @@ source .venv/bin/activate
 ## Starting the dev environment
 
 ```bash
-./restart.sh          # starts Flask backend (port 5000) + Vite dev server (port 5173) in tmux
+./restart.sh                    # default config.yaml — backend on 5000, Vite on 5173
+./restart.sh config-ph.yaml     # alt config — ports come from the YAML's flask_port / vite_port
 ```
 
-Both processes run in persistent tmux sessions that survive SSH disconnects:
-- `tmux attach -t backend` — Flask API logs
-- `tmux attach -t vite` — Vite dev server logs
+Both processes run in persistent tmux sessions that survive SSH disconnects. Session names are derived from the config filename so multiple configs can run side-by-side:
 
-Access the UI at **http://localhost:5173** (Vite, with hot reload).
-The API runs at **http://localhost:5000** — Vite proxies all `/api/*` requests there.
+| Config         | Backend session | Vite session | Logs                                    |
+|----------------|-----------------|--------------|-----------------------------------------|
+| `config.yaml`  | `backend`       | `vite`       | `/tmp/web_review.log`, `/tmp/vite.log`  |
+| `config-ph.yaml` | `backend-ph`  | `vite-ph`    | `/tmp/web_review-ph.log`, `/tmp/vite-ph.log` |
+| `config-X.yaml` | `backend-X`    | `vite-X`     | `/tmp/web_review-X.log`, `/tmp/vite-X.log`   |
+
+Attach with `tmux attach -t <session>`. Access the UI at the Vite port from the table (default **http://localhost:5173**); Vite proxies `/api/*` to the matching Flask port.
 
 To run the captioner separately:
 ```bash
