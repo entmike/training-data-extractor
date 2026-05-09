@@ -62,7 +62,7 @@ def _extract_title(nodes: Any, extra_data: Any) -> Optional[str]:
         pass
     if isinstance(nodes, dict):
         for n in nodes.values():
-            if isinstance(n, dict) and n.get('class_type') in ('CheckpointLoaderSimple', 'CheckpointLoader'):
+            if isinstance(n, dict) and n.get('class_type') in ('CheckpointLoaderSimple', 'CheckpointLoader', 'LTXVAudioVAELoader', 'LTXAVTextEncoderLoader'):
                 ckpt = (n.get('inputs') or {}).get('ckpt_name', '')
                 if isinstance(ckpt, str) and ckpt:
                     return ckpt.split('/')[-1]

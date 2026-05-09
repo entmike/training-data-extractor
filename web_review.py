@@ -3995,7 +3995,7 @@ def _fmt_queue_item(item):
         # Fall back to the ckpt name from a CheckpointLoaderSimple node
         try:
             for n in nodes.values():
-                if n.get('class_type') in ('CheckpointLoaderSimple', 'CheckpointLoader'):
+                if n.get('class_type') in ('CheckpointLoaderSimple', 'CheckpointLoader', 'LTXVAudioVAELoader', 'LTXAVTextEncoderLoader'):
                     title = n['inputs'].get('ckpt_name', '').split('/')[-1] or None
                     if title:
                         break

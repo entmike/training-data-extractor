@@ -243,9 +243,26 @@ function SearchableSelect({ options, value, onChange }) {
 
 function getInputSpec(nodeInfo, class_type, input_key) {
   if (!nodeInfo || !class_type || !input_key) return null
+
   const node = nodeInfo[class_type]
-  if (!node) return null
-  return node.input?.required?.[input_key] ?? node.input?.optional?.[input_key] ?? null
+  let spec = null
+  if (node) {
+    spec = node.input?.required?.[input_key] ?? node.input?.optional?.[input_key]
+  }
+
+  // For LTXA nodes: if the ckpt_name spec is not already a dropdown list,
+  // replace it with the CheckpointLoaderSimple dropdown
+  if ((class_type === 'LTXAVTextEncoderLoader' || class_type === 'LTXVAudioVAELoader') && input_key === 'ckpt_name') {
+    const ckptNode = nodeInfo['CheckpointLoaderSimple']
+    if (ckptNode) {
+      const ckptSpec = ckptNode.input?.required?.ckpt_name
+      if (ckptSpec) {
+        spec = ckptSpec
+      }
+    }
+  }
+
+  return spec
 }
 
 function SmartInput({ spec, value, onChange, inputKey = '' }) {
@@ -643,7 +660,7 @@ function FavoritesTab({ editedJson, favorites, onUpdate, onRemoveFavorite, nodeI
 
 // ── Workflow detail modal ────────────────────────────────────────────────────
 
-// Module-level cache so node_info is only fetched once per page load
+// Module-level cache (fetched once per page load)
 let _nodeInfoCache = null
 
 function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDelete, inTrash, onRestore, onLikeToggle, onNsfwToggle }) {

@@ -216,14 +216,20 @@ def filter_candidates_by_face(
             )
             
             # Cache face detections
+            fps = video.get("fps", 24.0)
+            frame_offset = db.get_frame_offset(video["id"])
+            time_offset = frame_offset / fps if fps > 0 else 0
             for detection in result["detections"]:
+                frame_num = int(round((detection["time"] + time_offset) * fps))
                 for face in detection["faces"]:
+                    bbox = face["bbox"]
+                    bbox_area = float(bbox[2] * bbox[3]) if bbox else None
                     db.add_face_detection(
                         video_id=candidate["video_id"],
-                        frame_time=detection["time"],
-                        bbox=face["bbox"],
-                        confidence=face["confidence"],
-                        embedding=face["embedding"]
+                        frame_number=frame_num,
+                        bbox_area=bbox_area,
+                        det_score=face["confidence"],
+                        embedding=face["embedding"],
                     )
             
             # Check face presence threshold

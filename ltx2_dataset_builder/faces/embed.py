@@ -8,8 +8,8 @@ from typing import List, Dict, Any, Optional
 import numpy as np
 import logging
 from pathlib import Path
-from sklearn.cluster import DBSCAN
-from sklearn.metrics.pairwise import cosine_similarity
+import faiss
+from collections import defaultdict
 
 from ..config import PipelineConfig
 from ..utils.io import Database
@@ -28,33 +28,73 @@ def cluster_embeddings(
     min_samples: int = 3
 ) -> np.ndarray:
     """
-    Cluster face embeddings using DBSCAN.
+    Cluster face embeddings using FAISS HNSW + DBSCAN-like connected components.
+    
+    Uses an HNSW index for memory-efficient approximate nearest-neighbor search
+    (O(N) memory vs O(N²) for sklearn DBSCAN's pairwise distance matrix).
     
     Args:
         embeddings: List of face embeddings
-        eps: DBSCAN epsilon (max distance between points)
-        min_samples: Minimum samples per cluster
+        eps: Maximum cosine distance threshold for eps-neighborhood
+        min_samples: Minimum faces per cluster (noise points get label -1)
         
     Returns:
         Array of cluster labels (-1 for noise)
     """
-    if len(embeddings) < min_samples:
-        return np.zeros(len(embeddings), dtype=int)
+    n = len(embeddings)
+    if n == 0:
+        return np.array([], dtype=int)
+    if n < min_samples:
+        return np.full(n, -1, dtype=int)
     
-    # Stack embeddings
-    X = np.vstack(embeddings)
+    # Stack and L2-normalize (cosine distance ≈ L2 on normalized vectors)
+    X = np.array([e.flatten() for e in embeddings], dtype=np.float32)
+    faiss.normalize_L2(X)
+    dim = X.shape[1]
     
-    # Normalize embeddings
-    X = X / np.linalg.norm(X, axis=1, keepdims=True)
+    # Build HNSW index
+    index = faiss.IndexHNSWFlat(dim, 64, faiss.METRIC_L2)
+    index.add(X)
     
-    # Cluster using DBSCAN with cosine distance
-    clustering = DBSCAN(
-        eps=eps,
-        min_samples=min_samples,
-        metric='cosine'
-    )
+    # k-NN search with large k to find all eps-neighbors
+    k = max(min_samples * 4, 100)
+    distances, indices = index.search(X, k)
     
-    labels = clustering.fit_predict(X)
+    # Build undirected neighborhood graph
+    neighbors = defaultdict(set)
+    for i in range(n):
+        for j_idx in range(k):
+            if distances[i][j_idx] > eps:
+                break
+            ni = indices[i][j_idx]
+            neighbors[i].add(ni)
+            neighbors[ni].add(i)
+    
+    # Connected-components clustering (BFS)
+    labels = np.full(n, -1, dtype=int)
+    visited = set()
+    cluster_id = 0
+    
+    for i in range(n):
+        if i in visited:
+            continue
+        if len(neighbors[i]) < min_samples - 1:
+            continue  # noise point
+        # BFS to find connected component
+        component = []
+        queue = [i]
+        visited.add(i)
+        while queue:
+            node = queue.pop(0)
+            component.append(node)
+            for nb in neighbors[node]:
+                if nb not in visited:
+                    visited.add(nb)
+                    queue.append(nb)
+        if len(component) >= min_samples:
+            for idx in component:
+                labels[idx] = cluster_id
+            cluster_id += 1
     
     return labels
 

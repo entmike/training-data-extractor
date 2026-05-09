@@ -418,6 +418,12 @@ Examples:
         help="Embedding strategy for --add-tag-ref: 'auto' tries InsightFace then falls back to CLIP; 'clip' forces CLIP whole-frame embedding (best for animated/stylized characters)"
     )
     parser.add_argument(
+        "--skip-confirmed-gate",
+        action="store_true",
+        default=False,
+        help="Skip the confirmed-scene gate for --step auto-tag (scan ALL untagged scenes)"
+    )
+    parser.add_argument(
         "--tag",
         type=str,
         help="Limit --step auto-tag or --list-tag-refs to a specific tag"
@@ -580,7 +586,8 @@ Examples:
     try:
         if args.step == "auto-tag":
             from .autotag.face_tag import run_auto_tag
-            run_auto_tag(config, tag_filter=args.tag, video_filter=args.video)
+            run_auto_tag(config, tag_filter=args.tag, video_filter=args.video,
+                         require_confirmed=not args.skip_confirmed_gate)
         elif args.step == "scan-outputs":
             from .outputs.scan import scan_outputs, run_daemon
             from .utils.io import Database

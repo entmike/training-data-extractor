@@ -148,6 +148,7 @@ def run_auto_tag(
     config: PipelineConfig,
     tag_filter: Optional[str] = None,
     video_filter: Optional[str] = None,
+    require_confirmed: bool = True,
 ) -> None:
     """
     For every tag that has stored references (or just `tag_filter` if given),
@@ -156,6 +157,10 @@ def run_auto_tag(
 
     If video_filter is given (video ID or path substring), only scenes from that
     video are evaluated.
+
+    If require_confirmed is False, the confirmed-scene gate is disabled and ALL
+    untagged scenes are scanned (not just those in videos with existing confirmed
+    tags).
     """
     from tqdm import tqdm
 
@@ -173,7 +178,12 @@ def run_auto_tag(
 
     # Build {tag: centroid_embedding} from stored references, restricted to tags
     # that already have at least one confirmed scene in the target video(s).
-    relevant_tags = db.get_tags_with_confirmed_scenes(video_id=video_id)
+    # Include tags that either have confirmed scenes OR have stored references
+    # (newly promoted clusters create references but have zero confirmed scenes)
+    confirmed_tags = db.get_tags_with_confirmed_scenes(video_id=video_id)
+    ref_tags = {r["tag"] for r in db.get_tag_references(tag=tag_filter)}
+    relevant_tags = confirmed_tags | ref_tags
+
     if tag_filter:
         relevant_tags = {tag_filter} & relevant_tags
 
@@ -224,7 +234,7 @@ def run_auto_tag(
     scene_tags_needed: dict = defaultdict(set)  # scene_id -> set of tags to check
 
     for tag in centroids:
-        for scene in db.get_scenes_without_tag(tag, video_id=video_id):
+        for scene in db.get_scenes_without_tag(tag, video_id=video_id, require_confirmed=require_confirmed):
             sid = scene["id"]
             scenes_by_id[sid] = scene
             scene_tags_needed[sid].add(tag)

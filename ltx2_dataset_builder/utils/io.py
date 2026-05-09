@@ -826,49 +826,76 @@ class Database:
             conn.commit()
             return cur.fetchone()['id']
 
-    def get_scenes_without_tag(self, tag: str, video_id: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Return scenes that do not have the given tag, but only from videos that already
-        have at least one confirmed scene with that tag (so we don't blindly scan unrelated videos).
+    def get_scenes_without_tag(self, tag: str, video_id: Optional[int] = None, require_confirmed: bool = True) -> List[Dict[str, Any]]:
+        """Return scenes that do not have the given tag.
 
-        If video_id is given, only scenes from that video are returned (still subject to the
-        confirmed-presence filter).
+        When *require_confirmed* is True (default), only videos that already
+        have at least one confirmed scene with *tag* are included.  Set to
+        False to scan ALL videos regardless of confirmed tags.
         """
         with self._connection() as conn:
             if video_id is not None:
-                rows = conn.execute("""
-                    SELECT s.id, s.video_id, s.start_time, s.end_time,
-                           v.path AS video_path, v.fps
-                    FROM scenes s
-                    JOIN videos v ON v.id = s.video_id
-                    WHERE v.id = %s
-                      AND NOT EXISTS (
-                          SELECT 1 FROM scene_tags st
-                          WHERE st.scene_id = s.id AND st.tag = %s
-                      )
-                      AND EXISTS (
-                          SELECT 1 FROM scene_tags st2
-                          JOIN scenes s2 ON s2.id = st2.scene_id
-                          WHERE s2.video_id = v.id AND st2.tag = %s AND st2.confirmed = TRUE
-                      )
-                    ORDER BY s.start_time
-                """, (video_id, tag, tag)).fetchall()
+                if require_confirmed:
+                    rows = conn.execute("""
+                        SELECT s.id, s.video_id, s.start_time, s.end_time,
+                               v.path AS video_path, v.fps
+                        FROM scenes s
+                        JOIN videos v ON v.id = s.video_id
+                        WHERE v.id = %s
+                          AND NOT EXISTS (
+                              SELECT 1 FROM scene_tags st
+                              WHERE st.scene_id = s.id AND st.tag = %s
+                          )
+                          AND EXISTS (
+                              SELECT 1 FROM scene_tags st2
+                              JOIN scenes s2 ON s2.id = st2.scene_id
+                              WHERE s2.video_id = v.id AND st2.tag = %s AND st2.confirmed = TRUE
+                          )
+                        ORDER BY s.start_time
+                    """, (video_id, tag, tag)).fetchall()
+                else:
+                    rows = conn.execute("""
+                        SELECT s.id, s.video_id, s.start_time, s.end_time,
+                               v.path AS video_path, v.fps
+                        FROM scenes s
+                        JOIN videos v ON v.id = s.video_id
+                        WHERE v.id = %s
+                          AND NOT EXISTS (
+                              SELECT 1 FROM scene_tags st
+                              WHERE st.scene_id = s.id AND st.tag = %s
+                          )
+                        ORDER BY s.start_time
+                    """, (video_id, tag)).fetchall()
             else:
-                rows = conn.execute("""
-                    SELECT s.id, s.video_id, s.start_time, s.end_time,
-                           v.path AS video_path, v.fps
-                    FROM scenes s
-                    JOIN videos v ON v.id = s.video_id
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM scene_tags st
-                        WHERE st.scene_id = s.id AND st.tag = %s
-                    )
-                    AND EXISTS (
-                        SELECT 1 FROM scene_tags st2
-                        JOIN scenes s2 ON s2.id = st2.scene_id
-                        WHERE s2.video_id = v.id AND st2.tag = %s AND st2.confirmed = TRUE
-                    )
-                    ORDER BY s.video_id, s.start_time
-                """, (tag, tag)).fetchall()
+                if require_confirmed:
+                    rows = conn.execute("""
+                        SELECT s.id, s.video_id, s.start_time, s.end_time,
+                               v.path AS video_path, v.fps
+                        FROM scenes s
+                        JOIN videos v ON v.id = s.video_id
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM scene_tags st
+                            WHERE st.scene_id = s.id AND st.tag = %s
+                        )
+                        AND EXISTS (
+                            SELECT 1 FROM scene_tags st2
+                            JOIN scenes s2 ON s2.id = st2.scene_id
+                            WHERE s2.video_id = v.id AND st2.tag = %s AND st2.confirmed = TRUE
+                        )
+                        ORDER BY s.video_id, s.start_time
+                    """, (tag, tag)).fetchall()
+                else:
+                    rows = conn.execute("""
+                        SELECT s.id, s.video_id, s.start_time, s.end_time,
+                               v.path AS video_path, v.fps
+                        FROM scenes s
+                        JOIN videos v ON v.id = s.video_id
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM scene_tags st
+                            WHERE st.scene_id = s.id AND st.tag = %s
+                        )
+                        ORDER BY s.video_id, s.start_time
+                    """, (tag,)).fetchall()
             return [dict(r) for r in rows]
 
     # ── ComfyUI queue operations ──────────────────────────────────────────────
