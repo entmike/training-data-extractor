@@ -844,7 +844,7 @@ class Database:
                 if require_confirmed:
                     rows = conn.execute("""
                         SELECT s.id, s.video_id, s.start_time, s.end_time,
-                               v.path AS video_path, v.fps
+                               v.path AS video_path, v.fps AS fps
                         FROM scenes s
                         JOIN videos v ON v.id = s.video_id
                         WHERE v.id = %s
@@ -862,7 +862,7 @@ class Database:
                 else:
                     rows = conn.execute("""
                         SELECT s.id, s.video_id, s.start_time, s.end_time,
-                               v.path AS video_path, v.fps
+                               v.path AS video_path, v.fps AS fps
                         FROM scenes s
                         JOIN videos v ON v.id = s.video_id
                         WHERE v.id = %s
@@ -876,7 +876,7 @@ class Database:
                 if require_confirmed:
                     rows = conn.execute("""
                         SELECT s.id, s.video_id, s.start_time, s.end_time,
-                               v.path AS video_path, v.fps
+                               v.path AS video_path, v.fps AS fps
                         FROM scenes s
                         JOIN videos v ON v.id = s.video_id
                         WHERE NOT EXISTS (
@@ -893,7 +893,7 @@ class Database:
                 else:
                     rows = conn.execute("""
                         SELECT s.id, s.video_id, s.start_time, s.end_time,
-                               v.path AS video_path, v.fps
+                               v.path AS video_path, v.fps AS fps
                         FROM scenes s
                         JOIN videos v ON v.id = s.video_id
                         WHERE NOT EXISTS (

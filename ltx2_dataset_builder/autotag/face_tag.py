@@ -257,16 +257,13 @@ def run_auto_tag(
 
         # ── InsightFace path ──────────────────────────────────────────────────
         if insightface_tags_needed:
-            pad_frames = 5
-            start_frame = int(round(scene["start_time"] * fps)) + pad_frames
-            end_frame   = int(round(scene["end_time"]   * fps)) - pad_frames
-            # If padding collapses the window, fall back to unpadded bounds
-            if start_frame >= end_frame:
-                start_frame = int(round(scene["start_time"] * fps))
-                end_frame   = int(round(scene["end_time"]   * fps))
+            # Use the unpadded scene bounds for the cached lookup — scan-faces
+            # stores detections at the exact sampled frame numbers within the
+            # scene window.  Using padded bounds would narrow the range and
+            # cause most lookups to return empty, triggering the slow path.
+            start_frame = int(round(scene["start_time"] * fps))
+            end_frame   = int(round(scene["end_time"] * fps))
 
-            # Fast path: scene already processed by the embeddings step (cached rows
-            # exist — possibly only sentinels indicating "scanned, no faces found").
             cached = db.get_face_detections(scene["video_id"], start_frame, end_frame)
 
             if cached:
