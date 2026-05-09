@@ -260,7 +260,6 @@ def run_auto_tag(
             # Replicate the exact same sampling as scan-faces so we can query
             # by exact frame_number rather than a range (which misses the scattered
             # cached detections).
-            import numpy as np
             pad_secs = 5 / fps
             sample_start = scene["start_time"] + pad_secs
             sample_end   = scene["end_time"]   - pad_secs
