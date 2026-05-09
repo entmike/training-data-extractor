@@ -397,6 +397,22 @@ class Database:
                   det_score, age, sex, embedding))
             conn.commit()
 
+    def get_face_detections_in_scene(
+        self,
+        video_id: int,
+        start_frame: int,
+        end_frame: int,
+    ) -> List[Dict[str, Any]]:
+        """Return all cached face detections within a scene's frame range."""
+        with self._connection() as conn:
+            rows = conn.execute(
+                """SELECT * FROM face_detections
+                    WHERE video_id = %s AND frame_number >= %s AND frame_number <= %s
+                    ORDER BY frame_number""",
+                (video_id, start_frame, end_frame),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     def get_face_detections(
         self,
         video_id: int,
