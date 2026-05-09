@@ -61,7 +61,7 @@ def cluster_all_faces(
     embs = [embedding_from_bytes(bytes(r['embedding'])) for r in rows]
 
     # 3. Cluster
-    logger.info(f"Clustering with DBSCAN (eps={eps}, min_samples={min_samples})...")
+    logger.info(f"Clustering with FAISS HNSW (eps={eps}, min_samples={min_samples})...")
     labels = cluster_embeddings(embs, eps=eps, min_samples=min_samples)
 
     unique_labels = set(labels)
