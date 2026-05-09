@@ -669,6 +669,7 @@ class Database:
                     'promoted_tag': r['promoted_tag'],
                     'dismissed': r['dismissed'],
                     'stable_key': r['stable_key'],
+                    'consumed': False,
                 })
 
             if video_id is not None:
@@ -685,12 +686,17 @@ class Database:
                     new_c = np.frombuffer(bytes(c['centroid']), dtype=np.float32).copy()
                     norm = np.linalg.norm(new_c)
                     new_c = new_c / norm if norm > 0 else new_c
-                    sims = [float(np.dot(new_c, p['centroid'])) for p in preserved]
-                    best_idx = int(np.argmax(sims))
-                    if sims[best_idx] >= preserve_threshold:
-                        promoted_tag = preserved[best_idx]['promoted_tag']
-                        dismissed = preserved[best_idx]['dismissed']
-                        stable_key = preserved[best_idx]['stable_key']
+                    # Only consider unconsumed preserved clusters
+                    unconsumed = [p for p in preserved if not p['consumed']]
+                    if unconsumed:
+                        sims = [float(np.dot(new_c, p['centroid'])) for p in unconsumed]
+                        best_idx = int(np.argmax(sims))
+                        if sims[best_idx] >= preserve_threshold:
+                            promoted_tag = unconsumed[best_idx]['promoted_tag']
+                            dismissed = unconsumed[best_idx]['dismissed']
+                            stable_key = unconsumed[best_idx]['stable_key']
+                            # Mark as consumed so no other cluster can reuse the same stable_key
+                            unconsumed[best_idx]['consumed'] = True
 
                 conn.execute("""
                     INSERT INTO face_clusters
