@@ -416,6 +416,26 @@ class Database:
             rows = conn.execute(query, params).fetchall()
             return [dict(r) for r in rows]
 
+    def get_face_detections_at_frames(
+        self,
+        video_id: int,
+        frame_numbers: List[int],
+    ) -> List[Dict[str, Any]]:
+        """Return face detections for an explicit list of frame numbers (exact match, not a range).
+
+        Used by auto-tag to replicate the same sample_frames_from_clip sampling
+        used by scan-faces, so cached lookups hit the exact frames that were scanned.
+        """
+        if not frame_numbers:
+            return []
+        # Build placeholders: (%s, %s, %s, ...)
+        ph = ", ".join(["%s"] * len(frame_numbers))
+        query = f"SELECT * FROM face_detections WHERE video_id = %s AND frame_number IN ({ph}) ORDER BY frame_number"
+        params = [video_id] + list(frame_numbers)
+        with self._connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [dict(r) for r in rows]
+
     def has_face_detections(self, video_id: int, frame_number_min: int, frame_number_max: int) -> bool:
         """Return True if any face detections with embeddings exist for this frame range."""
         with self._connection() as conn:
