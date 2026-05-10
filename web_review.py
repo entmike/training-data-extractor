@@ -1482,10 +1482,189 @@ def promote_cluster(cluster_id: int):
                 except Exception as e:
                     app.logger.warning(f"Could not extract ref frame for promoted cluster: {e}")
 
-    conn.execute("UPDATE face_clusters SET promoted_tag = %s, stable_key = %s WHERE id = %s", (tag, tag, cluster_id))
+    # Set promoted_tag; only assign stable_key if currently NULL (avoids unique violation)
+    conn.execute(
+        "UPDATE face_clusters SET promoted_tag = %s, stable_key = COALESCE(stable_key, %s) WHERE id = %s",
+        (tag, tag, cluster_id)
+    )
     conn.commit()
     conn.close()
     return jsonify({'tag': tag, 'ref_ids': ref_ids, 'refs_created': len(ref_ids), 'display_name': auto_display_name})
+
+
+@app.route('/api/clusters/<int:cluster_id>/stable-key', methods=['PATCH'])
+def update_stable_key(cluster_id: int):
+    """Update the stable_key (tag/slug) for a cluster."""
+    data = request.get_json() or {}
+    new_key = (data.get('stable_key') or '').strip().lower()
+    if not new_key:
+        return jsonify({'error': 'stable_key is required'}), 400
+
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT stable_key, promoted_tag FROM face_clusters WHERE id = %s",
+        (cluster_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'error': 'Cluster not found'}), 404
+
+    # Validate: only allow alphanumeric, hyphens, underscores, dots
+    if not re.match(r'^[a-z0-9][a-z0-9._-]*$', new_key):
+        conn.close()
+        return jsonify({'error': 'Invalid stable_key format: only lowercase letters, digits, hyphens, underscores, dots. Must start with a letter or digit.'}), 400
+
+    # Check unique constraint
+    existing = conn.execute(
+        "SELECT id FROM face_clusters WHERE stable_key = %s AND id != %s",
+        (new_key, cluster_id)
+    ).fetchone()
+    if existing:
+        conn.close()
+        return jsonify({'error': f'stable_key "{new_key}" is already used by another cluster (id={existing["id"]})'}), 409
+
+    # If this is the first stable_key assignment, also set promoted_tag to match
+    old_key = row['stable_key']
+    old_tag = row['promoted_tag']
+
+    if old_key is None:
+        # First time setting stable_key — also set promoted_tag to match the new key
+        conn.execute(
+            "UPDATE face_clusters SET stable_key = %s, promoted_tag = %s WHERE id = %s",
+            (new_key, new_key, cluster_id)
+        )
+    else:
+        # Already has a stable_key — just update it
+        conn.execute(
+            "UPDATE face_clusters SET stable_key = %s WHERE id = %s",
+            (new_key, cluster_id)
+        )
+
+    # Update tag_definitions display_name if the tag changed
+    old_display = None
+    if old_tag and old_tag != new_key:
+        old_display = old_tag
+
+    conn.commit()
+    conn.close()
+
+    response = {'stable_key': new_key, 'updated': cluster_id}
+    if old_display:
+        response['old_stable_key'] = old_key
+        response['old_promoted_tag'] = old_display
+    return jsonify(response)
+
+
+@app.route('/api/clusters/merge', methods=['POST'])
+def merge_clusters():
+    """Merge multiple clusters into one.
+
+    Accepts JSON: { "survivor_id": int, "source_ids": [int, ...] }
+    The survivor absorbs all detections, samples, scenes from sources,
+    recomputes the centroid as a mean of all embeddings, then deletes
+    the absorbed clusters.
+    """
+    data = request.get_json() or {}
+    survivor_id = data.get('survivor_id')
+    source_ids = data.get('source_ids') or []
+
+    if not survivor_id or not source_ids:
+        return jsonify({'error': 'survivor_id and source_ids are required'}), 400
+
+    conn = get_db_connection()
+
+    # Fetch survivor and all source clusters
+    all_ids = [survivor_id] + source_ids
+    rows = conn.execute(
+        "SELECT id, centroid, member_detection_ids, sample_frame_numbers, sample_video_ids, scene_ids, stable_key, promoted_tag, nearest_tag, nearest_sim, size FROM face_clusters WHERE id = ANY(%s)",
+        (all_ids,)
+    ).fetchall()
+    id_to_row = {r['id']: r for r in rows}
+
+    # Validate: all clusters must exist
+    for sid in all_ids:
+        if sid not in id_to_row:
+            conn.close()
+            return jsonify({'error': f'Cluster {sid} not found'}), 404
+
+    # Get stable_key / promoted_tag — prefer survivor's, but allow override
+    survivor = id_to_row[survivor_id]
+    target_key = survivor['stable_key']
+    target_tag = survivor['promoted_tag']
+
+    # If survivor has no stable_key but a source does, pick that
+    if not target_key:
+        for sid in source_ids:
+            skey = id_to_row[sid]['stable_key']
+            if skey:
+                target_key = skey
+                break
+
+    # Collect all arrays from survivor + sources
+    all_detection_ids = list(survivor['member_detection_ids'] or [])
+    all_sample_frames = list(survivor['sample_frame_numbers'] or [])
+    all_sample_vids = list(survivor['sample_video_ids'] or [])
+    all_scene_ids = list(survivor['scene_ids'] or [])
+    all_centroids = [bytes(survivor['centroid'])]
+
+    for sid in source_ids:
+        src = id_to_row[sid]
+        all_detection_ids.extend(src['member_detection_ids'] or [])
+        all_sample_frames.extend(src['sample_frame_numbers'] or [])
+        all_sample_vids.extend(src['sample_video_ids'] or [])
+        all_scene_ids.extend(src['scene_ids'] or [])
+        all_centroids.append(bytes(src['centroid']))
+
+    # Deduplicate
+    all_detection_ids = list(set(all_detection_ids))
+    all_sample_frames = list(set(all_sample_frames))
+    all_sample_vids = list(set(all_sample_vids))
+    all_scene_ids = list(set(all_scene_ids))
+
+    # Recompute centroid as mean of all embeddings
+    import numpy as np
+    centroid_arr = np.array([np.frombuffer(c, dtype=np.float64) for c in all_centroids])
+    new_centroid = centroid_arr.mean(axis=0).tobytes()
+
+    # Compute new size
+    total_size = survivor['size'] + sum(id_to_row[sid]['size'] for sid in source_ids)
+
+    # Update survivor row
+    conn.execute(
+        """UPDATE face_clusters
+        SET member_detection_ids = %s,
+            sample_frame_numbers = %s,
+            sample_video_ids = %s,
+            scene_ids = %s,
+            centroid = %s,
+            size = %s,
+            stable_key = %s,
+            promoted_tag = %s,
+            nearest_tag = %s,
+            nearest_sim = %s,
+            scene_count = %s
+        WHERE id = %s""",
+        (all_detection_ids, all_sample_frames, all_sample_vids, all_scene_ids,
+         new_centroid, total_size, target_key, target_tag,
+         survivor['nearest_tag'], survivor['nearest_sim'],
+         len(all_scene_ids),
+         survivor_id)
+    )
+    conn.commit()
+
+    # Delete source clusters
+    for sid in source_ids:
+        conn.execute("DELETE FROM face_clusters WHERE id = %s", (sid,))
+    conn.commit()
+
+    conn.close()
+    return jsonify({
+        'merged_into': survivor_id,
+        'absorbed': source_ids,
+        'stable_key': target_key,
+        'new_size': total_size,
+        'new_scene_count': len(all_scene_ids),
+    })
 
 
 @app.route('/api/clusters/<int:cluster_id>/sample/<int:sample_index>')
