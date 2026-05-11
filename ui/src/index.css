@@ -2027,6 +2027,7 @@ html, body {
 .modal-video {
   width: 100%;
   height: auto;
+  max-height: 640px;
   display: block;
   object-fit: contain;
 }

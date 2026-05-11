@@ -59,9 +59,10 @@ for i in $(seq 1 15); do
 done
 
 # ── Vite dev server ────────────────────────────────────────────────────────────
+NODE_BIN="/home/mike/.nvm/versions/node/v24.14.0/bin/node"
 echo "Starting Vite dev server..."
 tmux new-session -d -s "$VITE_SESSION" \
-    "cd $DIR/ui && FLASK_PORT=$FLASK_PORT node_modules/.bin/vite --port $VITE_PORT 2>&1 | tee $VITE_LOG"
+    "cd $DIR/ui && FLASK_PORT=$FLASK_PORT $NODE_BIN node_modules/.bin/vite --port $VITE_PORT 2>&1 | tee $VITE_LOG"
 
 for i in $(seq 1 15); do
     if curl -sf "http://localhost:${VITE_PORT}/src/main.jsx" > /dev/null 2>&1; then
