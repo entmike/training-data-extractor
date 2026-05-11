@@ -2464,6 +2464,7 @@ html, body {
   font-size: 14px;
 }
 .discover-card {
+  position: relative;
   background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -4019,4 +4020,265 @@ html, body {
   padding: 16px 18px;
 }
 .queue-drawer-body { padding: 0; }
+
+/* ── Discover: cluster selection ───────────────────── */
+.discover-card-selection {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+}
+.discover-card-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: 4px;
+  font-size: 14px;
+  color: transparent;
+  pointer-events: none;
+}
+.discover-card-checkbox--checked {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.discover-card--selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ── Discover: merge button ──────────────────────── */
+.discover-merge-btn {
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.discover-merge-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+.discover-merge-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── Discover: merge modal ──────────────────────── */
+.discover-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+.discover-modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 24px;
+  min-width: 380px;
+  max-width: 500px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.5);
+}
+.discover-modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+.discover-modal-body {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+}
+.discover-modal-body p { margin: 6px 0; }
+.discover-modal-body strong { color: var(--text); }
+.discover-modal-warning {
+  color: #f59e0b;
+}
+.discover-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.discover-modal-cancel,
+.discover-modal-confirm {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 20px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .15s;
+}
+.discover-modal-cancel:hover { background: var(--bg-hover); }
+.discover-modal-confirm {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.discover-modal-confirm:hover { opacity: 0.85; }
+
+/* ── Discover: tag autocomplete ────────────────────── */
+.discover-autocomplete-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.discover-autocomplete-input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.discover-autocomplete-input {
+  font-size: 13px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.discover-autocomplete-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.discover-autocomplete-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+}
+.discover-autocomplete-toggle:hover { color: var(--text); }
+.discover-autocomplete-toggle:disabled { opacity: 0.4; cursor: default; }
+.discover-autocomplete-list {
+  position: fixed;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 0;
+  max-height: 240px;
+  width: 200px;
+  overflow-y: auto;
+  box-shadow: 0 6px 20px rgba(0,0,0,.4);
+  z-index: 9999;
+}
+.discover-autocomplete-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background .12s;
+}
+.discover-autocomplete-item:hover { background: var(--bg-hover); }
+.discover-autocomplete-item--active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.discover-autocomplete-item--new {
+  color: var(--accent);
+}
+.discover-autocomplete-item-main {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.discover-autocomplete-badge {
+  font-size: 10px;
+  background: var(--accent);
+  color: #fff;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+/* ── Cluster detail: stable key editor ────────────────── */
+.cluster-detail-stable-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+}
+.cluster-detail-stable-key-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.cluster-detail-key-display {
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 100px;
+}
+.cluster-detail-key-display:hover {
+  border-color: var(--accent);
+}
+.cluster-detail-key-edit-icon {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.cluster-detail-key-edit-row {
+  display: flex;
+  gap: 4px;
+}
+.cluster-detail-key-edit-input {
+  font-size: 13px;
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: var(--text);
+  min-width: 120px;
+}
+.cluster-detail-key-edit-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.cluster-detail-key-save-btn,
+.cluster-detail-key-cancel-btn {
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 16px;
+  border-radius: 4px;
+}
+.cluster-detail-key-save-btn { color: #4ade80; }
+.cluster-detail-key-save-btn:hover { background: var(--bg-hover); }
+.cluster-detail-key-save-btn:disabled { opacity: 0.4; cursor: default; }
+.cluster-detail-key-cancel-btn { color: var(--text-muted); }
+.cluster-detail-key-cancel-btn:hover { color: #f87171; }
+.cluster-detail-key-error {
+  font-size: 11px;
+  color: #f87171;
+  margin-top: 4px;
+}
 
