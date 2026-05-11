@@ -3828,6 +3828,31 @@ def get_output_detail(output_id: int):
     return jsonify(d)
 
 
+@app.route('/api/outputs/<int:output_id>/neighbors')
+def get_output_neighbors(output_id: int):
+    """Return the previous and next output IDs ordered by file_mtime DESC, id DESC (tiebreaker)."""
+    conn = get_db_connection()
+    row = conn.execute(f"""
+        SELECT prev_id, next_id FROM (
+            SELECT
+                id,
+                LAG(id) OVER (ORDER BY file_mtime DESC, id DESC)  AS prev_id,
+                LEAD(id) OVER (ORDER BY file_mtime DESC, id DESC) AS next_id
+            FROM outputs
+            WHERE deleted_at IS NULL AND nsfw_at IS NULL
+        ) AS neighbors
+        WHERE id = %s
+    """, (output_id,)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    d = dict(row)
+    return jsonify({
+        'prev_id': d.get('prev_id'),
+        'next_id': d.get('next_id'),
+    })
+
+
 @app.route('/api/outputs/liked', methods=['GET'])
 def get_liked_outputs():
     sort = request.args.get('sort', 'liked')   # 'liked' | 'mtime'

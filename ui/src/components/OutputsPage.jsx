@@ -1624,6 +1624,8 @@ function NsfwGate({ onUnlocked }) {
 function OutputDetailPage({ outputId, navigate }) {
   const [output, setOutput]     = useState(null)
   const [loading, setLoading]   = useState(true)
+  const [prevId, setPrevId]    = useState(null)
+  const [nextId, setNextId]    = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -1632,11 +1634,28 @@ function OutputDetailPage({ outputId, navigate }) {
       .then(d => { if (!cancelled) setOutput(d) })
       .catch(() => { if (!cancelled) setOutput(null) })
       .finally(() => { if (!cancelled) setLoading(false) })
+    // Fetch neighbors
+    fetch(`/api/outputs/${outputId}/neighbors`)
+      .then(r => r.json())
+      .then(d => {
+        if (!cancelled) { setPrevId(d.prev_id); setNextId(d.next_id) }
+      })
+      .catch(() => {
+        if (!cancelled) { setPrevId(null); setNextId(null) }
+      })
     return () => { cancelled = true }
   }, [outputId])
 
   function handleBack() {
     navigate('/outputs')
+  }
+
+  function handlePrev() {
+    if (prevId != null) navigate(`/outputs/${prevId}`)
+  }
+
+  function handleNext() {
+    if (nextId != null) navigate(`/outputs/${nextId}`)
   }
 
   if (loading) {
@@ -1659,10 +1678,10 @@ function OutputDetailPage({ outputId, navigate }) {
     <WorkflowModal
       output={output}
       onClose={handleBack}
-      hasPrev={false}
-      hasNext={false}
-      onPrev={() => {}}
-      onNext={() => {}}
+      hasPrev={prevId != null}
+      hasNext={nextId != null}
+      onPrev={handlePrev}
+      onNext={handleNext}
       onDelete={() => {
         fetch(`/api/outputs/${outputId}/delete`, { method: 'POST' }).then(() => handleBack())
       }}
