@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useContext } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import JsonView from '@uiw/react-json-view'
 import { darkTheme } from '@uiw/react-json-view/dark'
@@ -1034,10 +1035,9 @@ function OutputCard({ output, onClick, inTrash, onRestore, onDelete, onLikeToggl
 // ── Recycle bin view ─────────────────────────────────────────────────────────
 
 function RecycleBinView({ hideNsfw }) {
+  const navigate = useNavigate()
   const [items, setItems]     = useState([])
   const [loading, setLoading] = useState(true)
-  const [selected, setSelected]   = useState(null)
-  const [selectedIdx, setSelectedIdx] = useState(null)
   const [confirming, setConfirming] = useState(false)
   const [emptying, setEmptying]   = useState(false)
   const [sort, setSort]           = useState('deleted')
@@ -1069,7 +1069,6 @@ function RecycleBinView({ hideNsfw }) {
   async function handleRestore(output) {
     await fetch(`/api/outputs/${output.id}/restore`, { method: 'POST' })
     setItems(prev => prev.filter(o => o.id !== output.id))
-    if (selected?.id === output.id) { setSelected(null); setSelectedIdx(null) }
   }
 
   async function handleEmpty() {
@@ -1077,8 +1076,6 @@ function RecycleBinView({ hideNsfw }) {
     try {
       await fetch('/api/outputs/trash', { method: 'DELETE' })
       setItems([])
-      setSelected(null)
-      setSelectedIdx(null)
     } finally {
       setEmptying(false)
       setConfirming(false)
@@ -1155,25 +1152,13 @@ function RecycleBinView({ hideNsfw }) {
               key={o.id}
               output={o}
               inTrash
-              onClick={() => { setSelected(o); setSelectedIdx(i) }}
+              onClick={() => navigate(`/outputs/${o.id}`)}
               onRestore={handleRestore}
             />
           ))}
         </div>
       </div>
 
-      {selected && (
-        <WorkflowModal
-          output={selected}
-          inTrash
-          onClose={() => { setSelected(null); setSelectedIdx(null) }}
-          hasPrev={selectedIdx > 0}
-          hasNext={selectedIdx < visibleItems.length - 1}
-          onPrev={() => { const i = selectedIdx - 1; setSelected(visibleItems[i]); setSelectedIdx(i) }}
-          onNext={() => { const i = selectedIdx + 1; setSelected(visibleItems[i]); setSelectedIdx(i) }}
-          onRestore={() => handleRestore(selected)}
-        />
-      )}
     </div>
   )
 }
@@ -1181,6 +1166,7 @@ function RecycleBinView({ hideNsfw }) {
 // ── Main outputs view ────────────────────────────────────────────────────────
 
 function OutputsView() {
+  const navigate = useNavigate()
   const [outputs, setOutputs]   = useState([])
   const [total, setTotal]       = useState(null)
   const [wfFilter, setWfFilter]     = useState('')
@@ -1191,8 +1177,6 @@ function OutputsView() {
   const debounceRef = useRef(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isEmpty, setIsEmpty]   = useState(false)
-  const [selected, setSelected]   = useState(null)
-  const [selectedIdx, setSelectedIdx] = useState(null)
 
   const pageRef       = useRef(1)
   const hasMoreRef    = useRef(true)
@@ -1260,20 +1244,9 @@ function OutputsView() {
   function handleDelete(output) {
     if (output.liked) return
     fetch(`/api/outputs/${output.id}/delete`, { method: 'POST' })
-    const idx = outputs.findIndex(o => o.id === output.id)
     const next = outputs.filter(o => o.id !== output.id)
     setOutputs(next)
     setTotal(t => (t ?? 1) - 1)
-    if (selected?.id === output.id) {
-      if (next.length === 0) {
-        setSelected(null)
-        setSelectedIdx(null)
-      } else {
-        const newIdx = Math.min(idx, next.length - 1)
-        setSelected(next[newIdx])
-        setSelectedIdx(newIdx)
-      }
-    }
   }
 
   function handleLikeToggle(output) {
@@ -1281,7 +1254,6 @@ function OutputsView() {
     fetch(`/api/outputs/${output.id}/${newLiked ? 'like' : 'unlike'}`, { method: 'POST' })
     const updated = { ...output, liked: newLiked }
     setOutputs(prev => prev.map(o => o.id === output.id ? updated : o))
-    if (selected?.id === output.id) setSelected(updated)
   }
 
   function handleNsfwToggle(output) {
@@ -1289,18 +1261,12 @@ function OutputsView() {
     fetch(`/api/outputs/${output.id}/${newNsfw ? 'nsfw' : 'unnsfw'}`, { method: 'POST' })
     if (newNsfw) {
       // Remove immediately from the outputs list
-      const idx = outputs.findIndex(o => o.id === output.id)
       const next = outputs.filter(o => o.id !== output.id)
       setOutputs(next)
       setTotal(t => (t ?? 1) - 1)
-      if (selected?.id === output.id) {
-        if (next.length === 0) { setSelected(null); setSelectedIdx(null) }
-        else { const i = Math.min(idx, next.length - 1); setSelected(next[i]); setSelectedIdx(i) }
-      }
     } else {
       const updated = { ...output, nsfw: false }
       setOutputs(prev => prev.map(o => o.id === output.id ? updated : o))
-      if (selected?.id === output.id) setSelected(updated)
     }
   }
 
@@ -1384,7 +1350,7 @@ function OutputsView() {
         <div className="outputs-grid">
           {outputs.map((o, i) => (
             <OutputCard key={o.id} output={o}
-              onClick={() => { setSelected(o); setSelectedIdx(i) }}
+              onClick={() => navigate(`/outputs/${o.id}`)}
               onLikeToggle={handleLikeToggle}
               onNsfwToggle={handleNsfwToggle}
             />
@@ -1398,19 +1364,6 @@ function OutputsView() {
         <div style={{ height: 1 }} />
       </div>
 
-      {selected && (
-        <WorkflowModal
-          output={selected}
-          onClose={() => { setSelected(null); setSelectedIdx(null) }}
-          hasPrev={selectedIdx > 0}
-          hasNext={selectedIdx < outputs.length - 1}
-          onPrev={() => { const i = selectedIdx - 1; setSelected(outputs[i]); setSelectedIdx(i) }}
-          onNext={() => { const i = selectedIdx + 1; setSelected(outputs[i]); setSelectedIdx(i) }}
-          onDelete={() => handleDelete(selected)}
-          onLikeToggle={handleLikeToggle}
-          onNsfwToggle={handleNsfwToggle}
-        />
-      )}
     </div>
   )
 }
@@ -1418,10 +1371,9 @@ function OutputsView() {
 // ── Liked view ───────────────────────────────────────────────────────────────
 
 function LikedView() {
+  const navigate = useNavigate()
   const [items, setItems]           = useState([])
   const [loading, setLoading]       = useState(true)
-  const [selected, setSelected]     = useState(null)
-  const [selectedIdx, setSelectedIdx] = useState(null)
   const [sort, setSort]             = useState('liked')
   const [dir, setDir]               = useState('desc')
 
@@ -1449,28 +1401,17 @@ function LikedView() {
     fetch(`/api/outputs/${output.id}/unlike`, { method: 'POST' })
     const next = items.filter(o => o.id !== output.id)
     setItems(next)
-    if (selected?.id === output.id) {
-      const idx = items.findIndex(o => o.id === output.id)
-      if (next.length === 0) { setSelected(null); setSelectedIdx(null) }
-      else { const i = Math.min(idx, next.length - 1); setSelected(next[i]); setSelectedIdx(i) }
-    }
   }
 
   function handleNsfwToggle(output) {
     const newNsfw = !output.nsfw
     fetch(`/api/outputs/${output.id}/${newNsfw ? 'nsfw' : 'unnsfw'}`, { method: 'POST' })
     if (newNsfw) {
-      const idx = items.findIndex(o => o.id === output.id)
       const next = items.filter(o => o.id !== output.id)
       setItems(next)
-      if (selected?.id === output.id) {
-        if (next.length === 0) { setSelected(null); setSelectedIdx(null) }
-        else { const i = Math.min(idx, next.length - 1); setSelected(next[i]); setSelectedIdx(i) }
-      }
     } else {
       const updated = { ...output, nsfw: false }
       setItems(prev => prev.map(o => o.id === output.id ? updated : o))
-      if (selected?.id === output.id) setSelected(updated)
     }
   }
 
@@ -1506,7 +1447,7 @@ function LikedView() {
         <div className="outputs-grid">
           {items.map((o, i) => (
             <OutputCard key={o.id} output={o}
-              onClick={() => { setSelected(o); setSelectedIdx(i) }}
+              onClick={() => navigate(`/outputs/${o.id}`)}
               onLikeToggle={handleUnlike}
               onNsfwToggle={handleNsfwToggle}
             />
@@ -1514,19 +1455,6 @@ function LikedView() {
         </div>
       </div>
 
-      {selected && (
-        <WorkflowModal
-          output={selected}
-          onClose={() => { setSelected(null); setSelectedIdx(null) }}
-          hasPrev={selectedIdx > 0}
-          hasNext={selectedIdx < items.length - 1}
-          onPrev={() => { const i = selectedIdx - 1; setSelected(items[i]); setSelectedIdx(i) }}
-          onNext={() => { const i = selectedIdx + 1; setSelected(items[i]); setSelectedIdx(i) }}
-          onDelete={null}
-          onLikeToggle={handleUnlike}
-          onNsfwToggle={handleNsfwToggle}
-        />
-      )}
     </div>
   )
 }
@@ -1534,10 +1462,9 @@ function LikedView() {
 // ── NSFW view ─────────────────────────────────────────────────────────────────
 
 function NsfwView() {
+  const navigate = useNavigate()
   const [items, setItems]           = useState([])
   const [loading, setLoading]       = useState(true)
-  const [selected, setSelected]     = useState(null)
-  const [selectedIdx, setSelectedIdx] = useState(null)
   const [sort, setSort]             = useState('nsfw')
   const [dir, setDir]               = useState('desc')
   const [deleting, setDeleting]     = useState(null) // output.id being deleted
@@ -1566,11 +1493,6 @@ function NsfwView() {
     fetch(`/api/outputs/${output.id}/unnsfw`, { method: 'POST' })
     const next = items.filter(o => o.id !== output.id)
     setItems(next)
-    if (selected?.id === output.id) {
-      const idx = items.findIndex(o => o.id === output.id)
-      if (next.length === 0) { setSelected(null); setSelectedIdx(null) }
-      else { const i = Math.min(idx, next.length - 1); setSelected(next[i]); setSelectedIdx(i) }
-    }
   }
 
   function handleDelete(output) {
@@ -1578,13 +1500,7 @@ function NsfwView() {
     setDeleting(output.id)
     fetch(`/api/outputs/${output.id}/delete`, { method: 'POST' })
       .then(() => {
-        const idx = items.findIndex(o => o.id === output.id)
-        const next = items.filter(o => o.id !== output.id)
-        setItems(next)
-        if (selected?.id === output.id) {
-          if (next.length === 0) { setSelected(null); setSelectedIdx(null) }
-          else { const i = Math.min(idx, next.length - 1); setSelected(next[i]); setSelectedIdx(i) }
-        }
+        setItems(prev => prev.filter(o => o.id !== output.id))
       })
       .catch(e => console.error('Failed to delete NSFW output', e))
       .finally(() => setDeleting(null))
@@ -1595,7 +1511,6 @@ function NsfwView() {
     fetch(`/api/outputs/${output.id}/${newLiked ? 'like' : 'unlike'}`, { method: 'POST' })
     const updated = { ...output, liked: newLiked }
     setItems(prev => prev.map(o => o.id === output.id ? updated : o))
-    if (selected?.id === output.id) setSelected(updated)
   }
 
   return (
@@ -1630,7 +1545,7 @@ function NsfwView() {
         <div className="outputs-grid">
           {items.map((o, i) => (
             <OutputCard key={o.id} output={o}
-              onClick={() => { setSelected(o); setSelectedIdx(i) }}
+              onClick={() => navigate(`/outputs/${o.id}`)}
               onDelete={() => handleDelete(o)}
               onNsfwToggle={handleUnflag}
               onLikeToggle={handleLikeToggle}
@@ -1639,20 +1554,6 @@ function NsfwView() {
         </div>
       </div>
 
-      {selected && (
-        <WorkflowModal
-          output={selected}
-          onClose={() => { setSelected(null); setSelectedIdx(null) }}
-          hasPrev={selectedIdx > 0}
-          hasNext={selectedIdx < items.length - 1}
-          onPrev={() => { const i = selectedIdx - 1; setSelected(items[i]); setSelectedIdx(i) }}
-          onNext={() => { const i = selectedIdx + 1; setSelected(items[i]); setSelectedIdx(i) }}
-          inTrash={false}
-          onDelete={() => handleDelete(selected)}
-          onNsfwToggle={handleUnflag}
-          onLikeToggle={handleLikeToggle}
-        />
-      )}
     </div>
   )
 }
@@ -1718,12 +1619,85 @@ function NsfwGate({ onUnlocked }) {
   )
 }
 
+// ── Output detail page (direct deep-link) ──────────────────────────────────────
+
+function OutputDetailPage({ outputId, navigate }) {
+  const [output, setOutput]     = useState(null)
+  const [loading, setLoading]   = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/outputs/${outputId}`)
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setOutput(d) })
+      .catch(() => { if (!cancelled) setOutput(null) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [outputId])
+
+  function handleBack() {
+    navigate('/outputs')
+  }
+
+  if (loading) {
+    return (
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
+        Loading…
+      </div>
+    )
+  }
+
+  if (!output) {
+    return (
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
+        Output not found. <a href="/outputs" style={{ color: 'var(--accent, #7c6af7)' }}>Back to Outputs</a>
+      </div>
+    )
+  }
+
+  return (
+    <WorkflowModal
+      output={output}
+      onClose={handleBack}
+      hasPrev={false}
+      hasNext={false}
+      onPrev={() => {}}
+      onNext={() => {}}
+      onDelete={() => {
+        fetch(`/api/outputs/${outputId}/delete`, { method: 'POST' }).then(() => handleBack())
+      }}
+      inTrash={false}
+      onRestore={null}
+      onLikeToggle={() => {
+        const newLiked = !output.liked
+        fetch(`/api/outputs/${outputId}/${newLiked ? 'like' : 'unlike'}`, { method: 'POST' })
+        setOutput({ ...output, liked: newLiked })
+      }}
+      onNsfwToggle={() => {
+        const newNsfw = !output.nsfw
+        fetch(`/api/outputs/${outputId}/${newNsfw ? 'nsfw' : 'unnsfw'}`, { method: 'POST' })
+        if (newNsfw) handleBack()
+        else setOutput({ ...output, nsfw: false })
+      }}
+    />
+  )
+}
+
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function OutputsPage() {
-  const [activeTab, setActiveTab]       = useState('outputs')
+  const { tab: urlTab } = useParams()
+  const navigate = useNavigate()
   const [nsfwUnlocked, setNsfwUnlocked] = useState(false)
   const { nsfwEnabled } = useContext(AppContext)
+
+  // Distinguish numeric ID from string tab
+  const isNumeric = /^\d+$/.test(urlTab || '')
+  const numericId = isNumeric ? Number(urlTab) : null
+
+  const VALID_TABS = ['outputs', 'liked', 'trash']
+  if (nsfwEnabled) VALID_TABS.push('nsfw')
+  const activeTab = !isNumeric && VALID_TABS.includes(urlTab) ? urlTab : 'outputs'
 
   const tabs = [
     ['outputs', 'Outputs'],
@@ -1731,6 +1705,8 @@ export default function OutputsPage() {
     ...(nsfwEnabled ? [['nsfw', '⚠ NSFW']] : []),
     ['trash', '🗑 Recycle Bin'],
   ]
+
+  const handleTabChange = (key) => navigate(`/outputs/${key}`)
 
   return (
     <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -1742,7 +1718,7 @@ export default function OutputsPage() {
         {tabs.map(([key, label]) => (
           <button
             key={key}
-            onClick={() => setActiveTab(key)}
+            onClick={() => handleTabChange(key)}
             style={{
               padding: '10px 16px', fontSize: 13, cursor: 'pointer',
               border: 'none', borderBottom: activeTab === key ? '2px solid var(--accent, #7c6af7)' : '2px solid transparent',
@@ -1755,11 +1731,12 @@ export default function OutputsPage() {
         ))}
       </div>
 
-      {activeTab === 'outputs' ? <OutputsView />
+      {isNumeric && numericId ? <OutputDetailPage outputId={numericId} navigate={navigate} />
+        : (activeTab === 'outputs' ? <OutputsView />
         : activeTab === 'liked' ? <LikedView />
         : activeTab === 'nsfw'
           ? (nsfwUnlocked ? <NsfwView /> : <NsfwGate onUnlocked={() => setNsfwUnlocked(true)} />)
-        : <RecycleBinView hideNsfw={nsfwEnabled && !nsfwUnlocked} />}
+        : <RecycleBinView hideNsfw={nsfwEnabled && !nsfwUnlocked} />)}
     </div>
   )
 }

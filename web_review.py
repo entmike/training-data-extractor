@@ -3806,6 +3806,28 @@ def cleanup_outputs():
     })
 
 
+@app.route('/api/outputs/<int:output_id>')
+def get_output_detail(output_id: int):
+    """Return full output record for a single output by ID."""
+    conn = get_db_connection()
+    row = conn.execute(f"""
+        SELECT id, path, sha256, file_size, file_mtime, mime_type,
+               width, height,
+               workflow IS NOT NULL as has_workflow,
+               prompt   IS NOT NULL as has_prompt,
+               indexed_at, liked_at, nsfw_at, deleted_at,
+               liked_at IS NOT NULL as liked,
+               nsfw_at  IS NOT NULL as nsfw
+        FROM outputs WHERE id = %s
+    """, (output_id,)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    d = dict(row)
+    d['filename'] = Path(d['path']).name
+    return jsonify(d)
+
+
 @app.route('/api/outputs/liked', methods=['GET'])
 def get_liked_outputs():
     sort = request.args.get('sort', 'liked')   # 'liked' | 'mtime'

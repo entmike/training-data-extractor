@@ -679,7 +679,7 @@ class Database:
 
     def save_face_clusters(
         self, clusters: List[Dict[str, Any]], video_id: Optional[int] = None,
-        preserve_threshold: float = 0.80,
+        preserve_threshold: float = 0.60,
     ) -> None:
         """Replace face_clusters for this scope with fresh results.
 

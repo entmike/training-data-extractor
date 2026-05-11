@@ -259,7 +259,7 @@ export default function App() {
         <Route path="/tags/:tag" element={pageLayout(<TagsPage />)} />
         <Route path="/discover" element={pageLayout(<DiscoverPage />)} />
         <Route path="/cluster/:clusterId" element={pageLayout(<ClusterDetailPage />)} />
-        <Route path="/outputs" element={pageLayout(<OutputsPage />)} />
+        <Route path="/outputs/:tab?" element={pageLayout(<OutputsPage />)} />
         <Route path="/config" element={<Navigate to="/videos" replace />} />
       </Routes>
 
