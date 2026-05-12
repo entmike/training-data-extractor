@@ -91,32 +91,33 @@ export default function VideosPage({ tagMap, allTags }) {
       <div className="folder-tree-node">
         {(node.videos.length > 0 || childFolders.length > 0) && (
           <div
-            className={`folder-tree-header folder-tree-level-${level}${hasActiveVideo ? ' folder-tree-header--active' : ''}`}
-            style={{ paddingLeft: `${12 + level * 16}px` }}
+            className={`folder-tree-header${hasActiveVideo ? ' folder-tree-header--active' : ''}`}
             onClick={() => toggleFolder(fullPath)}
             title={fullPath || '/'}
           >
-            <span className="folder-tree-chevron">{isExpanded ? '▾' : '▸'}</span>
-            <span className="folder-tree-name">{node.folder || '/'}</span>
+            <span className="folder-tree-name">
+              <span className="folder-tree-chevron" style={{ marginRight: 4 }}>{isExpanded ? '▾' : '▸'}</span>
+              {node.folder || '/'}
+            </span>
             <span className="folder-tree-count">{countDescendants(node)}</span>
+            <span />
           </div>
         )}
-      {isExpanded && node.videos.map(v => (
-        <div
-          key={v.id}
-          className={`video-sidebar-item video-sidebar-item--nested${v.id === videoId ? ' video-sidebar-item--active' : ''}`}
-          style={{ paddingLeft: `${12 + (level + 1) * 16}px` }}
-          onClick={() => {
-            setImportResult(null)
-            setMobilePickerOpen(false)
-            navigate(v.id === videoId ? '/videos' : `/videos/${v.id}`)
-          }}
-        >
-          <span className="video-sidebar-name">{v.name}</span>
-          <span className="video-sidebar-count">{v.scene_count}</span>
-          <span className="video-sidebar-frames" title="Total frames">{v.total_frames > 0 ? `${v.total_frames.toLocaleString()}f` : ''}</span>
-        </div>
-      ))}
+        {isExpanded && node.videos.map(v => (
+          <div
+            key={v.id}
+            className={`video-sidebar-item video-sidebar-item--nested${v.id === videoId ? ' video-sidebar-item--active' : ''}`}
+            onClick={() => {
+              setImportResult(null)
+              setMobilePickerOpen(false)
+              navigate(v.id === videoId ? '/videos' : `/videos/${v.id}`)
+            }}
+          >
+            <span className="video-sidebar-name">{v.name}</span>
+            <span className="video-sidebar-count">{v.scene_count}</span>
+            <span className="video-sidebar-frames" title="Total frames">{v.total_frames > 0 ? `${v.total_frames.toLocaleString()}f` : ''}</span>
+          </div>
+        ))}
         {isExpanded && childFolders.map(name => (
           <FolderNode
             key={name}

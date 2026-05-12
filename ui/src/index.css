@@ -1518,16 +1518,17 @@ html, body {
 }
 .folder-tree-header {
   display: grid;
-  grid-template-columns: 14px 1fr auto;
+  grid-template-columns: 1fr 36px 62px;
   align-items: center;
-  gap: 6px;
+  padding: 7px 10px 7px 13px;
   cursor: pointer;
   user-select: none;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  border-left: 3px solid transparent;
   transition: background .1s, color .1s;
 }
 .folder-tree-header:hover {
@@ -1535,12 +1536,11 @@ html, body {
   color: var(--text);
 }
 .folder-tree-header--active {
+  border-left-color: var(--blue);
+  background: var(--bg-hover);
   color: var(--text);
 }
-.folder-tree-level-0 { padding-top: 6px; padding-bottom: 6px; }
-.folder-tree-level-1 { padding-top: 4px; padding-bottom: 4px; }
-.folder-tree-level-2 { padding-top: 3px; padding-bottom: 3px; }
-.folder-tree-level-3 { padding-top: 2px; padding-bottom: 2px; }
+/* Folder tree — matches video sidebar grid layout */
 .folder-tree-chevron {
   font-size: 9px;
   line-height: 1;
