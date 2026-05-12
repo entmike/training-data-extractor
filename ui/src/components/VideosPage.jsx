@@ -71,21 +71,104 @@ export default function VideosPage({ tagMap, allTags }) {
     })
   }
 
-  // Group videos by parent directory
-  const videosByFolder = useMemo(() => {
-    const map = new Map()
+  // --- Recursive folder tree helpers (inside VideosPage for closure) ---
+  function countDescendants(node) {
+    let count = node.videos.length
+    for (const child of Object.values(node.children)) {
+      count += countDescendants(child)
+    }
+    return count
+  }
+
+  function FolderNode({ node, folderPath, level }) {
+    const childFolders = Object.keys(node.children).sort()
+    const hasContent = node.videos.length > 0 || childFolders.length > 0
+    if (!hasContent) return null
+    const fullPath = folderPath
+    const isExpanded = expandedFolders.has(fullPath)
+    const hasActiveVideo = node.videos.some(v => v.id === videoId)
+    return (
+      <div className="folder-tree-node">
+        {(node.videos.length > 0 || childFolders.length > 0) && (
+          <div
+            className={`folder-tree-header folder-tree-level-${level}${hasActiveVideo ? ' folder-tree-header--active' : ''}`}
+            style={{ paddingLeft: `${12 + level * 16}px` }}
+            onClick={() => toggleFolder(fullPath)}
+            title={fullPath || '/'}
+          >
+            <span className="folder-tree-chevron">{isExpanded ? '▾' : '▸'}</span>
+            <span className="folder-tree-name">{node.folder || '/'}</span>
+            <span className="folder-tree-count">{countDescendants(node)}</span>
+          </div>
+        )}
+      {isExpanded && node.videos.map(v => (
+        <div
+          key={v.id}
+          className={`video-sidebar-item video-sidebar-item--nested${v.id === videoId ? ' video-sidebar-item--active' : ''}`}
+          style={{ paddingLeft: `${12 + (level + 1) * 16}px` }}
+          onClick={() => {
+            setImportResult(null)
+            setMobilePickerOpen(false)
+            navigate(v.id === videoId ? '/videos' : `/videos/${v.id}`)
+          }}
+        >
+          <span className="video-sidebar-name">{v.name}</span>
+          <span className="video-sidebar-count">{v.scene_count}</span>
+          <span className="video-sidebar-frames" title="Total frames">{v.total_frames > 0 ? `${v.total_frames.toLocaleString()}f` : ''}</span>
+        </div>
+      ))}
+        {isExpanded && childFolders.map(name => (
+          <FolderNode
+            key={name}
+            node={node.children[name]}
+            folderPath={fullPath + (fullPath && name ? '/' + name : name)}
+            level={level + 1}
+          />
+        ))}
+      </div>
+    )
+  }
+
+  function renderTreeNodes(tree) {
+    const rootVideos = tree.videos.map(v => (
+      <div
+        key={v.id}
+        className={`video-sidebar-item${v.id === videoId ? ' video-sidebar-item--active' : ''}`}
+        onClick={() => {
+          setImportResult(null)
+          setMobilePickerOpen(false)
+          navigate(v.id === videoId ? '/videos' : `/videos/${v.id}`)
+        }}
+      >
+        <span className="video-sidebar-name">{v.name}</span>
+        <span className="video-sidebar-count">{v.scene_count}</span>
+        <span className="video-sidebar-frames" title="Total frames">{v.total_frames > 0 ? `${v.total_frames.toLocaleString()}f` : ''}</span>
+      </div>
+    ))
+    const childFolders = Object.keys(tree.children).sort()
+    const folders = childFolders.map(name => (
+      <FolderNode key={name} node={tree.children[name]} folderPath={name} level={0} />
+    ))
+    return [...folders, ...rootVideos]
+  }
+
+  // Build recursive folder tree from video paths
+  const folderTree = useMemo(() => {
+    const root = { folder: '', videos: [], children: {} }
     for (const v of videos) {
       const parts = (v.path || '').split('/')
-      const folder = parts.length > 1 ? parts.slice(0, -1).join('/') : ''
-      if (!map.has(folder)) map.set(folder, [])
-      map.get(folder).push(v)
+      if (parts.length <= 1) { root.videos.push(v); continue }
+      let current = root
+      for (let i = 0; i < parts.length - 1; i++) {
+        const segment = parts[i]
+        if (!current.children[segment]) {
+          current.children[segment] = { folder: segment, videos: [], children: {} }
+        }
+        current = current.children[segment]
+      }
+      current.videos.push(v)
     }
-    // Sort folders alphabetically; empty string (root) last
-    return new Map([...map.entries()].sort(([a], [b]) => {
-      if (a === '') return 1
-      if (b === '') return -1
-      return a.localeCompare(b)
-    }))
+    return root
   }, [videos])
 
   useEffect(() => {
@@ -286,39 +369,7 @@ export default function VideosPage({ tagMap, allTags }) {
                 <span className="skeleton skeleton--text" style={{ width: 36 }} />
               </div>
             ))
-          ) : [...videosByFolder.entries()].map(([folder, folderVideos]) => {
-            const collapsed = !expandedFolders.has(folder)
-            const folderLabel = folder ? folder.split('/').pop() : '/'
-            const hasActive = folderVideos.some(v => v.id === videoId)
-            return (
-              <div key={folder || '__root__'} className="video-folder-group">
-                <div
-                  className={`video-folder-header${hasActive ? ' video-folder-header--active' : ''}`}
-                  onClick={() => toggleFolder(folder)}
-                  title={folder || '/'}
-                >
-                  <span className="video-folder-chevron">{collapsed ? '▸' : '▾'}</span>
-                  <span className="video-folder-name">{folderLabel}</span>
-                  <span className="video-folder-count">{folderVideos.length}</span>
-                </div>
-                {!collapsed && folderVideos.map(v => (
-                  <div
-                    key={v.id}
-                    className={`video-sidebar-item video-sidebar-item--nested${v.id === videoId ? ' video-sidebar-item--active' : ''}`}
-                    onClick={() => {
-                      setImportResult(null)
-                      setMobilePickerOpen(false)
-                      navigate(v.id === videoId ? '/videos' : `/videos/${v.id}`)
-                    }}
-                  >
-                    <span className="video-sidebar-name">{v.name}</span>
-                    <span className="video-sidebar-count">{v.scene_count}</span>
-                    <span className="video-sidebar-frames" title="Total frames">{v.total_frames > 0 ? `${v.total_frames.toLocaleString()}f` : ''}</span>
-                  </div>
-                ))}
-              </div>
-            )
-          })}
+          ) : renderTreeNodes(folderTree)}
 
           {/* Refresh — re-scan source directory for new files */}
           <div className="sidebar-import-zone">
@@ -567,6 +618,7 @@ export default function VideosPage({ tagMap, allTags }) {
     </div>
   )
 }
+
 
 function VideoDetail({ video, onSaved }) {
   const [name, setName]     = useState(video.name || '')
