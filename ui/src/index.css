@@ -1506,17 +1506,21 @@ html, body {
   }
 }
 
-.video-folder-group {
+/* (removed - replaced by .folder-tree-header) */
+.video-sidebar-item--nested {
+  padding-left: 22px;
+}
+
+/* --- Recursive folder tree --- */
+.folder-tree-node {
   display: flex;
   flex-direction: column;
-  border-bottom: 1px solid var(--border-subtle);
 }
-.video-folder-header {
+.folder-tree-header {
   display: grid;
   grid-template-columns: 14px 1fr auto;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px 6px 8px;
   cursor: pointer;
   user-select: none;
   color: var(--text-muted);
@@ -1524,24 +1528,32 @@ html, body {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  background: var(--border-subtle);
   transition: background .1s, color .1s;
 }
-.video-folder-header:hover { background: var(--bg-hover); color: var(--text); }
-.video-folder-header--active { color: var(--text); }
-.video-folder-chevron {
+.folder-tree-header:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.folder-tree-header--active {
+  color: var(--text);
+}
+.folder-tree-level-0 { padding-top: 6px; padding-bottom: 6px; }
+.folder-tree-level-1 { padding-top: 4px; padding-bottom: 4px; }
+.folder-tree-level-2 { padding-top: 3px; padding-bottom: 3px; }
+.folder-tree-level-3 { padding-top: 2px; padding-bottom: 2px; }
+.folder-tree-chevron {
   font-size: 9px;
   line-height: 1;
   text-align: center;
   color: var(--text-dim);
 }
-.video-folder-name {
+.folder-tree-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
 }
-.video-folder-count {
+.folder-tree-count {
   font-size: 10px;
   color: var(--text-dim);
   font-weight: 500;
@@ -1549,9 +1561,6 @@ html, body {
   padding: 1px 6px;
   border-radius: 8px;
   background: var(--bg);
-}
-.video-sidebar-item--nested {
-  padding-left: 22px;
 }
 
 .sidebar-import-zone {
