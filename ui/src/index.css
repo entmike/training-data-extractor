@@ -1508,7 +1508,7 @@ html, body {
 
 /* (removed - replaced by .folder-tree-header) */
 .video-sidebar-item--nested {
-  padding-left: 22px;
+  /* Indentation now set via inline style — remove fixed padding-left */
 }
 
 /* --- Recursive folder tree --- */

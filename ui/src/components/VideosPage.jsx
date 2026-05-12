@@ -92,6 +92,7 @@ export default function VideosPage({ tagMap, allTags }) {
         {(node.videos.length > 0 || childFolders.length > 0) && (
           <div
             className={`folder-tree-header${hasActiveVideo ? ' folder-tree-header--active' : ''}`}
+            style={{ paddingLeft: `${13 + level * 16}px` }}
             onClick={() => toggleFolder(fullPath)}
             title={fullPath || '/'}
           >
@@ -107,6 +108,7 @@ export default function VideosPage({ tagMap, allTags }) {
           <div
             key={v.id}
             className={`video-sidebar-item video-sidebar-item--nested${v.id === videoId ? ' video-sidebar-item--active' : ''}`}
+            style={{ paddingLeft: `${13 + (level + 1) * 16}px` }}
             onClick={() => {
               setImportResult(null)
               setMobilePickerOpen(false)
