@@ -980,6 +980,11 @@ class Database:
                     title        = COALESCE(EXCLUDED.title, comfy_queue.title),
                     node_count   = COALESCE(EXCLUDED.node_count, comfy_queue.node_count),
                     client_id    = COALESCE(EXCLUDED.client_id, comfy_queue.client_id),
+                    started_at   = CASE
+                        WHEN comfy_queue.status = 'pending' AND EXCLUDED.status = 'running'
+                            AND comfy_queue.started_at IS NULL THEN NOW()
+                        ELSE comfy_queue.started_at
+                    END,
                     last_seen_at = NOW()
                 RETURNING (xmax = 0) AS inserted
             """, (prompt_id, number, status, title, node_count, client_id,
@@ -1010,6 +1015,35 @@ class Database:
             conn.commit()
             return cur.rowcount or 0
 
+
+    def get_comfy_queue_history(self, limit: int = 15) -> List[Dict[str, Any]]:
+        """Return completed queue jobs from our DB with computed duration.
+
+        Each result is a dict:
+            prompt_id, title, status_str, duration_seconds, completed_at
+        """
+        rows: List[Dict[str, Any]]
+        with self._connection() as conn:
+            rows = conn.execute("""
+                SELECT prompt_id, title, status,
+                       EXTRACT(EPOCH FROM (completed_at - COALESCE(started_at, first_seen_at))) AS duration_seconds,
+                       completed_at
+                FROM comfy_queue
+                WHERE status = 'completed'
+                ORDER BY completed_at DESC
+                LIMIT %s
+            """, (limit,)).fetchall()
+
+        return [
+            {
+                'prompt_id':         row['prompt_id'],
+                'title':             row['title'],
+                'status_str':        row['status'],
+                'duration_seconds':  round(float(row['duration_seconds']), 1) if row['duration_seconds'] else None,
+                'completed_at':      row['completed_at'],
+            }
+            for row in rows
+        ]
 
 def write_jsonl(path: Path, entries: Iterator[Dict[str, Any]]) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)

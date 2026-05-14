@@ -4264,25 +4264,41 @@ def comfyui_queue():
 
 @app.route('/api/comfyui/history', methods=['GET'])
 def comfyui_history():
-    limit = request.args.get('limit', 20, type=int)
+    limit = request.args.get('limit', 15, type=int)
     try:
-        data = _comfyui_get(f'/history?max_items={limit}')
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
-    except Exception as e:
-        return jsonify({'error': str(e)}), 502
+        conn = get_db_connection()
+        history = conn.execute("""
+            SELECT prompt_id, title, status,
+                   EXTRACT(EPOCH FROM (completed_at - COALESCE(started_at, first_seen_at))) AS duration_seconds,
+                   completed_at
+            FROM comfy_queue
+            WHERE status = 'completed'
+            ORDER BY completed_at DESC
+            LIMIT %s
+        """, (limit,)).fetchall()
 
-    items = []
-    for prompt_id, entry in data.items():
-        status = entry.get('status', {})
-        items.append({
-            'prompt_id':  prompt_id,
-            'completed':  status.get('completed', False),
-            'status_str': status.get('status_str', 'unknown'),
-            'outputs':    len(entry.get('outputs', {})),
-        })
-    # ComfyUI history is unordered; sort by completion is not available without timestamps
-    return jsonify({'history': items})
+        history = [
+            {
+                'prompt_id':         row['prompt_id'],
+                'title':             row['title'],
+                'status_str':        row['status'],
+                'duration_seconds':  round(float(row['duration_seconds']), 1) if row['duration_seconds'] else None,
+                'completed_at':      row['completed_at'],
+            }
+            for row in history
+        ]
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    # Normalize status_str to match old format
+    for item in history:
+        status = item['status_str']
+        if status == 'completed':
+            item['status_str'] = 'success'
+        else:
+            item['status_str'] = 'failed'
+
+    return jsonify({'history': history})
 
 
 @app.route('/api/comfyui/queue/delete', methods=['POST'])

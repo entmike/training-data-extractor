@@ -363,5 +363,6 @@ CREATE TABLE IF NOT EXISTS comfy_queue (
     extra_data    JSONB,                                  -- raw extra_data minus extra_pnginfo
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at    TIMESTAMPTZ,
     completed_at  TIMESTAMPTZ
 );

@@ -3615,6 +3615,10 @@ html, body {
   color: var(--text-dim);
   font-family: monospace;
 }
+.cq-duration {
+  color: var(--green);
+  font-weight: 600;
+}
 .cq-item-number {
   font-size: 12px;
   font-weight: 700;

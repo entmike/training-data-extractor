@@ -5,6 +5,14 @@ function fmtId(id) {
   return id ? id.slice(0, 8) : '—'
 }
 
+function fmtDuration(seconds) {
+  if (seconds == null || seconds == undefined) return '—'
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  const mins = Math.floor(seconds / 60)
+  const secs = seconds - mins * 60
+  return `${mins}m ${secs.toFixed(0)}s`
+}
+
 export default function ComfyQueuePage() {
   const {
     comfyQueue: queue,
@@ -133,15 +141,24 @@ export default function ComfyQueuePage() {
         <h3 className="cq-section-title">Recent</h3>
         {hist.length === 0 ? (
           <div className="cq-empty">No history</div>
-        ) : hist.map(item => (
-          <div key={item.prompt_id} className="cq-item cq-item--history">
-            <span className={`cq-status-dot cq-status-dot--${item.status_str === 'success' ? 'ok' : 'err'}`} />
-            <div className="cq-item-body">
-              <span className="cq-item-title">{fmtId(item.prompt_id)}</span>
-              <span className="cq-item-meta">{item.status_str} · {item.outputs} output{item.outputs !== 1 ? 's' : ''}</span>
+        ) : hist.map(item => {
+          const durationStr = item.duration_seconds != null
+            ? fmtDuration(item.duration_seconds)
+            : null
+          const titleText = item.title ? item.title : fmtId(item.prompt_id)
+          return (
+            <div key={item.prompt_id} className="cq-item cq-item--history">
+              <span className={`cq-status-dot cq-status-dot--${item.status_str === 'success' ? 'ok' : 'err'}`} />
+              <div className="cq-item-body">
+                <span className="cq-item-title">{titleText}</span>
+                <span className="cq-item-meta">
+                  {item.status_str}
+                  {durationStr && <span className="cq-duration"> · {durationStr}</span>}
+                </span>
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </section>
     </div>
   )
