@@ -722,16 +722,27 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
       const r = await fetch(`${comfyEndpoint}/prompt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, client_id: 'hermes-webui' }),
       })
-      const d = await r.json()
+      const text = await r.text()
+      if (!text || !text.trim()) {
+        setRenderStatus({ ok: true, msg: 'Sent (no response body)' })
+        return
+      }
+      const d = JSON.parse(text)
       if (r.ok && d.prompt_id) {
         setRenderStatus({ ok: true, msg: `Queued: ${d.prompt_id.slice(0, 8)}` })
       } else {
-        setRenderStatus({ ok: false, msg: d.error || `HTTP ${r.status}` })
+        const err = d.error
+        const msg = typeof err === 'string' ? err : (err?.message || `HTTP ${r.status}`)
+        setRenderStatus({ ok: false, msg })
       }
     } catch (e) {
-      setRenderStatus({ ok: false, msg: e.message })
+      if (e.message.includes('JSON') || e.name === 'SyntaxError') {
+        setRenderStatus({ ok: false, msg: 'Invalid JSON from ComfyUI — check endpoint' })
+      } else {
+        setRenderStatus({ ok: false, msg: e.message })
+      }
     }
   }
 
