@@ -19,6 +19,7 @@ export default function ComfyQueuePage() {
     comfyHistory: history,
     comfyProgress: progress,
     comfyError: error,
+    comfyNodeTiming: nodeTiming,
     deleteQueueItem,
     clearComfyQueue,
   } = useContext(AppContext)
@@ -141,24 +142,61 @@ export default function ComfyQueuePage() {
         <h3 className="cq-section-title">Recent</h3>
         {hist.length === 0 ? (
           <div className="cq-empty">No history</div>
-        ) : hist.map(item => {
-          const durationStr = item.duration_seconds != null
-            ? fmtDuration(item.duration_seconds)
-            : null
-          const titleText = item.title ? item.title : fmtId(item.prompt_id)
-          return (
-            <div key={item.prompt_id} className="cq-item cq-item--history">
-              <span className={`cq-status-dot cq-status-dot--${item.status_str === 'success' ? 'ok' : 'err'}`} />
-              <div className="cq-item-body">
-                <span className="cq-item-title">{titleText}</span>
-                <span className="cq-item-meta">
-                  {item.status_str}
-                  {durationStr && <span className="cq-duration"> · {durationStr}</span>}
-                </span>
+        ) : (
+          hist.map(item => {
+            const durationStr = item.duration_seconds != null
+              ? fmtDuration(item.duration_seconds)
+              : null
+            const titleText = item.title ? item.title : fmtId(item.prompt_id)
+            return (
+              <div key={item.prompt_id} className="cq-item cq-item--history">
+                <span className={`cq-status-dot cq-status-dot--${item.status_str === 'success' ? 'ok' : 'err'}`} />
+                <div className="cq-item-body">
+                  <span className="cq-item-title">{titleText}</span>
+                  <span className="cq-item-meta">
+                    {item.status_str}
+                    {durationStr && <span className="cq-duration"> · {durationStr}</span>}
+                  </span>
+                </div>
               </div>
-            </div>
-          )
-        })}
+            )
+          })
+        )}
+      </section>
+
+      {/* Node Timing */}
+      <section className="cq-section">
+        <h3 className="cq-section-title">Node Timing</h3>
+        {nodeTiming === null ? (
+          <div className="cq-empty">Loading…</div>
+        ) : nodeTiming?.node_timing?.length === 0 ? (
+          <div className="cq-empty">Submit a job via this UI to capture node timing.</div>
+        ) : (
+          <table className="cq-node-table">
+            <thead>
+              <tr>
+                <th>Node</th>
+                <th>Class</th>
+                <th>Duration</th>
+                <th>Steps</th>
+                <th>Started</th>
+                <th>Completed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(nodeTiming.node_timing ?? []).map((item, i) => (
+                <tr key={i} className={item.completed_at ? '' : 'cq-node--active'}>
+                  <td title={item.prompt_id}>{item.title || item.node_id}</td>
+                  <td>{item.class_type}</td>
+                  <td>{item.duration_sec != null ? fmtDuration(item.duration_sec) : '—'}</td>
+                  <td>{item.step_value != null ? `${item.step_value}/${item.steps ?? '?'}` : '—'}</td>
+                  <td>{item.started_at ? new Date(item.started_at).toLocaleTimeString() : '—'}</td>
+                  <td>{item.completed_at ? new Date(item.completed_at).toLocaleTimeString() : '…'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </section>
     </div>
   )

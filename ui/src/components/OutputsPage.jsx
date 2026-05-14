@@ -669,7 +669,6 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
   const [tab, setTab] = useState('favorites')
   const isVideo = (output.mime_type || '').startsWith('video/')
   const videoRef = useRef(null)
-  const [comfyEndpoint, setComfyEndpoint] = useState('')
   const [editedPrompt, setEditedPrompt] = useState(null)
   const [renderStatus, setRenderStatus] = useState(null) // null | 'sending' | {ok, msg}
   const [favorites, setFavorites] = useState([])
@@ -677,7 +676,6 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
   const [mediaHidden, setMediaHidden] = useState(false)
 
   useEffect(() => {
-    fetch('/api/config').then(r => r.json()).then(d => setComfyEndpoint(d.comfyui_endpoint || '')).catch(() => {})
     fetch('/api/prompt-favorites').then(r => r.json()).then(d => setFavorites(d.favorites || [])).catch(() => {})
     if (!_nodeInfoCache) {
       fetch('/api/comfyui-cache/node_info')
@@ -716,33 +714,25 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
 
   async function handleRender() {
     const prompt = editedPrompt ?? data?.prompt
-    if (!prompt || !comfyEndpoint) return
+    if (!prompt) return
     setRenderStatus('sending')
     try {
-      const r = await fetch(`${comfyEndpoint}/prompt`, {
+      // Route through the backend so the server's WS client ID is used
+      // This ensures execution events are routed to the backend's WS listener
+      // which persists node-level timing data.
+      const r = await fetch('/api/comfyui/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, client_id: 'hermes-webui' }),
+        body: JSON.stringify({ prompt }),
       })
-      const text = await r.text()
-      if (!text || !text.trim()) {
-        setRenderStatus({ ok: true, msg: 'Sent (no response body)' })
-        return
-      }
-      const d = JSON.parse(text)
+      const d = await r.json()
       if (r.ok && d.prompt_id) {
         setRenderStatus({ ok: true, msg: `Queued: ${d.prompt_id.slice(0, 8)}` })
       } else {
-        const err = d.error
-        const msg = typeof err === 'string' ? err : (err?.message || `HTTP ${r.status}`)
-        setRenderStatus({ ok: false, msg })
+        setRenderStatus({ ok: false, msg: d.error || 'Submit failed' })
       }
     } catch (e) {
-      if (e.message.includes('JSON') || e.name === 'SyntaxError') {
-        setRenderStatus({ ok: false, msg: 'Invalid JSON from ComfyUI — check endpoint' })
-      } else {
-        setRenderStatus({ ok: false, msg: e.message })
-      }
+      setRenderStatus({ ok: false, msg: e.message })
     }
   }
 
@@ -811,8 +801,7 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
               <button
                 className="modal-btn modal-btn--save"
                 style={{ flexShrink: 0 }}
-                disabled={!comfyEndpoint || renderStatus === 'sending'}
-                title={!comfyEndpoint ? 'Set ComfyUI endpoint in Config first' : ''}
+                disabled={renderStatus === 'sending'}
                 onClick={handleRender}
               >{renderStatus === 'sending' ? 'Sending…' : 'Render to ComfyUI'}</button>
               {renderStatus && renderStatus !== 'sending' && (

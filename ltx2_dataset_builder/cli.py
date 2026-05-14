@@ -307,7 +307,7 @@ Examples:
     parser.add_argument(
         "--step",
         type=str,
-        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "subtitles", "debug-scenes", "debug-candidates", "auto-tag", "scan-faces", "cluster-faces", "scan-outputs", "scan-comfy-queue"],
+        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "subtitles", "debug-scenes", "debug-candidates", "auto-tag", "scan-faces", "cluster-faces", "scan-outputs", "scan-comfy-queue", "scan-comfy-node-timing"],
         help="Run a specific pipeline step"
     )
     parser.add_argument(
@@ -447,11 +447,17 @@ Examples:
         logger.info(f"Generated default config: {args.generate_config}")
         return 0
 
-    # Load config early so all utility handlers can use it
+    # Load config — auto-detect config.yaml or config-ph.yaml if no --config flag
     if args.config:
         config = PipelineConfig.from_yaml(Path(args.config))
     else:
-        config = PipelineConfig()
+        for name in ("config.yaml", "config-ph.yaml"):
+            candidate = Path(name)
+            if candidate.exists():
+                config = PipelineConfig.from_yaml(candidate)
+                break
+        else:
+            config = PipelineConfig()
 
     # Override with CLI arguments
     if args.token:
@@ -609,6 +615,18 @@ Examples:
                     logger.error("ComfyUI endpoint not configured (config.comfyui_endpoint) and --comfy-endpoint not provided")
                     return 1
                 poll_once(db, endpoint.rstrip('/'))
+        elif args.step == "scan-comfy-node-timing":
+            from .comfy.node_timing import run_daemon as run_node_timing_daemon
+            from .utils.io import Database
+            db = Database(config.dsn)
+            if args.daemon:
+                run_node_timing_daemon(db, endpoint_override=args.comfy_endpoint)
+            else:
+                endpoint = args.comfy_endpoint or db.get_config_value('comfyui_endpoint')
+                if not endpoint:
+                    logger.error("ComfyUI endpoint not configured (config.comfyui_endpoint) and --comfy-endpoint not provided")
+                    return 1
+                run_node_timing_daemon(db, endpoint_override=endpoint.rstrip('/'))
         elif args.step:
             run_step(config, args.step, video=args.video)
         else:

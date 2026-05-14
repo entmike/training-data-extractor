@@ -1045,6 +1045,127 @@ class Database:
             for row in rows
         ]
 
+    # ── Per-node timing ──────────────────────────────────────────────────
+    def upsert_node_timing(self, prompt_id: str, node_id: str,
+                            class_type: Optional[str], title: Optional[str]) -> int:
+        """Insert or refresh the timing row for a node becoming active.
+        Marks the previously-active node as completed first."""
+        with self._connection() as conn:
+            # Complete any still-active node for this prompt
+            conn.execute("""
+                UPDATE comfy_node_timing
+                SET completed_at = NOW(),
+                    duration_sec  = EXTRACT(EPOCH FROM (NOW() - started_at))
+                WHERE prompt_id = %s AND completed_at IS NULL
+            """, (prompt_id,))
+
+            cur = conn.execute("""
+                INSERT INTO comfy_node_timing (prompt_id, node_id, class_type, title, started_at)
+                VALUES (%s, %s, %s, %s, NOW())
+                ON CONFLICT (prompt_id, node_id) DO UPDATE SET started_at = NOW(), completed_at = NULL, duration_sec = NULL
+                RETURNING id
+            """, (prompt_id, node_id, class_type, title))
+            row = cur.fetchone()
+            conn.commit()
+            return row['id']
+
+    def update_node_progress(self, prompt_id: str, node_id: str, step_value: int, steps: int) -> None:
+        """Update progress for an active node."""
+        with self._connection() as conn:
+            conn.execute("""
+                UPDATE comfy_node_timing
+                SET step_value = %s, steps = %s
+                WHERE prompt_id = %s AND node_id = %s AND completed_at IS NULL
+            """, (step_value, steps, prompt_id, node_id))
+            conn.commit()
+
+    def complete_last_node(self, prompt_id: str) -> int:
+        """Mark the last active node for a prompt as completed."""
+        with self._connection() as conn:
+            cur = conn.execute("""
+                UPDATE comfy_node_timing
+                SET completed_at = NOW(),
+                    duration_sec  = EXTRACT(EPOCH FROM (NOW() - started_at))
+                WHERE prompt_id = %s AND completed_at IS NULL
+                RETURNING id
+            """, (prompt_id,))
+            conn.commit()
+            return len(cur.fetchall())
+
+    def complete_node(self, prompt_id: str, node_id: str) -> None:
+        """Mark a specific node as completed (used by WS handler)."""
+        with self._connection() as conn:
+            conn.execute("""
+                UPDATE comfy_node_timing
+                SET completed_at = NOW(),
+                    duration_sec  = EXTRACT(EPOCH FROM (NOW() - started_at))
+                WHERE prompt_id = %s AND node_id = %s AND completed_at IS NULL
+            """, (prompt_id, node_id))
+            conn.commit()
+
+    def get_node_timing(self, prompt_id: str) -> List[Dict[str, Any]]:
+        """Get per-node timing for a specific prompt."""
+        with self._connection() as conn:
+            rows = conn.execute("""
+                SELECT node_id, class_type, title, started_at, completed_at,
+                       duration_sec, steps, step_value, error_msg
+                FROM comfy_node_timing
+                WHERE prompt_id = %s
+                ORDER BY started_at ASC
+            """, (prompt_id,)).fetchall()
+
+        return [
+            {
+                'node_id':    row['node_id'],
+                'class_type': row['class_type'],
+                'title':      row['title'],
+                'started_at': row['started_at'],
+                'completed_at': row['completed_at'],
+                'duration_sec': round(row['duration_sec'], 1) if row['duration_sec'] else None,
+                'steps':      row['steps'],
+                'step_value': row['step_value'],
+                'error_msg':  row['error_msg'],
+            }
+            for row in rows
+        ]
+
+    def get_recent_node_timing(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Get the most recent node timing records."""
+        with self._connection() as conn:
+            rows = conn.execute("""
+                SELECT id, prompt_id, node_id, class_type, title,
+                       started_at, completed_at, duration_sec, steps, step_value
+                FROM comfy_node_timing
+                ORDER BY started_at DESC
+                LIMIT %s
+            """, (limit,)).fetchall()
+
+        return [
+            {
+                'prompt_id':    row['prompt_id'],
+                'node_id':      row['node_id'],
+                'class_type':   row['class_type'],
+                'title':        row['title'],
+                'started_at':   row['started_at'],
+                'completed_at': row['completed_at'],
+                'duration_sec': round(row['duration_sec'], 1) if row['duration_sec'] else None,
+                'steps':        row['steps'],
+                'step_value':   row['step_value'],
+            }
+            for row in rows
+        ]
+
+    def get_comfy_queue_job(self, prompt_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single comfy_queue row by prompt_id."""
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT prompt, prompt_id FROM comfy_queue WHERE prompt_id = %s", (prompt_id,)
+            ).fetchone()
+            if not row:
+                return None
+            prompt_data = json.loads(row['prompt']) if row['prompt'] else None
+            return {'prompt_id': row['prompt_id'], 'prompt': prompt_data}
+
 def write_jsonl(path: Path, entries: Iterator[Dict[str, Any]]) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     count = 0

@@ -366,3 +366,21 @@ CREATE TABLE IF NOT EXISTS comfy_queue (
     started_at    TIMESTAMPTZ,
     completed_at  TIMESTAMPTZ
 );
+
+-- comfy_node_timing
+-- Per-node timing captured from ComfyUI WebSocket events.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS comfy_node_timing (
+    id            BIGSERIAL PRIMARY KEY,
+    prompt_id     TEXT NOT NULL,
+    node_id       TEXT NOT NULL,
+    class_type    TEXT,
+    title         TEXT,
+    started_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at  TIMESTAMPTZ,
+    duration_sec  FLOAT,
+    steps         INTEGER,
+    step_value    INTEGER,
+    error_msg     TEXT,
+    CONSTRAINT comfy_node_timing_prompt_node UNIQUE (prompt_id, node_id)
+);

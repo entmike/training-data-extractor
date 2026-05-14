@@ -6,6 +6,8 @@ import json
 import os
 import re
 import subprocess
+import time
+from datetime import datetime
 import threading
 import zipfile
 from pathlib import Path
@@ -14,6 +16,7 @@ import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 from flask import Flask, send_from_directory, request, jsonify, Response, send_file
+from ltx2_dataset_builder.utils.io import Database
 import yaml
 from PIL import Image, ImageDraw
 
@@ -4138,23 +4141,80 @@ _comfyui_ws_thread: '_threading.Thread | None' = None
 _comfyui_ws_client_id = str(_uuid.uuid4())
 
 
+# Cached Database instance (shared across requests for performance)
+_comfyui_db: 'Database' = None
+
+def _get_db():
+    """Get a Database instance for the current request."""
+    global _comfyui_db
+    if _comfyui_db is not None:
+        return _comfyui_db
+    conn = get_db_connection()
+    row = conn.execute("SELECT value FROM config WHERE key = 'pg_dsn'").fetchone()
+    dsn = (row['value'] if row else '').strip() or 'postgresql://ltx2:ltx2@localhost:5432/ltx2'
+    _comfyui_db = Database(dsn)
+    return _comfyui_db
+
+
+def _start_node(prompt_id: str, node_id: str) -> None:
+    """Mark a node as started — completes the previous active node first."""
+    _log = open('/tmp/comfyui_ws.log', 'a')
+    _log.write(f'[{datetime.now().isoformat()}] _start_node called: prompt_id={prompt_id}, node_id={node_id}\n')
+    _log.flush()
+    db = _get_db()
+    try:
+        db.upsert_node_timing(prompt_id, node_id, None, None)
+        _log.write(f'[{datetime.now().isoformat()}] _start_node succeeded for {node_id}\n')
+        _log.flush()
+    except Exception as e:
+        _log.write(f'[{datetime.now().isoformat()}] ERROR _start_node failed: {e}\n')
+        _log.flush()
+
+
+def _complete_node(prompt_id: str, node_id: str) -> None:
+    """Mark a node as completed."""
+    db = _get_db()
+    try:
+        db.complete_node(prompt_id, node_id)
+    except Exception:
+        pass
+
+
+def _upsert_node_timing(prompt_id: str, node_id: str, step_value: int, steps: int) -> None:
+    """Update progress for a node."""
+    db = _get_db()
+    try:
+        db.update_node_progress(prompt_id, node_id, step_value, steps)
+    except Exception:
+        pass
+
+
 def _comfyui_ws_run(endpoint: str):
-    """Long-running WebSocket listener; updates _comfyui_progress_cache."""
+    """Long-running WebSocket listener; updates _comfyui_progress_cache AND persists node timing."""
     import websocket as _ws
+    _log = open('/tmp/comfyui_ws.log', 'a')
+    _log.write(f'[{datetime.now().isoformat()}] Starting for {endpoint}\n')
+    _log.flush()
     ws_url = endpoint.replace('http://', 'ws://').replace('https://', 'wss://')
     ws_url = f"{ws_url}/ws?clientId={_comfyui_ws_client_id}"
 
+    # Per-prompt state tracking for node timing
+    _active_prompt_id = None
+    _active_node_id = None
+
     def on_message(ws, raw):
         global _comfyui_progress_cache
+        nonlocal _active_prompt_id, _active_node_id, _log
         try:
             msg = json.loads(raw)
             mtype = msg.get('type')
             data  = msg.get('data', {})
+
             if mtype == 'progress':
+                _log.write(f'[{datetime.now().isoformat()}] progress: node={data.get("node")} value={data.get("value")}/{data.get("max")} prompt_id={data.get("prompt_id")}\n')
+                _log.flush()
                 with _comfyui_ws_lock:
                     node = str(data.get('node', '') or '')
-                    # If node_value is still 0 but we have a node, we connected mid-job;
-                    # bump it to at least 1 so the bar becomes visible.
                     nv = _comfyui_progress_cache.get('node_value', 0)
                     if nv == 0 and node:
                         nv = 1
@@ -4165,46 +4225,92 @@ def _comfyui_ws_run(endpoint: str):
                         'node':       node,
                         'node_value': nv,
                     })
+
+                    # Persist node timing
+                    pid = data.get('prompt_id')
+                    nid = str(data.get('node', ''))
+                    if pid and nid and _active_prompt_id and _active_node_id == nid:
+                        _upsert_node_timing(pid, nid, data.get('value', 0), data.get('max', 0))
+
             elif mtype == 'executing':
+                _log.write(f'[{datetime.now().isoformat()}] executing: node={data.get("node")} prompt_id={_active_prompt_id}\n')
+                _log.flush()
                 node = data.get('node')
                 with _comfyui_ws_lock:
                     if node is not None:
                         _comfyui_progress_cache['node'] = str(node)
                         _comfyui_progress_cache['node_value'] = _comfyui_progress_cache.get('node_value', 0) + 1
+
+                        # Extract prompt_id from event data (robust to missed execution_start)
+                        pid = data.get('prompt_id') or _active_prompt_id
+                        # Complete previous node
+                        if pid and _active_node_id:
+                            _complete_node(pid, _active_node_id)
+                        _active_node_id = str(node)
+                        _active_prompt_id = pid
+                        if pid:
+                            _start_node(pid, _active_node_id)
+
             elif mtype == 'execution_start':
+                pid = data.get('prompt_id')
                 with _comfyui_ws_lock:
                     _comfyui_progress_cache = {'value': 0, 'max': 0,
-                                               'prompt_id': data.get('prompt_id'), 'node': None,
+                                               'prompt_id': pid, 'node': None,
                                                'node_value': 0, 'node_max': 0}
+                    _active_prompt_id = pid
+                    _active_node_id = None
+
             elif mtype in ('execution_success', 'execution_error', 'execution_interrupted'):
                 with _comfyui_ws_lock:
                     _comfyui_progress_cache = {'value': 0, 'max': 0, 'prompt_id': None, 'node': None,
                                                'node_value': 0, 'node_max': 0}
-        except Exception:
-            pass
+                    # Complete any remaining active node
+                    if _active_prompt_id and _active_node_id:
+                        _complete_node(_active_prompt_id, _active_node_id)
+                    _active_prompt_id = None
+                    _active_node_id = None
+
+        except Exception as e:
+            _log = open('/tmp/comfyui_ws.log', 'a')
+            _log.write(f'[{datetime.now().isoformat()}] on_message error: {e}\n')
+            _log.flush()
 
     def on_error(ws, err):
-        pass
+        print(f'[WS] Error: {err}')
 
     def on_close(ws, *_):
-        pass
+        print('[WS] Closed')
 
-    wsc = _ws.WebSocketApp(ws_url, on_message=on_message, on_error=on_error, on_close=on_close)
+    def on_open(ws):
+        nonlocal _log
+        _log.write(f'[{datetime.now().isoformat()}] Connected to ComfyUI\n')
+        _log.flush()
+
+    wsc = _ws.WebSocketApp(ws_url, on_open=on_open, on_message=on_message, on_error=on_error, on_close=on_close)
     wsc.run_forever(reconnect=5)
 
 
 def _ensure_comfyui_ws():
     """Start the WebSocket listener thread if not already running."""
     global _comfyui_ws_thread
+    _log = open('/tmp/comfyui_ws.log', 'a')
     if _comfyui_ws_thread and _comfyui_ws_thread.is_alive():
+        _log.write(f'[{datetime.now().isoformat()}] Thread already alive, skipping\n')
+        _log.flush()
         return
     try:
         endpoint = _comfyui_endpoint()
-    except Exception:
+    except Exception as e:
+        _log.write(f'[{datetime.now().isoformat()}] Failed to get endpoint: {e}\n')
+        _log.flush()
         return
+    _log.write(f'[{datetime.now().isoformat()}] Starting WS listener thread for {endpoint}\n')
+    _log.flush()
     t = _threading.Thread(target=_comfyui_ws_run, args=(endpoint,), daemon=True, name='comfyui-ws')
     t.start()
     _comfyui_ws_thread = t
+    _log.write(f'[{datetime.now().isoformat()}] Thread started\n')
+    _log.flush()
 
 
 def _fmt_queue_item(item):
@@ -4330,6 +4436,55 @@ def comfyui_queue_clear():
 def comfyui_progress():
     with _comfyui_ws_lock:
         return jsonify(dict(_comfyui_progress_cache))
+
+
+@app.route('/api/comfyui/submit', methods=['POST'])
+def comfyui_submit():
+    """Submit a workflow to ComfyUI. The server's WS client will receive events."""
+    body = request.get_json(silent=True)
+    if not body:
+        return jsonify({'error': 'JSON body required: { nodes, extra_data }'}, 400)
+    # Force client_id to match the WebSocket client so events are routed here
+    body['client_id'] = _comfyui_ws_client_id
+    # Ensure the WebSocket listener is running
+    _ensure_comfyui_ws()
+
+    try:
+        result = _comfyui_post('/prompt', body)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 502
+
+    prompt_id = result.get('prompt_id')
+    return jsonify({'prompt_id': prompt_id})
+
+
+# ── Per-node timing endpoints ──────────────────────────────────────────────
+
+@app.route('/api/comfyui/node-timing', methods=['GET'])
+def comfyui_node_timing():
+    """Return recent node timing records."""
+    limit = request.args.get('limit', 50, type=int)
+    try:
+        from ltx2_dataset_builder.utils.io import Database as _Db
+        db = _Db(_get_dsn())
+        rows = db.get_recent_node_timing(limit=limit)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify({'node_timing': rows})
+
+
+@app.route('/api/comfyui/node-timing/<prompt_id>', methods=['GET'])
+def comfyui_node_timing_by_prompt(prompt_id: str):
+    """Return per-node timing for a specific prompt."""
+    try:
+        from ltx2_dataset_builder.utils.io import Database as _Db
+        db = _Db(_get_dsn())
+        rows = db.get_node_timing(prompt_id)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify({'node_timing': rows})
 
 
 if __name__ == '__main__':

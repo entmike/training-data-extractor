@@ -86,8 +86,10 @@ export default function App() {
   const [comfyHistory, setComfyHistory]   = useState(null)
   const [comfyProgress, setComfyProgress] = useState(null)
   const [comfyError, setComfyError]       = useState(null)
+  const [comfyNodeTiming, setComfyNodeTiming] = useState(null)
   const comfyTimerRef  = useRef(null)
   const comfyProgRef   = useRef(null)
+  const comfyTimingRef = useRef(null)
   const prevRunningRef = useRef(null)   // track previous running set for completion detection
 
   // Toasts
@@ -187,6 +189,20 @@ export default function App() {
     return () => clearInterval(comfyProgRef.current)
   }, [hasRunning, fetchComfyProgress])
 
+  const fetchComfyNodeTiming = useCallback(async () => {
+    try {
+      const r = await fetch('/api/comfyui/node-timing?limit=50')
+      const d = await r.json()
+      if (!d.error) setComfyNodeTiming(d)
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => {
+    fetchComfyNodeTiming()
+    comfyTimingRef.current = setInterval(fetchComfyNodeTiming, 5000)
+    return () => clearInterval(comfyTimingRef.current)
+  }, [fetchComfyNodeTiming])
+
   const deleteQueueItem = useCallback(async (prompt_id) => {
     await fetch('/api/comfyui/queue/delete', {
       method: 'POST',
@@ -247,7 +263,8 @@ export default function App() {
       configOpen, toggleConfig: () => setConfigOpen(o => !o),
       queueOpen, toggleQueue: () => setQueueOpen(o => !o),
       comfyQueue, comfyHistory, comfyProgress, comfyError,
-      fetchComfyQueue, deleteQueueItem, clearComfyQueue,
+      comfyNodeTiming,
+      fetchComfyQueue, fetchComfyNodeTiming, deleteQueueItem, clearComfyQueue,
     }}>
       <Routes location={backgroundLocation || location}>
         <Route path="/" element={<Navigate to="/videos" replace />} />

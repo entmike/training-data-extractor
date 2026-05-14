@@ -3619,6 +3619,41 @@ html, body {
   color: var(--green);
   font-weight: 600;
 }
+
+/* Node timing table */
+.cq-node-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.cq-node-table th,
+.cq-node-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cq-node-table th {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.cq-node-table td {
+  color: var(--text-dim);
+  font-family: monospace;
+}
+.cq-node-table tr:hover td {
+  background: var(--bg-hover);
+}
+.cq-node--active {
+  color: var(--yellow) !important;
+  background: rgba(255, 215, 0, 0.08);
+}
+
 .cq-item-number {
   font-size: 12px;
   font-weight: 700;
