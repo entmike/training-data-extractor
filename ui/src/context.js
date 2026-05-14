@@ -15,9 +15,7 @@ export const AppContext = createContext({
   comfyHistory: null,    // { history } | null
   comfyProgress: null,   // { value, max, prompt_id, node, node_value } | null
   comfyError: null,
-  comfyNodeTiming: null, // { node_timing: [...] } | null
   fetchComfyQueue: () => {},
-  fetchComfyNodeTiming: () => {},
   deleteQueueItem: async () => {},
   clearComfyQueue: async () => {},
 })

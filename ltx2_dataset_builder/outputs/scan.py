@@ -141,7 +141,10 @@ def scan_outputs(scan_dir: Path, db, stat_cache: Optional[Dict] = None) -> Dict[
         sha256 = _sha256(file_path)
 
         existing = db.get_output_by_path(path_str)
-        if existing and existing['sha256'] == sha256:
+        # If the file already exists but lacks prompt_id, we still need to
+        # call upsert_output so the time-based matching can populate it.
+        needs_update = existing and existing['sha256'] == sha256 and existing.get('prompt_id') is None
+        if existing and existing['sha256'] == sha256 and not needs_update:
             if stat_cache is not None:
                 stat_cache[path_str] = (st.st_mtime_ns, st.st_size)
             skipped += 1

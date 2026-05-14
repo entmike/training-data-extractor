@@ -3595,6 +3595,21 @@ html, body {
 }
 .cq-item--running { border-color: rgba(35,134,54,.5); background: rgba(35,134,54,.08); }
 .cq-item--history { opacity: .75; }
+.cq-item--expanded {
+  flex-direction: column;
+  align-items: stretch;
+}
+.cq-item--expanded > .cq-item-body {
+  flex-direction: row;
+  align-items: center;
+}
+/* Header row inside job item */
+.cq-item-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
 .cq-item-body {
   display: flex;
   flex-direction: column;
@@ -3652,6 +3667,25 @@ html, body {
 .cq-node--active {
   color: var(--yellow) !important;
   background: rgba(255, 215, 0, 0.08);
+}
+
+/* Node timing detail (inside expanded history item) */
+.cq-node-timing-detail {
+  padding: 8px 12px;
+  margin: 0 44px 8px 44px;
+  background: rgba(0,0,0,0.15);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+/* Expandable chevron */
+.cq-chevron {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: 6px;
+  transition: transform 0.15s ease;
+  display: inline-block;
 }
 
 .cq-item-number {

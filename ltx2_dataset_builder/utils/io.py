@@ -65,6 +65,7 @@ class Database:
             "ALTER TABLE face_clusters    ADD COLUMN IF NOT EXISTS scene_count    INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE face_clusters    ADD COLUMN IF NOT EXISTS scene_ids      INTEGER[] NOT NULL DEFAULT '{}'",
             "ALTER TABLE scenes           ADD COLUMN IF NOT EXISTS detected       BOOLEAN NOT NULL DEFAULT TRUE",
+            "ALTER TABLE outputs          ADD COLUMN IF NOT EXISTS prompt_id      TEXT",
             "ALTER TABLE videos           ADD COLUMN IF NOT EXISTS fps_override   DOUBLE PRECISION",
             "ALTER TABLE clip_items       ADD COLUMN IF NOT EXISTS mute           BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE clip_items       ADD COLUMN IF NOT EXISTS denoise        BOOLEAN NOT NULL DEFAULT FALSE",
@@ -831,7 +832,7 @@ class Database:
     def get_output_by_path(self, path: str) -> Optional[Dict[str, Any]]:
         with self._connection() as conn:
             row = conn.execute(
-                "SELECT id, sha256 FROM outputs WHERE path = %s", (path,)
+                "SELECT id, sha256, prompt_id FROM outputs WHERE path = %s", (path,)
             ).fetchone()
             return dict(row) if row else None
 
@@ -849,10 +850,32 @@ class Database:
     ) -> int:
         wf_json = json.dumps(workflow) if workflow is not None else None
         pr_json = json.dumps(prompt) if prompt is not None else None
+
+        # Try to resolve prompt_id by matching file_mtime against queue completed_at
+        # Timestamps are near-identical (sub-second difference)
+        prompt_id = None
+        if file_mtime:
+            try:
+                with self._connection() as lookup_conn:
+                    rows = lookup_conn.execute(
+                        "SELECT prompt_id, completed_at FROM comfy_queue WHERE status = 'completed'"
+                    ).fetchall()
+                    best_row = None
+                    best_diff = float('inf')
+                    for r in rows:
+                        diff = abs((file_mtime - r['completed_at']).total_seconds())
+                        if diff < best_diff:
+                            best_diff = diff
+                            best_row = r
+                    if best_row and best_diff < 30:
+                        prompt_id = best_row['prompt_id']
+            except Exception:
+                pass
+
         with self._connection() as conn:
             cur = conn.execute("""
-                INSERT INTO outputs (path, sha256, file_size, file_mtime, mime_type, width, height, workflow, prompt)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
+                INSERT INTO outputs (path, sha256, file_size, file_mtime, mime_type, width, height, workflow, prompt, prompt_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
                 ON CONFLICT (path) DO UPDATE SET
                     sha256     = EXCLUDED.sha256,
                     file_size  = EXCLUDED.file_size,
@@ -862,9 +885,10 @@ class Database:
                     height     = EXCLUDED.height,
                     workflow   = EXCLUDED.workflow,
                     prompt     = EXCLUDED.prompt,
+                    prompt_id  = COALESCE(EXCLUDED.prompt_id, outputs.prompt_id),
                     indexed_at = NOW()
                 RETURNING id
-            """, (path, sha256, file_size, file_mtime, mime_type, width, height, wf_json, pr_json))
+            """, (path, sha256, file_size, file_mtime, mime_type, width, height, wf_json, pr_json, prompt_id))
             conn.commit()
             return cur.fetchone()['id']
 

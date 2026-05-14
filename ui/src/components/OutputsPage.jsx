@@ -16,6 +16,14 @@ function fmtBytes(b) {
   return `${(b / 1024 ** 3).toFixed(2)} GB`
 }
 
+function fmtDuration(seconds) {
+  if (seconds == null || seconds == undefined) return '—'
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  const mins = Math.floor(seconds / 60)
+  const secs = seconds - mins * 60
+  return `${mins}m ${secs.toFixed(0)}s`
+}
+
 function fmtDate(iso) {
   if (!iso) return '?'
   return new Date(iso).toLocaleString(undefined, {
@@ -674,6 +682,7 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
   const [favorites, setFavorites] = useState([])
   const [nodeInfo, setNodeInfo] = useState(_nodeInfoCache)
   const [mediaHidden, setMediaHidden] = useState(false)
+  const [nodeTiming, setNodeTiming] = useState(null)  // { node_timing: [...] } | null | 'loading'
 
   useEffect(() => {
     fetch('/api/prompt-favorites').then(r => r.json()).then(d => setFavorites(d.favorites || [])).catch(() => {})
@@ -710,6 +719,11 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
       .catch(() => setData({}))
     setEditedPrompt(null)
     setRenderStatus(null)
+    setNodeTiming(null)
+    fetch(`/api/outputs/${output.id}/node-timing`)
+      .then(r => r.json())
+      .then(d => setNodeTiming(d))
+      .catch(() => setNodeTiming({ node_timing: [] }))
   }, [output.id])
 
   async function handleRender() {
@@ -758,6 +772,7 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
     { key: 'favorites', label: 'Parameters',    available: !!data?.prompt   },
     { key: 'prompt',    label: 'Prompt (API)',   available: !!data?.prompt   },
     { key: 'workflow',  label: 'Workflow graph', available: !!data?.workflow },
+    { key: 'execution', label: 'Execution Times', available: true },
   ]
 
   return createPortal(
@@ -929,6 +944,39 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
               onRemoveFavorite={handleRemoveFavorite}
               nodeInfo={nodeInfo}
             />
+          ) : tab === 'execution' ? (
+            <div style={{ padding: 16 }}>
+              {nodeTiming === null ? (
+                <div style={{ color: 'var(--text-muted)' }}>Loading…</div>
+              ) : nodeTiming.node_timing.length === 0 ? (
+                <div style={{ color: 'var(--text-muted)' }}>No node timing data for this output.</div>
+              ) : (
+                <table className="cq-node-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th>Node</th>
+                      <th>Class</th>
+                      <th>Duration</th>
+                      <th>Steps</th>
+                      <th>Started</th>
+                      <th>Completed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {nodeTiming.node_timing.map((nt, i) => (
+                      <tr key={i} className={nt.completed_at ? '' : 'cq-node--active'}>
+                        <td>{nt.node_id}</td>
+                        <td>{nt.class_type}</td>
+                        <td>{nt.duration_sec != null ? fmtDuration(nt.duration_sec) : '—'}</td>
+                        <td>{nt.step_value != null ? `${nt.step_value}/${nt.steps ?? '?'}` : '—'}</td>
+                        <td>{nt.started_at ? new Date(nt.started_at).toLocaleTimeString() : '—'}</td>
+                        <td>{nt.completed_at ? new Date(nt.completed_at).toLocaleTimeString() : '…'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           ) : json ? (
             tab === 'prompt' ? (
               <JsonPanel

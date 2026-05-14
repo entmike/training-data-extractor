@@ -299,6 +299,7 @@ CREATE TABLE IF NOT EXISTS outputs (
     height      INTEGER,
     workflow    JSONB,               -- ComfyUI workflow graph
     prompt      JSONB,               -- ComfyUI prompt (API/queue format)
+    prompt_id   TEXT,                -- ComfyUI prompt_id linked to comfy_node_timing
     indexed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     liked_at    TIMESTAMPTZ,                         -- liked; liked items cannot be soft-deleted
     nsfw_at     TIMESTAMPTZ,                         -- NSFW-flagged; NSFW items cannot be soft-deleted

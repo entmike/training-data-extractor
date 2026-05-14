@@ -19,17 +19,48 @@ export default function ComfyQueuePage() {
     comfyHistory: history,
     comfyProgress: progress,
     comfyError: error,
-    comfyNodeTiming: nodeTiming,
     deleteQueueItem,
     clearComfyQueue,
   } = useContext(AppContext)
 
   const [clearing, setClearing] = useState(false)
+  // { promptId: { expanded: boolean, nodeTiming: array | null, loading: boolean } }
+  const [expandedJobs, setExpandedJobs] = useState({})
 
   async function clearQueue() {
     setClearing(true)
     await clearComfyQueue()
     setClearing(false)
+  }
+
+  async function handleToggle(promptId) {
+    const prevState = expandedJobs[promptId]
+    if (prevState && prevState.expanded) {
+      // Collapse — no fetch needed
+      setExpandedJobs(prev => {
+        const next = { ...prev }
+        delete next[promptId]
+        return next
+      })
+      return
+    }
+    // Expand — set loading state, then fetch
+    setExpandedJobs(prev => ({
+      ...prev, [promptId]: { expanded: true, nodeTiming: null, loading: true }
+    }))
+    try {
+      const r = await fetch(`/api/comfyui/node-timing/${promptId}`)
+      const d = await r.json()
+      const timing = d.node_timing ?? []
+      setExpandedJobs(prev => ({
+        ...prev, [promptId]: { expanded: true, nodeTiming: timing, loading: false }
+      }))
+    } catch {
+      setExpandedJobs(prev => {
+        const next = { ...prev, [promptId]: { expanded: true, nodeTiming: [], loading: false } }
+        return next
+      })
+    }
   }
 
   if (error) return (
@@ -148,54 +179,64 @@ export default function ComfyQueuePage() {
               ? fmtDuration(item.duration_seconds)
               : null
             const titleText = item.title ? item.title : fmtId(item.prompt_id)
+            const jobState = expandedJobs[item.prompt_id]
+            const isExpanded = !!(jobState && jobState.expanded)
+            const isLoading = !!(jobState && jobState.loading)
+            const nodeTiming = jobState?.nodeTiming ?? []
+
             return (
-              <div key={item.prompt_id} className="cq-item cq-item--history">
-                <span className={`cq-status-dot cq-status-dot--${item.status_str === 'success' ? 'ok' : 'err'}`} />
-                <div className="cq-item-body">
-                  <span className="cq-item-title">{titleText}</span>
-                  <span className="cq-item-meta">
-                    {item.status_str}
-                    {durationStr && <span className="cq-duration"> · {durationStr}</span>}
+              <div key={item.prompt_id} className={`cq-item cq-item--history${isExpanded ? ' cq-item--expanded' : ''}`}>
+                <div className="cq-item-header">
+                  <span className={`cq-status-dot cq-status-dot--${item.status_str === 'success' ? 'ok' : 'err'}`} />
+                  <span className="cq-chevron" onClick={() => handleToggle(item.prompt_id)} style={{ cursor: 'pointer' }}>
+                    {isExpanded ? '▼' : '▶'}
                   </span>
+                  <div className="cq-item-body" onClick={() => handleToggle(item.prompt_id)} style={{ cursor: 'pointer' }}>
+                    <span className="cq-item-title">{titleText}</span>
+                    <span className="cq-item-meta">
+                      {item.status_str}
+                      {durationStr && <span className="cq-duration"> · {durationStr}</span>}
+                    </span>
+                  </div>
                 </div>
+
+                {isExpanded && (
+                  <div className="cq-node-timing-detail">
+                    {isLoading ? (
+                      <div className="cq-empty">Loading node timing…</div>
+                    ) : nodeTiming.length === 0 ? (
+                      <div className="cq-empty">No node timing data</div>
+                    ) : (
+                      <table className="cq-node-table">
+                        <thead>
+                          <tr>
+                            <th>Node</th>
+                            <th>Class</th>
+                            <th>Duration</th>
+                            <th>Steps</th>
+                            <th>Started</th>
+                            <th>Completed</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {nodeTiming.map((nt, i) => (
+                            <tr key={i} className={nt.completed_at ? '' : 'cq-node--active'}>
+                              <td title={nt.prompt_id}>{nt.node_id}</td>
+                              <td>{nt.class_type}</td>
+                              <td>{nt.duration_sec != null ? fmtDuration(nt.duration_sec) : '—'}</td>
+                              <td>{nt.step_value != null ? `${nt.step_value}/${nt.steps ?? '?'}` : '—'}</td>
+                              <td>{nt.started_at ? new Date(nt.started_at).toLocaleTimeString() : '—'}</td>
+                              <td>{nt.completed_at ? new Date(nt.completed_at).toLocaleTimeString() : '…'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                )}
               </div>
             )
           })
-        )}
-      </section>
-
-      {/* Node Timing */}
-      <section className="cq-section">
-        <h3 className="cq-section-title">Node Timing</h3>
-        {nodeTiming === null ? (
-          <div className="cq-empty">Loading…</div>
-        ) : nodeTiming?.node_timing?.length === 0 ? (
-          <div className="cq-empty">Submit a job via this UI to capture node timing.</div>
-        ) : (
-          <table className="cq-node-table">
-            <thead>
-              <tr>
-                <th>Node</th>
-                <th>Class</th>
-                <th>Duration</th>
-                <th>Steps</th>
-                <th>Started</th>
-                <th>Completed</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(nodeTiming.node_timing ?? []).map((item, i) => (
-                <tr key={i} className={item.completed_at ? '' : 'cq-node--active'}>
-                  <td title={item.prompt_id}>{item.node_id}</td>
-                  <td>{item.class_type}</td>
-                  <td>{item.duration_sec != null ? fmtDuration(item.duration_sec) : '—'}</td>
-                  <td>{item.step_value != null ? `${item.step_value}/${item.steps ?? '?'}` : '—'}</td>
-                  <td>{item.started_at ? new Date(item.started_at).toLocaleTimeString() : '—'}</td>
-                  <td>{item.completed_at ? new Date(item.completed_at).toLocaleTimeString() : '…'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         )}
       </section>
     </div>

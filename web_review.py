@@ -3963,6 +3963,27 @@ def get_output_workflow(output_id: int):
     return jsonify({'workflow': row['workflow'], 'prompt': row['prompt']})
 
 
+@app.route('/api/outputs/<int:output_id>/node-timing')
+def get_output_node_timing(output_id: int):
+    """Return per-node timing for the comfy job linked to an output."""
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT prompt_id FROM outputs WHERE id = %s", (output_id,)
+    ).fetchone()
+    if not row or not row['prompt_id']:
+        conn.close()
+        return jsonify({'node_timing': []})
+
+    prompt_id = row['prompt_id']
+    rows = conn.execute(
+        "SELECT node_id, class_type, title, started_at, completed_at, duration_sec, steps, step_value "
+        "FROM comfy_node_timing WHERE prompt_id = %s ORDER BY node_id",
+        (prompt_id,)
+    ).fetchall()
+    conn.close()
+    return jsonify({'node_timing': [dict(r) for r in rows]})
+
+
 @app.route('/api/prompt-favorites', methods=['GET'])
 def get_prompt_favorites():
     conn = get_db_connection()
