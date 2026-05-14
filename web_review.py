@@ -4139,6 +4139,7 @@ _comfyui_progress_cache: dict = {'value': 0, 'max': 0, 'prompt_id': None, 'node'
 _comfyui_ws_lock = _threading.Lock()
 _comfyui_ws_thread: '_threading.Thread | None' = None
 _comfyui_ws_client_id = str(_uuid.uuid4())
+_comfyui_node_meta_cache: dict = {}
 
 
 # Cached Database instance (shared across requests for performance)
@@ -4161,9 +4162,15 @@ def _start_node(prompt_id: str, node_id: str) -> None:
     _log = open('/tmp/comfyui_ws.log', 'a')
     _log.write(f'[{datetime.now().isoformat()}] _start_node called: prompt_id={prompt_id}, node_id={node_id}\n')
     _log.flush()
+    # Look up node metadata from the submit-time cache
+    # WS events use "prompt:node" format (e.g. "267:215"), but cache keys are bare node IDs
+    _nid = node_id.split(':')[-1] if ':' in node_id else node_id
+    meta = _comfyui_node_meta_cache.get(_nid)
+    class_type = meta['class_type'] if meta else ''
+    title = meta['title'] if meta else ''
     db = _get_db()
     try:
-        db.upsert_node_timing(prompt_id, node_id, None, None)
+        db.upsert_node_timing(prompt_id, node_id, class_type, title)
         _log.write(f'[{datetime.now().isoformat()}] _start_node succeeded for {node_id}\n')
         _log.flush()
     except Exception as e:
@@ -4444,6 +4451,15 @@ def comfyui_submit():
     body = request.get_json(silent=True)
     if not body:
         return jsonify({'error': 'JSON body required: { nodes, extra_data }'}, 400)
+
+    # Cache node metadata for WS event lookup
+    prompt_data = body.get('prompt') or body
+    for node_id, node_data in (prompt_data.get('nodes') or {}).items():
+        _comfyui_node_meta_cache[node_id] = {
+            'class_type': node_data.get('class_type', ''),
+            'title': node_data.get('_meta', {}).get('title', ''),
+        }
+
     # Force client_id to match the WebSocket client so events are routed here
     body['client_id'] = _comfyui_ws_client_id
     # Ensure the WebSocket listener is running
