@@ -186,7 +186,7 @@ export default function ComfyQueuePage() {
             <tbody>
               {(nodeTiming.node_timing ?? []).map((item, i) => (
                 <tr key={i} className={item.completed_at ? '' : 'cq-node--active'}>
-                  <td title={item.prompt_id}>{item.title || item.node_id}</td>
+                  <td title={item.prompt_id}>{item.node_id}</td>
                   <td>{item.class_type}</td>
                   <td>{item.duration_sec != null ? fmtDuration(item.duration_sec) : '—'}</td>
                   <td>{item.step_value != null ? `${item.step_value}/${item.steps ?? '?'}` : '—'}</td>
