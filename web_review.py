@@ -4163,9 +4163,26 @@ def _start_node(prompt_id: str, node_id: str) -> None:
     _log.write(f'[{datetime.now().isoformat()}] _start_node called: prompt_id={prompt_id}, node_id={node_id}\n')
     _log.flush()
     # Look up node metadata from the submit-time cache
-    # WS events use "prompt:node" format (e.g. "267:215"), but cache keys are bare node IDs
-    _nid = node_id.split(':')[-1] if ':' in node_id else node_id
-    meta = _comfyui_node_meta_cache.get(_nid)
+    # Cache keys match WS event node IDs (e.g. "267:237")
+    meta = _comfyui_node_meta_cache.get(node_id)
+    if not meta:
+        # Fallback: fetch from ComfyUI history API
+        try:
+            resp = _comfyui_get(f'/history/{prompt_id}')
+            history = resp.get(prompt_id, [{}])[0]
+            # History returns {prompt_id: [{prompt: {node_id: node_data, ...}}]
+            nodes = history.get('prompt', {})
+            if ':' in node_id:
+                _nid = node_id.split(':')[-1]
+            else:
+                _nid = node_id
+            node_data = nodes.get(_nid, {})
+            meta = {
+                'class_type': node_data.get('class_type', ''),
+                'title': node_data.get('_meta', {}).get('title', ''),
+            }
+        except Exception:
+            meta = {'class_type': '', 'title': ''}
     class_type = meta['class_type'] if meta else ''
     title = meta['title'] if meta else ''
     db = _get_db()
@@ -4453,12 +4470,16 @@ def comfyui_submit():
         return jsonify({'error': 'JSON body required: { nodes, extra_data }'}, 400)
 
     # Cache node metadata for WS event lookup
-    prompt_data = body.get('prompt') or body
-    for node_id, node_data in (prompt_data.get('nodes') or {}).items():
+    # ComfyUI prompt dict is flat: {node_id: node_data}
+    _log = open('/tmp/comfyui_ws.log', 'a')
+    prompt = body.get('prompt') or body
+    for node_id, node_data in (prompt or {}).items():
         _comfyui_node_meta_cache[node_id] = {
             'class_type': node_data.get('class_type', ''),
             'title': node_data.get('_meta', {}).get('title', ''),
         }
+    _log.write(f'[{datetime.now().isoformat()}] submit: cached {len(prompt)} node meta entries\n')
+    _log.flush()
 
     # Force client_id to match the WebSocket client so events are routed here
     body['client_id'] = _comfyui_ws_client_id
