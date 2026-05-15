@@ -1,5 +1,6 @@
 import { useState, useContext } from 'react'
 import { AppContext } from '../context'
+import NodeTimingTable from './NodeTimingTable'
 
 function fmtDuration(seconds) {
   if (seconds == null || seconds == undefined) return '—'
@@ -218,30 +219,7 @@ export default function ComfyQueuePage() {
                     ) : nodeTiming.length === 0 ? (
                       <div className="cq-empty">No node timing data</div>
                     ) : (
-                      <table className="cq-node-table">
-                        <thead>
-                          <tr>
-                            <th>Node</th>
-                            <th>Class</th>
-                            <th>Duration</th>
-                            <th>Steps</th>
-                            <th>Started</th>
-                            <th>Completed</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {nodeTiming.map((nt, i) => (
-                            <tr key={i} className={nt.completed_at ? '' : 'cq-node--active'}>
-                              <td title={nt.prompt_id}>{nt.node_id}</td>
-                              <td>{nt.class_type}</td>
-                              <td>{nt.duration_sec != null ? fmtDuration(nt.duration_sec) : '—'}</td>
-                              <td>{nt.step_value != null ? `${nt.step_value}/${nt.steps ?? '?'}` : '—'}</td>
-                              <td>{nt.started_at ? new Date(nt.started_at).toLocaleTimeString() : '—'}</td>
-                              <td>{nt.completed_at ? new Date(nt.completed_at).toLocaleTimeString() : '…'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                      <NodeTimingTable nodes={nodeTiming} />
                     )}
                   </div>
                 )}

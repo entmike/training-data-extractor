@@ -313,7 +313,6 @@ export default function VideosPage({ tagMap, allTags }) {
     xhr.send(fd)
   }
 
-
   function openDropdown(mode, ref) {
     const rect = ref.current.getBoundingClientRect()
     setDropdown({ mode, pos: { top: rect.bottom + window.scrollY + 4, left: rect.left + window.scrollX } })

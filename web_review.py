@@ -58,6 +58,7 @@ WAVEFORMS_DIR     = _CACHE_DIR / "waveforms"
 CLIPS_DIR         = _CACHE_DIR / "clips"
 CLUSTER_CACHE_DIR = _CACHE_DIR / "clusters"
 SOURCE_DIR        = _resolve(config.get("source_dir", "./vids"))
+INPUTS_DIR        = _resolve(config.get("inputs_dir", "./inputs"))
 
 # ── PostgreSQL connection pool ────────────────────────────────────────────────
 
@@ -2215,6 +2216,8 @@ def set_video_fps_override(video_id: int):
 
 
 ALLOWED_VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv'}
+ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif'}
+ALLOWED_INPUT_EXTENSIONS = ALLOWED_VIDEO_EXTENSIONS | ALLOWED_IMAGE_EXTENSIONS
 
 
 @app.route('/api/videos/<int:video_id>/rename', methods=['PUT'])
@@ -2416,6 +2419,144 @@ def upload_video():
 
     f.save(str(dest))
     return jsonify({"filename": f.filename, "path": str(dest)}), 201
+
+
+@app.route('/api/inputs/upload', methods=['POST'])
+def upload_input():
+    """Upload an image or video file into the inputs directory (configurable via inputs_dir)."""
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({"error": "Empty filename"}), 400
+
+    ext = Path(f.filename).suffix.lower()
+    if ext not in ALLOWED_INPUT_EXTENSIONS:
+        return jsonify({"error": f"Unsupported file type: {ext}"}), 400
+
+    INPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    dest = INPUTS_DIR / f.filename
+    if dest.exists():
+        return jsonify({"error": f"{f.filename} already exists in inputs directory"}), 409
+
+    f.save(str(dest))
+    return jsonify({"filename": f.filename, "path": str(dest), "ext": ext}), 201
+
+
+@app.route('/api/inputs', methods=['GET'])
+def list_inputs():
+    """List all files in the inputs directory."""
+    if not INPUTS_DIR.exists():
+        return jsonify({"files": []})
+    files = []
+    for p in sorted(INPUTS_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if p.is_file():
+            files.append({
+                "name": p.name,
+                "path": str(p),
+                "size": p.stat().st_size,
+                "ext": p.suffix.lower(),
+            })
+    return jsonify({"files": files})
+
+
+@app.route('/api/inputs/<filename>', methods=['DELETE'])
+def delete_input(filename):
+    """Delete a single file from the inputs directory."""
+    target = INPUTS_DIR / filename
+    if not target.exists() or not target.is_file():
+        return jsonify({"error": "File not found"}), 404
+    target.unlink()
+    return jsonify({"deleted": filename}), 200
+
+
+@app.route('/api/inputs/thumb/<filename>')
+def input_thumbnail(filename):
+    """Serve a thumbnail for an uploaded file (image or first-frame of video)."""
+    target = INPUTS_DIR / filename
+    if not target.exists():
+        return jsonify({"error": "Not found"}), 404
+
+    ext = target.suffix.lower()
+    IMAGE_EXTS_SERVER = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif'}
+
+    if ext in IMAGE_EXTS_SERVER:
+        # Serve the image directly
+        mime_suffix = ext[1:]
+        if mime_suffix == 'tif':
+            mime_suffix = 'tiff'
+        content_type = f'image/{mime_suffix}'
+        return send_file(str(target), mimetype=content_type)
+    else:
+        # For videos, extract first frame as thumbnail
+        cache_dir = _CACHE_DIR / 'input_thumbs'
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        thumb_path = cache_dir / f"{target.stem}.jpg"
+
+        if not thumb_path.exists():
+            try:
+                subprocess.run(
+                    [
+                        'ffmpeg', '-y', '-i', str(target),
+                        '-ss', '0.01', '-frames:v', '1',
+                        '-vf', 'scale=320:-1', str(thumb_path)
+                    ],
+                    capture_output=True, timeout=30
+                )
+            except Exception:
+                return jsonify({"error": "Could not generate thumbnail"}), 500
+
+        if thumb_path.exists():
+            return send_file(str(thumb_path), mimetype='image/jpeg')
+        return jsonify({"error": "No thumbnail available"}), 404
+
+
+@app.route('/api/inputs/preview/<filename>')
+def input_video_preview(filename):
+    """Serve a video file for inline preview (range-request aware)."""
+    target = INPUTS_DIR / filename
+    if not target.exists():
+        return jsonify({"error": "Not found"}), 404
+
+    stat = target.stat()
+    content_type = 'video/mp4'  # detect more precisely
+    ext = target.suffix.lower()
+    if ext == '.mkv':
+        content_type = 'video/x-matroska'
+    elif ext == '.webm':
+        content_type = 'video/webm'
+    elif ext == '.mov':
+        content_type = 'video/quicktime'
+    elif ext == '.avi':
+        content_type = 'video/x-msvideo'
+    elif ext == '.wmv':
+        content_type = 'video/x-ms-wmv'
+
+    # Range request support
+    range_header = request.headers.get('Range')
+    if range_header:
+        match = re.match(r'bytes=(\d+)-(\d*)', range_header)
+        if match:
+            start = int(match.group(1))
+            end = int(match.group(2)) if match.group(2) else stat.st_size - 1
+            end = min(end, stat.st_size - 1)
+            length = end - start + 1
+            resp = Response(
+                iter([target.open('rb')]),
+                status=206,
+                direct_passthrough=True
+            )
+            resp.headers['Content-Range'] = f'bytes {start}-{end}/{stat.st_size}'
+            resp.headers['Accept-Ranges'] = 'bytes'
+            resp.headers['Content-Length'] = length
+            resp.headers['Content-Type'] = content_type
+            return resp
+
+    resp = Response(target.open('rb'), direct_passthrough=True)
+    resp.headers['Accept-Ranges'] = 'bytes'
+    resp.headers['Content-Length'] = stat.st_size
+    resp.headers['Content-Type'] = content_type
+    return resp
 
 
 @app.route('/api/videos/<int:video_id>', methods=['DELETE'])

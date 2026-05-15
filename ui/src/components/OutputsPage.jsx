@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import JsonView from '@uiw/react-json-view'
 import { darkTheme } from '@uiw/react-json-view/dark'
 import Header from './Header'
+import NodeTimingTable from './NodeTimingTable'
 import { AppContext } from '../context'
 
 const PAGE_SIZE = 50
@@ -965,30 +966,7 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
               ) : nodeTiming.node_timing.length === 0 ? (
                 <div style={{ color: 'var(--text-muted)' }}>No node timing data for this output.</div>
               ) : (
-                <table className="cq-node-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr>
-                      <th>Node</th>
-                      <th>Class</th>
-                      <th>Duration</th>
-                      <th>Steps</th>
-                      <th>Started</th>
-                      <th>Completed</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {nodeTiming.node_timing.map((nt, i) => (
-                      <tr key={i} className={nt.completed_at ? '' : 'cq-node--active'}>
-                        <td>{nt.node_id}</td>
-                        <td>{nt.class_type}</td>
-                        <td>{nt.duration_sec != null ? fmtDuration(nt.duration_sec) : '—'}</td>
-                        <td>{nt.step_value != null ? `${nt.step_value}/${nt.steps ?? '?'}` : '—'}</td>
-                        <td>{nt.started_at ? new Date(nt.started_at).toLocaleTimeString() : '—'}</td>
-                        <td>{nt.completed_at ? new Date(nt.completed_at).toLocaleTimeString() : '…'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <NodeTimingTable nodes={nodeTiming.node_timing} />
               )}
             </div>
           ) : json ? (

@@ -6,6 +6,7 @@ const TABS = [
   { path: '/videos',   label: 'Videos'   },
   { path: '/tags',     label: 'Tags'     },
   { path: '/clips',    label: 'Clips'    },
+  { path: '/inputs',   label: 'Inputs'   },
   { path: '/discover', label: 'Discover' },
   { path: '/outputs',  label: 'Outputs'  },
 ]

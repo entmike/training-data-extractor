@@ -5,6 +5,7 @@ import { AppContext } from './context'
 import Header from './components/Header'
 import VideoPlayerModal from './components/VideoPlayerModal'
 import ManageClipsModal from './components/ManageClipsModal'
+import InputsPage from './components/InputsPage'
 import VideosPage from './components/VideosPage'
 import TagsPage from './components/TagsPage'
 import DiscoverPage from './components/DiscoverPage'
@@ -255,6 +256,7 @@ export default function App() {
         <Route path="/videos" element={pageLayout(<VideosPage tagMap={tagMap} allTags={allTags} />)} />
         <Route path="/videos/:videoId" element={pageLayout(<VideosPage tagMap={tagMap} allTags={allTags} />)} />
         <Route path="/clips/:clipId?/:itemId?" element={<ClipsPage tagMap={tagMap} isLoading={isLoading} />} />
+        <Route path="/inputs" element={pageLayout(<InputsPage />)} />
         <Route path="/tags" element={pageLayout(<TagsPage />)} />
         <Route path="/tags/:tag" element={pageLayout(<TagsPage />)} />
         <Route path="/discover" element={pageLayout(<DiscoverPage />)} />

@@ -13,6 +13,8 @@ config.yaml
 config-*.yaml
 vids/
 vids-*/
+inputs/
+inputs-*/
 dataset/
 db_backups/
 backups/
