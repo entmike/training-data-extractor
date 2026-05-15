@@ -24,6 +24,19 @@ function fmtDuration(seconds) {
   return `${mins}m ${secs.toFixed(0)}s`
 }
 
+function fmtTimeAgo(iso) {
+  if (!iso) return ''
+  const now = new Date()
+  const then = new Date(iso)
+  const diff = (now - then) / 1000  // seconds
+  if (diff < 60) return `${Math.floor(diff)}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  const days = Math.floor(diff / 86400)
+  if (days < 30) return `${days}d ago`
+  if (days < 365) return `${Math.floor(days / 30)}mo ago`
+  return `${Math.floor(days / 365)}y ago`
+}
 function fmtDate(iso) {
   if (!iso) return '?'
   return new Date(iso).toLocaleString(undefined, {
@@ -1064,9 +1077,10 @@ function OutputCard({ output, onClick, inTrash, onRestore, onDelete, onLikeToggl
         <div className="output-card-meta">
           {output.width && output.height && <span>{output.width}×{output.height}</span>}
           <span>{fmtBytes(output.file_size)}</span>
+          {fmtTimeAgo(output.file_mtime) && <span style={{ color: 'var(--text-dim, #ffffff30)', fontSize: 10 }}>{fmtTimeAgo(output.file_mtime)}</span>}
         </div>
-        <div className="output-card-badges">
-          {output.has_workflow && <span className="output-badge output-badge--wf">workflow</span>}
+     <div className="output-card-badges">
+       {output.has_workflow && <span className="output-badge output-badge--wf">workflow</span>}
           {output.has_prompt   && <span className="output-badge output-badge--pr">prompt</span>}
           {inTrash && (
             <button

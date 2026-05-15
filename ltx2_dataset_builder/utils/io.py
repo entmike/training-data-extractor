@@ -80,6 +80,8 @@ class Database:
             "ALTER TABLE prompt_favorites DROP CONSTRAINT IF EXISTS prompt_favorites_class_type_input_key_key",
             "CREATE UNIQUE INDEX IF NOT EXISTS prompt_favorites_node_class_input ON prompt_favorites (node_id, class_type, input_key)",
             "CREATE TABLE IF NOT EXISTS comfyui_cache (key TEXT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+            "ALTER TABLE comfy_node_timing ADD COLUMN IF NOT EXISTS output_id INTEGER",
+            "DO $$ BEGIN\n                IF NOT EXISTS (\n                    SELECT 1 FROM information_schema.table_constraints\n                    WHERE constraint_name = 'comfy_node_timing_output_id_fkey'\n                ) THEN\n                    ALTER TABLE comfy_node_timing ADD CONSTRAINT comfy_node_timing_output_id_fkey\n                        FOREIGN KEY (output_id) REFERENCES outputs(id) ON DELETE CASCADE;\n                END IF;\n            END $$",
         ]
 
         with self._connection() as conn:
@@ -849,8 +851,8 @@ class Database:
         workflow: Optional[dict],
         prompt: Optional[dict],
     ) -> int:
-        wf_json = json.dumps(workflow) if workflow is not None else None
-        pr_json = json.dumps(prompt) if prompt is not None else None
+        wf_json = json.dumps(workflow, sort_keys=True) if workflow is not None else None
+        pr_json = json.dumps(prompt, sort_keys=True) if prompt is not None else None
         prompt_hash = None
         if pr_json is not None:
             prompt_hash = hashlib.sha256(pr_json.encode('utf-8')).hexdigest()
@@ -994,9 +996,9 @@ class Database:
 
         Returns True when the row was newly inserted, False when it already existed.
         """
-        wf_json = json.dumps(workflow) if workflow is not None else None
-        pr_json = json.dumps(prompt) if prompt is not None else None
-        ex_json = json.dumps(extra_data) if extra_data is not None else None
+        wf_json = json.dumps(workflow, sort_keys=True) if workflow is not None else None
+        pr_json = json.dumps(prompt, sort_keys=True) if prompt is not None else None
+        ex_json = json.dumps(extra_data, sort_keys=True) if extra_data is not None else None
         prompt_hash = None
         if pr_json is not None:
             prompt_hash = hashlib.sha256(pr_json.encode('utf-8')).hexdigest()

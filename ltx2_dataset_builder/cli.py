@@ -307,7 +307,7 @@ Examples:
     parser.add_argument(
         "--step",
         type=str,
-        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "subtitles", "debug-scenes", "debug-candidates", "auto-tag", "scan-faces", "cluster-faces", "scan-outputs", "scan-comfy-queue", "scan-comfy-node-timing"],
+        choices=["index", "scenes", "captions", "buckets", "candidates", "quality", "faces", "crops", "render", "manifest", "stats", "precache", "subtitles", "debug-scenes", "debug-candidates", "auto-tag", "scan-faces", "cluster-faces", "scan-outputs", "scan-comfy-queue", "scan-comfy-node-timing", "backfill-hashes"],
         help="Run a specific pipeline step"
     )
     parser.add_argument(
@@ -594,6 +594,13 @@ Examples:
             from .autotag.face_tag import run_auto_tag
             run_auto_tag(config, tag_filter=args.tag, video_filter=args.video,
                          require_confirmed=not args.skip_confirmed_gate)
+        elif args.step == "backfill-hashes":
+            from .outputs.backfill_hashes import backfill_output_hashes, backfill_queue_hashes
+            db_config = config.dsn
+            print(f"Backfilling prompt_hash with DSN: {db_config[:db_config.rfind('@')] }...")
+            out_count = backfill_output_hashes(db_config)
+            q_count = backfill_queue_hashes(db_config)
+            print(f"Done: {out_count} outputs + {q_count} comfy_queue rows backfilled")
         elif args.step == "scan-outputs":
             from .outputs.scan import scan_outputs, run_daemon
             from .utils.io import Database

@@ -375,6 +375,7 @@ CREATE TABLE IF NOT EXISTS comfy_queue (
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS comfy_node_timing (
     id            BIGSERIAL PRIMARY KEY,
+    output_id     INTEGER REFERENCES outputs(id) ON DELETE CASCADE,
     prompt_id     TEXT NOT NULL,
     node_id       TEXT NOT NULL,
     class_type    TEXT,
