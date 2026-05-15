@@ -9,6 +9,20 @@ function fmtDuration(seconds) {
   return `${mins}m ${secs.toFixed(0)}s`
 }
 
+function fmtTimeAgo(iso) {
+  if (!iso) return ''
+  const now = new Date()
+  const dt = new Date(iso)
+  const diffMs = now - dt
+  const diffMins = Math.floor(diffMs / 60000)
+  if (diffMins < 1) return 'just now'
+  if (diffMins < 60) return `${diffMins}m ago`
+  const diffHrs = Math.floor(diffMins / 60)
+  const remainMins = diffMins % 60
+  if (remainMins === 0) return `${diffHrs}h ago`
+  return `${diffHrs}h ${remainMins}m ago`
+}
+
 export default function ComfyQueuePage() {
   const {
     comfyQueue: queue,
@@ -174,6 +188,7 @@ export default function ComfyQueuePage() {
             const durationStr = item.duration_seconds != null
               ? fmtDuration(item.duration_seconds)
               : null
+            const timeAgo = fmtTimeAgo(item.completed_at)
             const jobState = expandedJobs[item.prompt_id]
             const isExpanded = !!(jobState && jobState.expanded)
             const isLoading = !!(jobState && jobState.loading)
@@ -191,6 +206,7 @@ export default function ComfyQueuePage() {
                     <span className="cq-item-meta">
                       {item.status_str}
                       {durationStr && <span className="cq-duration"> · {durationStr}</span>}
+                      {timeAgo && <span className="cq-time-ago"> · {timeAgo}</span>}
                     </span>
                   </div>
                 </div>
