@@ -299,6 +299,7 @@ CREATE TABLE IF NOT EXISTS outputs (
     height      INTEGER,
     workflow    JSONB,               -- ComfyUI workflow graph
     prompt      JSONB,               -- ComfyUI prompt (API/queue format)
+    prompt_hash TEXT,                 -- SHA-256 of the prompt JSON
     prompt_id   TEXT,                -- ComfyUI prompt_id linked to comfy_node_timing
     indexed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     liked_at    TIMESTAMPTZ,                         -- liked; liked items cannot be soft-deleted
@@ -359,6 +360,7 @@ CREATE TABLE IF NOT EXISTS comfy_queue (
     title         TEXT,
     node_count    INTEGER,
     client_id     TEXT,                                   -- extra_data.client_id, if present
+    prompt_hash   TEXT,                                    -- SHA-256 of the prompt JSON
     workflow      JSONB,                                  -- GUI workflow graph
     prompt        JSONB,                                  -- API-format prompt (nodes dict)
     extra_data    JSONB,                                  -- raw extra_data minus extra_pnginfo

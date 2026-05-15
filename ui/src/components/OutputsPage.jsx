@@ -34,7 +34,7 @@ function fmtDate(iso) {
 
 // ── Copy-on-click SHA-256 ────────────────────────────────────────────────────
 
-function CopyHash({ hash }) {
+function CopyHash({ hash, label = 'SHA-256' }) {
   const [copied, setCopied] = useState(false)
   if (!hash) return null
   function handleClick() {
@@ -57,7 +57,7 @@ function CopyHash({ hash }) {
   }
   return (
     <span>
-      <b style={{ color: 'var(--text)' }}>SHA-256</b>{' '}
+      <b style={{ color: 'var(--text)' }}>{label}</b>{' '}
       <span
         onClick={handleClick}
         title={hash}
@@ -772,7 +772,7 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
     { key: 'favorites', label: 'Parameters',    available: !!data?.prompt   },
     { key: 'prompt',    label: 'Prompt (API)',   available: !!data?.prompt   },
     { key: 'workflow',  label: 'Workflow graph', available: !!data?.workflow },
-    { key: 'execution', label: 'Execution Times', available: true },
+    { key: 'execution', label: 'Execution Times', available: nodeTiming ? nodeTiming.node_timing.length > 0 : false },
   ]
 
   return createPortal(
@@ -910,6 +910,7 @@ function WorkflowModal({ output, onClose, onPrev, onNext, hasPrev, hasNext, onDe
             <span><b style={{ color: 'var(--text)' }}>Type</b> {output.mime_type || '?'}</span>
             <span><b style={{ color: 'var(--text)' }}>Modified</b> {fmtDate(output.file_mtime)}</span>
             <CopyHash hash={output.sha256} />
+            <CopyHash hash={output.prompt_hash} label="Prompt" />
             {inTrash && output.deleted_at && (
               <span style={{ color: 'var(--error, #e55)' }}><b>Deleted</b> {fmtDate(output.deleted_at)}</span>
             )}

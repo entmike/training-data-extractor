@@ -3604,7 +3604,7 @@ def get_outputs():
     conn = get_db_connection()
     total = conn.execute(f"SELECT COUNT(*) as n FROM outputs {where}", params).fetchone()['n']
     rows  = conn.execute(f"""
-        SELECT id, path, sha256, file_size, file_mtime, mime_type,
+        SELECT id, path, sha256, prompt_hash, file_size, file_mtime, mime_type,
                width, height,
                workflow IS NOT NULL as has_workflow,
                prompt  IS NOT NULL as has_prompt,
@@ -3814,7 +3814,7 @@ def get_output_detail(output_id: int):
     """Return full output record for a single output by ID."""
     conn = get_db_connection()
     row = conn.execute(f"""
-        SELECT id, path, sha256, file_size, file_mtime, mime_type,
+        SELECT id, path, sha256, prompt_hash, file_size, file_mtime, mime_type,
                width, height,
                workflow IS NOT NULL as has_workflow,
                prompt   IS NOT NULL as has_prompt,
@@ -3864,7 +3864,7 @@ def get_liked_outputs():
     col = 'liked_at' if sort == 'liked' else 'file_mtime'
     conn = get_db_connection()
     rows = conn.execute(f"""
-        SELECT id, path, sha256, file_size, file_mtime, mime_type,
+        SELECT id, path, sha256, prompt_hash, file_size, file_mtime, mime_type,
                width, height,
                workflow IS NOT NULL as has_workflow,
                prompt   IS NOT NULL as has_prompt,
@@ -3888,7 +3888,7 @@ def get_nsfw_outputs():
     col = 'nsfw_at' if sort == 'nsfw' else 'file_mtime'
     conn = get_db_connection()
     rows = conn.execute(f"""
-        SELECT id, path, sha256, file_size, file_mtime, mime_type,
+        SELECT id, path, sha256, prompt_hash, file_size, file_mtime, mime_type,
                width, height,
                workflow IS NOT NULL as has_workflow,
                prompt   IS NOT NULL as has_prompt,
@@ -3912,7 +3912,7 @@ def get_trash_outputs():
     col = 'deleted_at' if sort == 'deleted' else 'file_mtime'
     conn = get_db_connection()
     rows = conn.execute(f"""
-        SELECT id, path, sha256, file_size, file_mtime, mime_type,
+        SELECT id, path, sha256, prompt_hash, file_size, file_mtime, mime_type,
                width, height,
                workflow IS NOT NULL as has_workflow,
                prompt   IS NOT NULL as has_prompt,
@@ -3965,20 +3965,31 @@ def get_output_workflow(output_id: int):
 
 @app.route('/api/outputs/<int:output_id>/node-timing')
 def get_output_node_timing(output_id: int):
-    """Return per-node timing for the comfy job linked to an output."""
+    """Return per-node timing for the comfy job linked to an output.
+
+    Join path:
+        outputs.prompt_hash → comfy_queue.prompt_hash
+        comfy_queue.prompt_id → comfy_node_timing.prompt_id
+    """
     conn = get_db_connection()
     row = conn.execute(
-        "SELECT prompt_id FROM outputs WHERE id = %s", (output_id,)
+        "SELECT prompt_hash FROM outputs WHERE id = %s", (output_id,)
     ).fetchone()
-    if not row or not row['prompt_id']:
+    if not row or not row['prompt_hash']:
         conn.close()
         return jsonify({'node_timing': []})
 
-    prompt_id = row['prompt_id']
+    prompt_hash = row['prompt_hash']
     rows = conn.execute(
-        "SELECT node_id, class_type, title, started_at, completed_at, duration_sec, steps, step_value "
-        "FROM comfy_node_timing WHERE prompt_id = %s ORDER BY node_id",
-        (prompt_id,)
+        """SELECT node_id, class_type, title, started_at, completed_at, duration_sec, steps, step_value
+        FROM comfy_node_timing
+        WHERE prompt_id IN (
+            SELECT q.prompt_id
+            FROM comfy_queue q
+            WHERE q.prompt_hash = %s
+        )
+        ORDER BY node_id""",
+        (prompt_hash,)
     ).fetchall()
     conn.close()
     return jsonify({'node_timing': [dict(r) for r in rows]})

@@ -2,6 +2,7 @@
 I/O utilities for the dataset builder — PostgreSQL backend.
 """
 
+import hashlib
 import json
 import numpy as np
 import psycopg2
@@ -850,6 +851,9 @@ class Database:
     ) -> int:
         wf_json = json.dumps(workflow) if workflow is not None else None
         pr_json = json.dumps(prompt) if prompt is not None else None
+        prompt_hash = None
+        if pr_json is not None:
+            prompt_hash = hashlib.sha256(pr_json.encode('utf-8')).hexdigest()
 
         # Try to resolve prompt_id by matching file_mtime against queue completed_at
         # Timestamps are near-identical (sub-second difference)
@@ -874,8 +878,8 @@ class Database:
 
         with self._connection() as conn:
             cur = conn.execute("""
-                INSERT INTO outputs (path, sha256, file_size, file_mtime, mime_type, width, height, workflow, prompt, prompt_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
+                INSERT INTO outputs (path, sha256, file_size, file_mtime, mime_type, width, height, workflow, prompt, prompt_hash, prompt_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)
                 ON CONFLICT (path) DO UPDATE SET
                     sha256     = EXCLUDED.sha256,
                     file_size  = EXCLUDED.file_size,
@@ -885,10 +889,11 @@ class Database:
                     height     = EXCLUDED.height,
                     workflow   = EXCLUDED.workflow,
                     prompt     = EXCLUDED.prompt,
+                    prompt_hash = EXCLUDED.prompt_hash,
                     prompt_id  = COALESCE(EXCLUDED.prompt_id, outputs.prompt_id),
                     indexed_at = NOW()
                 RETURNING id
-            """, (path, sha256, file_size, file_mtime, mime_type, width, height, wf_json, pr_json, prompt_id))
+            """, (path, sha256, file_size, file_mtime, mime_type, width, height, wf_json, pr_json, prompt_hash, prompt_id))
             conn.commit()
             return cur.fetchone()['id']
 
@@ -992,18 +997,22 @@ class Database:
         wf_json = json.dumps(workflow) if workflow is not None else None
         pr_json = json.dumps(prompt) if prompt is not None else None
         ex_json = json.dumps(extra_data) if extra_data is not None else None
+        prompt_hash = None
+        if pr_json is not None:
+            prompt_hash = hashlib.sha256(pr_json.encode('utf-8')).hexdigest()
         with self._connection() as conn:
             cur = conn.execute("""
                 INSERT INTO comfy_queue
                     (prompt_id, number, status, title, node_count, client_id,
-                     workflow, prompt, extra_data)
-                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb)
+                     prompt_hash, workflow, prompt, extra_data)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb)
                 ON CONFLICT (prompt_id) DO UPDATE SET
                     number       = COALESCE(EXCLUDED.number, comfy_queue.number),
                     status       = EXCLUDED.status,
                     title        = COALESCE(EXCLUDED.title, comfy_queue.title),
                     node_count   = COALESCE(EXCLUDED.node_count, comfy_queue.node_count),
                     client_id    = COALESCE(EXCLUDED.client_id, comfy_queue.client_id),
+                    prompt_hash  = EXCLUDED.prompt_hash,
                     started_at   = CASE
                         WHEN comfy_queue.status = 'pending' AND EXCLUDED.status = 'running'
                             AND comfy_queue.started_at IS NULL THEN NOW()
@@ -1012,7 +1021,7 @@ class Database:
                     last_seen_at = NOW()
                 RETURNING (xmax = 0) AS inserted
             """, (prompt_id, number, status, title, node_count, client_id,
-                  wf_json, pr_json, ex_json))
+                  prompt_hash, wf_json, pr_json, ex_json))
             row = cur.fetchone()
             conn.commit()
             return bool(row['inserted'])
