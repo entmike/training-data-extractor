@@ -11,9 +11,7 @@ import json
 import logging
 import mimetypes
 import os
-import signal
 import subprocess
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -211,39 +209,4 @@ def scan_outputs(scan_dir: Path, db, stat_cache: Optional[Dict] = None) -> Dict[
     return {'found': found, 'indexed': indexed, 'skipped': skipped}
 
 
-def run_daemon(scan_dir: Path, db, interval: int = 30) -> None:
-    """Run scan_outputs in a loop, re-scanning every *interval* seconds.
 
-    Maintains an in-memory stat cache so unchanged files are skipped in O(1)
-    without computing sha256 on every pass.  Exits cleanly on SIGINT/SIGTERM.
-    """
-    running = True
-
-    def _stop(sig, frame):
-        nonlocal running
-        logger.info("Daemon received signal %d, stopping after current scan …", sig)
-        running = False
-
-    signal.signal(signal.SIGINT,  _stop)
-    signal.signal(signal.SIGTERM, _stop)
-
-    stat_cache: Dict[str, tuple] = {}
-    logger.info("Daemon started — watching %s every %ds (SIGINT/SIGTERM to stop)", scan_dir, interval)
-
-    while running:
-        try:
-            scan_outputs(scan_dir, db, stat_cache=stat_cache)
-        except Exception:
-            logger.exception("Scan error — will retry next interval")
-
-        if not running:
-            break
-
-        logger.debug("Next scan in %ds …", interval)
-        # Sleep in 1s increments so SIGINT is handled promptly
-        for _ in range(interval):
-            if not running:
-                break
-            time.sleep(1)
-
-    logger.info("Daemon stopped.")

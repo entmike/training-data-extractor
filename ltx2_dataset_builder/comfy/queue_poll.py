@@ -22,6 +22,7 @@ import signal
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -104,7 +105,7 @@ def _process_job(db, item: Any, status: str) -> Optional[str]:
     return prompt_id
 
 
-def poll_once(db, endpoint: str) -> Dict[str, int]:
+def poll_once(db, endpoint: str, outputs_dir: Optional[Path] = None) -> Dict[str, int]:
     """One pass: fetch /queue, upsert active jobs, mark missing ones completed."""
     try:
         data = _fetch_queue(endpoint)
@@ -131,6 +132,13 @@ def poll_once(db, endpoint: str) -> Dict[str, int]:
     completed = db.mark_comfy_queue_completed(active)
     if completed:
         logger.info("  [completed] %d job(s) left the queue", completed)
+        # Trigger output scan when jobs complete
+        out_dir = outputs_dir or (Path.cwd() / "output")
+        try:
+            from .outputs.scan import scan_outputs
+            scan_outputs(out_dir, db)
+        except Exception:
+            logger.exception("Output scan after queue completion failed")
 
     logger.debug("Poll: %d running, %d pending, %d marked completed",
                  running, pending, completed)
@@ -144,7 +152,7 @@ def _resolve_endpoint(db, override: Optional[str]) -> Optional[str]:
     return val.rstrip('/') if val else None
 
 
-def run_daemon(db, interval: int = 5, endpoint_override: Optional[str] = None) -> None:
+def run_daemon(db, interval: int = 5, endpoint_override: Optional[str] = None, outputs_dir: Optional[Path] = None) -> None:
     """Poll /queue every *interval* seconds until SIGINT/SIGTERM.
 
     Re-reads the configured endpoint from the `config` table on every tick so
@@ -172,7 +180,7 @@ def run_daemon(db, interval: int = 5, endpoint_override: Optional[str] = None) -
         else:
             warned_no_endpoint = False
             try:
-                poll_once(db, endpoint)
+                poll_once(db, endpoint, outputs_dir=outputs_dir)
             except Exception:
                 logger.exception("Poll error — will retry next interval")
 

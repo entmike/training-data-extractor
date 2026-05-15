@@ -123,6 +123,7 @@ python migrate_sqlite_to_pg.py
 - **Auto-tagging**: `--step auto-tag` only scans videos that already have at least one confirmed scene for each tag. Use `--add-tag-ref TAG --video FILE --frame N` to register reference faces. Face embeddings are cached in `face_detections` — rescans after adding new refs skip ffmpeg/InsightFace entirely.
 - **scene_tags.confirmed**: `TRUE` = manually tagged, `FALSE` = auto-detected (shown as dashed purple pills in UI with ✓/✕ confirm/reject buttons)
 - **Subtitles**: PGS bitmap tracks are skipped; only text-based tracks (SRT/ASS/WebVTT) are extracted. Multiple overlapping subtitle entries within a scene are joined with ` / `.
+- **Event-driven output scanning**: `scan-outputs` no longer runs as a background daemon on a fixed interval. Instead, `scan_outputs` is triggered when a ComfyUI job completes — via WebSocket `execution_success`/`execution_error`/`execution_interrupted` events in `scan-comfy-node-timing`, and via `mark_comfy_queue_completed` in `scan-comfy-queue`. The `--daemon` flag for `scan-outputs` was removed; use `--step scan-outputs` for one-shot manual scans.
 
 ## DB tables (key)
 

@@ -22,6 +22,7 @@ import signal
 import time
 import urllib.request
 import websocket
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ def _resolve_endpoint(db) -> Optional[str]:
     return val.rstrip('/') if val else None
 
 
-def run_daemon(db, endpoint_override: Optional[str] = None) -> None:
+def run_daemon(db, endpoint_override: Optional[str] = None, outputs_dir: Optional[Path] = None) -> None:
     """Connect to ComfyUI WebSocket and persist node timing data."""
     endpoint = endpoint_override or _resolve_endpoint(db)
     if not endpoint:
@@ -131,6 +132,14 @@ def run_daemon(db, endpoint_override: Optional[str] = None) -> None:
                         mtype, pid, completed
                     )
                     _active_prompt = None
+
+                    # Trigger output scan on job completion
+                    try:
+                        from .outputs.scan import scan_outputs
+                        out_dir = outputs_dir or (Path.cwd() / "output")
+                        scan_outputs(out_dir, db)
+                    except Exception:
+                        logger.exception("Output scan after job completion failed")
 
         except Exception:
             logger.exception("Error processing WebSocket message")

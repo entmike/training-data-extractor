@@ -317,17 +317,11 @@ Examples:
         help="Directory to scan for ComfyUI outputs (used with --step scan-outputs; default: ./output)"
     )
     parser.add_argument(
-        "--daemon",
-        action="store_true",
-        default=False,
-        help="Run scan-outputs in daemon mode, re-scanning continuously until killed"
-    )
-    parser.add_argument(
         "--daemon-interval",
         type=int,
         default=30,
         metavar="SECONDS",
-        help="Seconds between scans in daemon mode (default: 30)"
+        help="Seconds between scans for daemon steps (default: 30)"
     )
     parser.add_argument(
         "--comfy-endpoint",
@@ -602,38 +596,34 @@ Examples:
             q_count = backfill_queue_hashes(db_config)
             print(f"Done: {out_count} outputs + {q_count} comfy_queue rows backfilled")
         elif args.step == "scan-outputs":
-            from .outputs.scan import scan_outputs, run_daemon
+            from .outputs.scan import scan_outputs
             from .utils.io import Database
             outputs_dir = Path(args.outputs_dir) if args.outputs_dir else Path.cwd() / "output"
             db = Database(config.dsn)
-            if args.daemon:
-                run_daemon(outputs_dir, db, interval=args.daemon_interval)
-            else:
-                scan_outputs(outputs_dir, db)
+            scan_outputs(outputs_dir, db)
         elif args.step == "scan-comfy-queue":
             from .comfy.queue_poll import run_daemon as run_queue_daemon, poll_once
             from .utils.io import Database
             db = Database(config.dsn)
+            outputs_dir = Path(args.outputs_dir) if args.outputs_dir else Path.cwd() / "output"
             if args.daemon:
-                run_queue_daemon(db, interval=args.daemon_interval, endpoint_override=args.comfy_endpoint)
+                run_queue_daemon(db, interval=args.daemon_interval, endpoint_override=args.comfy_endpoint, outputs_dir=outputs_dir)
             else:
                 endpoint = args.comfy_endpoint or db.get_config_value('comfyui_endpoint')
                 if not endpoint:
                     logger.error("ComfyUI endpoint not configured (config.comfyui_endpoint) and --comfy-endpoint not provided")
                     return 1
-                poll_once(db, endpoint.rstrip('/'))
+                poll_once(db, endpoint.rstrip('/'), outputs_dir=outputs_dir)
         elif args.step == "scan-comfy-node-timing":
             from .comfy.node_timing import run_daemon as run_node_timing_daemon
             from .utils.io import Database
             db = Database(config.dsn)
-            if args.daemon:
-                run_node_timing_daemon(db, endpoint_override=args.comfy_endpoint)
-            else:
-                endpoint = args.comfy_endpoint or db.get_config_value('comfyui_endpoint')
-                if not endpoint:
-                    logger.error("ComfyUI endpoint not configured (config.comfyui_endpoint) and --comfy-endpoint not provided")
-                    return 1
-                run_node_timing_daemon(db, endpoint_override=endpoint.rstrip('/'))
+            outputs_dir = Path(args.outputs_dir) if args.outputs_dir else Path.cwd() / "output"
+            endpoint = args.comfy_endpoint or db.get_config_value('comfyui_endpoint')
+            if not endpoint:
+                logger.error("ComfyUI endpoint not configured (config.comfyui_endpoint) and --comfy-endpoint not provided")
+                return 1
+            run_node_timing_daemon(db, endpoint_override=endpoint.rstrip('/'), outputs_dir=outputs_dir)
         elif args.step:
             run_step(config, args.step, video=args.video)
         else:
