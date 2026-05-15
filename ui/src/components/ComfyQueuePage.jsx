@@ -1,10 +1,6 @@
 import { useState, useContext } from 'react'
 import { AppContext } from '../context'
 
-function fmtId(id) {
-  return id ? id.slice(0, 8) : '—'
-}
-
 function fmtDuration(seconds) {
   if (seconds == null || seconds == undefined) return '—'
   if (seconds < 60) return `${seconds.toFixed(1)}s`
@@ -109,8 +105,8 @@ export default function ComfyQueuePage() {
             <div key={item.prompt_id} className="cq-item cq-item--running">
               <span className="cq-spinner" />
               <div className="cq-item-body">
-                <span className="cq-item-title">{item.title}</span>
-                <span className="cq-item-meta">{fmtId(item.prompt_id)} · {item.node_count} nodes</span>
+                <span className="cq-item-title">{item.prompt_id}</span>
+                <span className="cq-item-meta">{item.node_count} nodes</span>
 
                 {prog && item.node_count > 0 && prog.node && !isSampling && (
                   <div className="cq-progress">
@@ -158,8 +154,8 @@ export default function ComfyQueuePage() {
           <div key={item.prompt_id} className="cq-item">
             <span className="cq-item-number">#{item.number}</span>
             <div className="cq-item-body">
-              <span className="cq-item-title">{item.title}</span>
-              <span className="cq-item-meta">{fmtId(item.prompt_id)} · {item.node_count} nodes</span>
+              <span className="cq-item-title">{item.prompt_id}</span>
+              <span className="cq-item-meta">{item.node_count} nodes</span>
             </div>
             <button className="cq-delete-btn" onClick={() => deleteQueueItem(item.prompt_id)} title="Remove from queue">
               ✕
@@ -178,7 +174,6 @@ export default function ComfyQueuePage() {
             const durationStr = item.duration_seconds != null
               ? fmtDuration(item.duration_seconds)
               : null
-            const titleText = item.title ? item.title : fmtId(item.prompt_id)
             const jobState = expandedJobs[item.prompt_id]
             const isExpanded = !!(jobState && jobState.expanded)
             const isLoading = !!(jobState && jobState.loading)
@@ -192,7 +187,7 @@ export default function ComfyQueuePage() {
                     {isExpanded ? '▼' : '▶'}
                   </span>
                   <div className="cq-item-body" onClick={() => handleToggle(item.prompt_id)} style={{ cursor: 'pointer' }}>
-                    <span className="cq-item-title">{titleText}</span>
+                    <span className="cq-item-title">{item.prompt_id}</span>
                     <span className="cq-item-meta">
                       {item.status_str}
                       {durationStr && <span className="cq-duration"> · {durationStr}</span>}
