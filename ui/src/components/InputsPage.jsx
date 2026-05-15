@@ -16,25 +16,36 @@ export default function InputsPage() {
 
   const [filterType, setFilterType] = useState('all')  // 'all', 'image', 'video'
   const [searchQuery, setSearchQuery] = useState('')
+  const [currentDir, setCurrentDir] = useState('')
 
   const uploadInputRef = useRef(null)
 
   const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif'])
   const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv'])
 
-  const loadFiles = useCallback(() => {
-    fetch('/api/inputs')
+  const loadFiles = useCallback((dirPath) => {
+    const url = dirPath
+      ? `/api/inputs?dir_path=${encodeURIComponent(dirPath)}`
+      : '/api/inputs'
+    fetch(url)
       .then(r => r.json())
-      .then(d => setFiles(d.files || []))
-      .catch(() => {})
+      .then(d => {
+        setFiles(d.files || [])
+        setLoading(false)
+      })
+      .catch(() => {
+        setLoading(false)
+      })
   }, [])
 
   useEffect(() => {
-    loadFiles()
-  }, [loadFiles])
+    loadFiles(currentDir)
+  }, [loadFiles, currentDir])
 
   const filtered = files.filter(f => {
-    const ext = f.ext.toLowerCase()
+    // Always keep directories visible
+    if (f.type === 'dir') return true
+    const ext = (f.ext || '').toLowerCase()
     if (filterType === 'image' && !IMAGE_EXTS.has(ext)) return false
     if (filterType === 'video' && !VIDEO_EXTS.has(ext)) return false
     if (searchQuery) {
@@ -42,6 +53,31 @@ export default function InputsPage() {
     }
     return true
   })
+
+  // --- Breadcrumb navigation ---
+  const breadcrumbs = currentDir ? ['.../'] : [currentDir || '/']
+  if (currentDir) {
+    const parts = currentDir.split('/').filter(Boolean)
+    for (const part of parts) {
+      breadcrumbs.push(part)
+    }
+  }
+
+  function handleDirClick(dirName) {
+    if (dirName === '..') {
+      // Navigate up one level
+      const parts = currentDir.split('/').filter(Boolean)
+      parts.pop()
+      setCurrentDir(parts.join('/'))
+    } else if (dirName === '/') {
+      setCurrentDir('')
+    } else if (dirName === '.../') {
+      setCurrentDir('')
+    } else {
+      const newDir = currentDir ? `${currentDir}/${dirName}` : dirName
+      setCurrentDir(newDir)
+    }
+  }
 
   function handleUploadInput(e) {
     const file = e.target.files?.[0]
@@ -62,7 +98,7 @@ export default function InputsPage() {
       const d = JSON.parse(xhr.responseText)
       if (xhr.status === 200 || xhr.status === 201) {
         setUploadResult({ name: d.filename, ext: d.ext })
-        loadFiles()
+        loadFiles(currentDir)
       } else {
         setUploadResult({ error: d.error || 'Upload failed' })
       }
@@ -73,9 +109,12 @@ export default function InputsPage() {
   }
 
   function handleDelete(filename) {
-    fetch(`/api/inputs/${encodeURIComponent(filename)}`, { method: 'DELETE' })
+    const url = currentDir
+      ? `/api/inputs/${encodeURIComponent(filename)}?dir_path=${encodeURIComponent(currentDir)}`
+      : `/api/inputs/${encodeURIComponent(filename)}`
+    fetch(url, { method: 'DELETE' })
       .then(r => r.json())
-      .then(() => loadFiles())
+      .then(() => loadFiles(currentDir))
       .catch(() => {})
   }
 
@@ -91,13 +130,52 @@ export default function InputsPage() {
     })
   }
 
-  // Thumbnail URL — always uses the thumb endpoint (cached, scaled)
+  // Thumbnail URL — include dir_path for subdirectory files
   function thumbUrl(file) {
-    return `/api/inputs/thumb/${encodeURIComponent(file.name)}`
+    const qs = currentDir ? `?dir_path=${encodeURIComponent(currentDir)}` : ''
+    return `/api/inputs/thumb/${encodeURIComponent(file.name)}${qs}`
+  }
+
+  // Preview URL
+  function previewUrl(file) {
+    const qs = currentDir ? `?dir_path=${encodeURIComponent(currentDir)}` : ''
+    return `/api/inputs/preview/${encodeURIComponent(file.name)}${qs}`
+  }
+
+  function breadcrumbLabel(crumb, i) {
+    if (i === 0) {
+      return crumb === '.../' ? '📁 Inputs' : '/'
+    }
+    return crumb
+  }
+
+  // Separator between breadcrumb items
+  function breadcrumbSep(i, total) {
+    return i < total - 1 ? '  ›  ' : ''
   }
 
   return (
     <div className="inputs-page">
+      {/* Breadcrumb Navigation */}
+      <div className="inputs-breadcrumb">
+        {breadcrumbs.map((crumb, i) => (
+          <span key={i} className="inputs-breadcrumb-item">
+            <span
+              className="inputs-breadcrumb-link"
+              onClick={() => handleDirClick(crumb)}
+            >
+              {breadcrumbLabel(crumb, i)}
+              {breadcrumbSep(i, breadcrumbs.length)}
+            </span>
+          </span>
+        ))}
+        {currentDir && (
+          <span className="inputs-breadcrumb-parent" onClick={() => handleDirClick('..')}>
+            ↑ Parent
+          </span>
+        )}
+      </div>
+
       {/* Header */}
       <div className="inputs-header">
         <div className="inputs-header-left">
@@ -181,27 +259,64 @@ export default function InputsPage() {
         ) : viewMode === 'grid' ? (
           <div className="inputs-grid">
             {filtered.map(f => (
-              <InputThumb
-                key={f.name}
-                file={f}
-                onPlay={handlePlay}
-                onDelete={handleDelete}
-                thumbUrl={thumbUrl(f)}
-                isVideo={VIDEO_EXTS.has(f.ext)}
-              />
+              f.type === 'dir' ? (
+                <DirThumb
+                  key={f.name}
+                  file={f}
+                  onNavigate={handleDirClick}
+                />
+              ) : (
+                <InputThumb
+                  key={f.name}
+                  file={f}
+                  onPlay={handlePlay}
+                  onDelete={handleDelete}
+                  thumbUrl={thumbUrl(f)}
+                  isVideo={VIDEO_EXTS.has(f.ext)}
+                />
+              )
             ))}
           </div>
         ) : (
           <div className="inputs-list">
             {filtered.map(f => (
-              <InputListItem
-                key={f.name}
-                file={f}
-                onDelete={handleDelete}
-              />
+              f.type === 'dir' ? (
+                <DirListItem
+                  key={f.name}
+                  file={f}
+                  onNavigate={handleDirClick}
+                />
+              ) : (
+                <InputListItem
+                  key={f.name}
+                  file={f}
+                  onDelete={handleDelete}
+                />
+              )
             ))}
           </div>
         )}
+      </div>
+    </div>
+  )}
+
+// --- Grid item for directories ---
+function DirThumb({ file, onNavigate }) {
+  return (
+    <div
+      className="input-thumb dir-thumb"
+      onClick={() => onNavigate(file.name)}
+      style={{ cursor: 'pointer' }}
+    >
+      <div className="input-thumb__media">
+        <div className="input-thumb__blur" style={{ background: '#2a2a2e' }} />
+        <div className="input-thumb__dir-icon">📁</div>
+      </div>
+      <div className="input-thumb__info">
+        <div className="input-thumb__name" title={file.name}>{file.name}</div>
+        <div className="input-thumb__meta">
+          <span className="input-thumb__dir-label">Directory</span>
+        </div>
       </div>
     </div>
   )}
@@ -235,6 +350,20 @@ function InputThumb({ file, onPlay, onDelete, thumbUrl, isVideo }) {
           <span>{file.ext}</span>
         </div>
       </div>
+    </div>
+  )}
+
+function DirListItem({ file, onNavigate }) {
+  return (
+    <div
+      className="input-list-item"
+      onClick={() => onNavigate(file.name)}
+      style={{ cursor: 'pointer' }}
+    >
+      <span className="input-list-icon">📁</span>
+      <span className="input-list-name">{file.name}</span>
+      <span className="input-list-size">Directory</span>
+      <span className="input-list-delete" style={{ visibility: 'hidden' }}>✕</span>
     </div>
   )}
 

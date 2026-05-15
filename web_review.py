@@ -2590,25 +2590,53 @@ def upload_input():
 
 @app.route('/api/inputs', methods=['GET'])
 def list_inputs():
-    """List all files in the inputs directory."""
-    if not INPUTS_DIR.exists():
-        return jsonify({"files": []})
-    files = []
-    for p in sorted(INPUTS_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+    """List files and directories in the inputs directory (with optional subdirectory path)."""
+    dir_path = request.args.get('dir_path', '')
+    
+    if dir_path:
+        target_dir = INPUTS_DIR / dir_path
+    else:
+        target_dir = INPUTS_DIR
+    
+    if not target_dir.exists() or not target_dir.is_dir():
+        return jsonify({"files": [], "type": "file"})
+    
+    entries = []
+    for p in sorted(target_dir.iterdir(), key=lambda x: (not x.is_dir(), x.stat().st_mtime), reverse=False):
         if p.is_file():
-            files.append({
+            entries.append({
                 "name": p.name,
                 "path": str(p),
                 "size": p.stat().st_size,
                 "ext": p.suffix.lower(),
+                "type": "file",
             })
-    return jsonify({"files": files})
+        else:
+            entries.append({
+                "name": p.name,
+                "type": "dir",
+            })
+    
+    # Add parent directory entry if not at root
+    if dir_path:
+        parent = '..'
+        entries.append({
+            "name": '..',
+            "type": "dir",
+        })
+    
+    return jsonify({"files": entries})
 
 
 @app.route('/api/inputs/<filename>', methods=['DELETE'])
 def delete_input(filename):
-    """Delete a single file from the inputs directory."""
-    target = INPUTS_DIR / filename
+    """Delete a single file from the inputs directory (supports subdirectory)."""
+    dir_path = request.args.get('dir_path', '')
+    if dir_path:
+        base_dir = INPUTS_DIR / dir_path
+    else:
+        base_dir = INPUTS_DIR
+    target = base_dir / filename
     if not target.exists() or not target.is_file():
         return jsonify({"error": "File not found"}), 404
     target.unlink()
@@ -2617,13 +2645,13 @@ def delete_input(filename):
 
 @app.route('/api/inputs/thumb/<filename>')
 def input_thumbnail(filename):
-    """Serve a cached thumbnail for any uploaded file (image or video).
-
-    Both images and videos are scaled down to a small width (default 320px)
-    and cached under .cache/input_thumbs/ so the browser never loads full-res
-    images as thumbnails.
-    """
-    target = INPUTS_DIR / filename
+    """Serve a cached thumbnail for any uploaded file (image or video)."""
+    dir_path = request.args.get('dir_path', '')
+    if dir_path:
+        base_dir = INPUTS_DIR / dir_path
+    else:
+        base_dir = INPUTS_DIR
+    target = base_dir / filename
     if not target.exists():
         return jsonify({"error": "Not found"}), 404
 
@@ -2669,7 +2697,12 @@ def input_thumbnail(filename):
 @app.route('/api/inputs/preview/<filename>')
 def input_video_preview(filename):
     """Serve a video file for inline preview (range-request aware)."""
-    target = INPUTS_DIR / filename
+    dir_path = request.args.get('dir_path', '')
+    if dir_path:
+        base_dir = INPUTS_DIR / dir_path
+    else:
+        base_dir = INPUTS_DIR
+    target = base_dir / filename
     if not target.exists():
         return jsonify({"error": "Not found"}), 404
 
@@ -4834,7 +4867,21 @@ def comfyui_submit():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
-        return jsonify({'error': str(e)}), 502
+        err_str = str(e)
+        if 'timed out' in err_str:
+            return jsonify({'error': f'ComfyUI request timed out: {err_str}'}), 504
+        elif 'Connection refused' in err_str or 'Connection reset' in err_str or 'Name or service not known' in err_str:
+            return jsonify({'error': f'Cannot reach ComfyUI at {_comfyui_endpoint()}: {err_str}'}), 502
+        elif hasattr(e, 'read'):
+            # HTTPError — parse ComfyUI's JSON error body
+            try:
+                err_body = json.loads(e.read().decode())
+                msg = err_body.get('error', {}).get('message', err_body)
+                return jsonify({'error': f'ComfyUI rejected prompt: {msg}'}, {'error': str(err_body)}), 422
+            except Exception:
+                return jsonify({'error': f'ComfyUI error: {err_str}'}), 502
+        else:
+            return jsonify({'error': f'ComfyUI error: {err_str}'}), 502
 
     prompt_id = result.get('prompt_id')
     return jsonify({'prompt_id': prompt_id})
