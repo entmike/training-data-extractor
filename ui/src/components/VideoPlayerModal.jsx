@@ -651,10 +651,12 @@ export default function VideoPlayerModal({ player, onClose, pageMode = false }) 
   }
 
   // ── Frame extraction ──────────────────────────────────
+  const [frameMenuOpen, setFrameMenuOpen] = useState(false)
+  const frameMenuRef = useRef(null)
+
   async function handleExtractFrame() {
-    // Use the current absolute source frame number
+    setFrameMenuOpen(false)
     const url = `/api/frame/${sceneId}?frame=${currentAbsFrame}`
-    // Fetch the PNG and trigger a browser download
     const res = await fetch(url)
     if (!res.ok) {
       alert(`Frame extraction failed: ${res.status}`)
@@ -671,6 +673,33 @@ export default function VideoPlayerModal({ player, onClose, pageMode = false }) 
     a.remove()
     URL.revokeObjectURL(a.href)
   }
+
+  async function handleSaveToInputs() {
+    setFrameMenuOpen(false)
+    try {
+      const r = await fetch(`/api/frame/${sceneId}/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ frame: currentAbsFrame }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Save failed')
+      alert(`Saved to inputs: ${d.filename}`)
+    } catch (e) {
+      alert(`Failed to save: ${e.message}`)
+    }
+  }
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function onDown(e) {
+      if (frameMenuOpen && frameMenuRef.current && !frameMenuRef.current.contains(e.target)) {
+        setFrameMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [frameMenuOpen])
 
   // ── Render ─────────────────────────────────────────────
   const wrapperProps = pageMode ? {
@@ -898,13 +927,26 @@ export default function VideoPlayerModal({ player, onClose, pageMode = false }) 
                 {playEntireScene ? 'Bucket' : 'Full'}
               </button>
             )}
-            <button
-              className="detect-bucket-btn detect-bucket-btn--frame"
-              onClick={handleExtractFrame}
-              title="Extract current frame as tone-mapped PNG"
-            >
-              📷 Extract Frame
-            </button>
+            <div ref={frameMenuRef} className="frame-extract-wrap">
+              <button
+                className={`detect-bucket-btn detect-bucket-btn--frame${frameMenuOpen ? ' detect-bucket-btn--active' : ''}`}
+                onClick={() => setFrameMenuOpen(o => !o)}
+                title="Extract frame: download or save to inputs"
+              >
+                📷 Extract
+                <span className="dropdown-chevron">{frameMenuOpen ? '▾' : '▸'}</span>
+              </button>
+              {frameMenuOpen && (
+                <div className="frame-extract-menu">
+                  <button className="frame-extract-option" onClick={handleExtractFrame}>
+                    ⬇ Download PNG
+                  </button>
+                  <button className="frame-extract-option" onClick={handleSaveToInputs}>
+                    💾 Save to inputs/
+                  </button>
+                </div>
+              )}
+            </div>
             {bucketData && (
               <FrameCountStepper
                 frameCount={bucketFrameCount}

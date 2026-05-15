@@ -1330,6 +1330,83 @@ def extract_frame(scene_id: int):
     return send_file(io.BytesIO(buf.tobytes()), mimetype='image/png')
 
 
+@app.route('/api/frame/<int:scene_id>/save', methods=['POST'])
+def save_frame_to_inputs(scene_id: int):
+    """Extract a frame and save it directly to the inputs directory."""
+    INPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    conn = get_db_connection()
+    row = conn.execute("""
+        SELECT s.start_time, s.end_time, s.start_frame, s.end_frame,
+               v.path as video_path, COALESCE(v.fps_override, v.fps) AS fps,
+               v.frame_offset, v.width, v.height
+        FROM scenes s
+        JOIN videos v ON s.video_id = v.id
+        WHERE s.id = %s
+    """, (scene_id,)).fetchone()
+    conn.close()
+
+    if not row:
+        return jsonify({"error": "Scene not found"}), 404
+
+    video_file = _resolve(row["video_path"])
+    if not video_file.exists():
+        return jsonify({"error": "Video file not found"}), 404
+
+    fps = row["fps"] or 24.0
+    frame_offset = row["frame_offset"] or 0
+
+    # Accept frame from body JSON
+    body = request.get_json(silent=True) or {}
+    frame_num = body.get('frame')
+    if frame_num is not None:
+        abs_frame = int(frame_num)
+        frame_time = max(0.0, (abs_frame - frame_offset - 1) / fps)
+    else:
+        frame_time = max(0.0, row["start_time"])
+
+    is_hdr = _is_hdr_video(video_file)
+
+    tonemap_filter = (
+        'zscale=transfer=linear:npl=100,format=gbrpf32le,'
+        'zscale=primaries=bt709,tonemap=tonemap=hable:desat=0,'
+        'zscale=transfer=bt709:matrix=bt709:range=tv,'
+        'format=bgr24'
+    )
+    vf_args = ['-vf', tonemap_filter] if is_hdr else []
+
+    cmd = [
+        'ffmpeg', '-ss', f'{frame_time:.6f}', '-i', str(video_file),
+        '-vframes', '1',
+        *vf_args,
+        '-f', 'image2pipe', '-vcodec', 'rawvideo',
+        '-pix_fmt', 'bgr24', '-',
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, timeout=30)
+    if result.returncode != 0:
+        return jsonify({"error": f"Frame extraction failed"}), 500
+
+    import numpy as np
+    import cv2
+
+    w = row['width']
+    h = row['height']
+    frame = np.frombuffer(result.stdout, dtype=np.uint8).reshape((h, w, 3))
+    ok, buf = cv2.imencode('.png', frame, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+    if not ok:
+        return jsonify({"error": "PNG encoding failed"}), 500
+
+    # Determine output filename
+    video_stem = video_file.stem
+    abs_frame = int(frame_num) if frame_num else int(frame_time * fps)
+    filename = f"{video_stem}_f{abs_frame}.png"
+    dest = INPUTS_DIR / filename
+
+    dest.write_bytes(buf.tobytes())
+    return jsonify({"filename": filename, "path": str(dest)})
+
+
 @app.route('/api/clusters', methods=['GET'])
 def list_clusters():
     """List face clusters. ?include_dismissed=1 to include dismissed."""
