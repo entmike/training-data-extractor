@@ -288,7 +288,150 @@ function getInputSpec(nodeInfo, class_type, input_key) {
   return spec
 }
 
-function SmartInput({ spec, value, onChange, inputKey = '' }) {
+function FilePickerModal({ onClose, onSelect, value }) {
+  const [files, setFiles] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [filterType, setFilterType] = useState('all')
+  const [viewMode, setViewMode] = useState('grid')
+
+  const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif'])
+  const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv'])
+
+  useEffect(() => {
+    fetch('/api/inputs')
+      .then(r => r.json())
+      .then(d => { setFiles(d.files || []); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [])
+
+  const filtered = files.filter(f => {
+    const ext = f.ext.toLowerCase()
+    if (filterType === 'image' && !IMAGE_EXTS.has(ext)) return false
+    if (filterType === 'video' && !VIDEO_EXTS.has(ext)) return false
+    if (searchQuery && !f.name.toLowerCase().includes(searchQuery.toLowerCase())) return false
+    return true
+  })
+
+  function thumbUrl(file) {
+    return `/api/inputs/thumb/${encodeURIComponent(file.name)}`
+  }
+
+  return createPortal(
+    <div className="modal-overlay file-picker-overlay" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="file-picker-modal" onClick={e => e.stopPropagation()}>
+        <div className="file-picker-header">
+          <h2 className="file-picker-title">Select File</h2>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+
+        <div className="file-picker-toolbar">
+          <input
+            className="file-picker-search"
+            type="text"
+            placeholder="Search files…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+          />
+          <div className="file-picker-filters">
+            {['all', 'image', 'video'].map(t => (
+              <button
+                key={t}
+                className={`file-picker-filter-btn${filterType === t ? ' file-picker-filter-btn--active' : ''}`}
+                onClick={() => setFilterType(t)}
+              >{t === 'all' ? 'All' : t === 'image' ? 'Images' : 'Videos'}</button>
+            ))}
+          </div>
+          <div className="file-picker-view-toggle">
+            <button
+              className={`file-picker-view-btn${viewMode === 'grid' ? ' file-picker-view-btn--active' : ''}`}
+              onClick={() => setViewMode('grid')}
+            >⊞</button>
+            <button
+              className={`file-picker-view-btn${viewMode === 'list' ? ' file-picker-view-btn--active' : ''}`}
+              onClick={() => setViewMode('list')}
+            >☰</button>
+          </div>
+        </div>
+
+        <div className="file-picker-content">
+          {loading ? (
+            <div className="file-picker-empty"><span>Loading…</span></div>
+          ) : filtered.length === 0 ? (
+            <div className="file-picker-empty"><span>No matching files</span></div>
+          ) : viewMode === 'grid' ? (
+            <div className="file-picker-grid">
+              {filtered.map(f => (
+                <FilePickerThumb
+                  key={f.name}
+                  file={f}
+                  thumbUrl={thumbUrl(f)}
+                  isSelected={f.name === value}
+                  onClick={() => onSelect(f.name)}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="file-picker-list">
+              {filtered.map(f => (
+                <FilePickerListItem
+                  key={f.name}
+                  file={f}
+                  isSelected={f.name === value}
+                  onClick={() => onSelect(f.name)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function FilePickerThumb({ file, thumbUrl, isSelected, onClick }) {
+  const [imgLoaded, setImgLoaded] = useState(false)
+  const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif'])
+  const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv'])
+  const isVideo = VIDEO_EXTS.has(file.ext)
+
+  return (
+    <div className={`file-picker-thumb${isSelected ? ' file-picker-thumb--selected' : ''}`} onClick={onClick}>
+      <div className="file-picker-thumb__media">
+        <div className="file-picker-thumb__blur" />
+        <img
+          src={thumbUrl}
+          alt={file.name}
+          loading="lazy"
+          onLoad={() => setImgLoaded(true)}
+          style={{ opacity: imgLoaded ? 1 : 0 }}
+        />
+        {isVideo && <div className="file-picker-thumb__play">▶</div>}
+        {isSelected && <div className="file-picker-thumb__check">✓</div>}
+      </div>
+      <div className="file-picker-thumb__info">
+        <div className="file-picker-thumb__name" title={file.name}>{file.name}</div>
+        <div className="file-picker-thumb__meta">
+          <span>{(file.size / 1024).toFixed(0)} KB</span>
+          <span>{file.ext}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FilePickerListItem({ file, isSelected, onClick }) {
+  return (
+    <div className={`file-picker-list-item${isSelected ? ' file-picker-list-item--selected' : ''}`} onClick={onClick}>
+      <span className="file-picker-list-icon">{file.ext}</span>
+      <span className="file-picker-list-name">{file.name}</span>
+      <span className="file-picker-list-size">{(file.size / 1024).toFixed(0)} KB</span>
+    </div>
+  )
+}
+
+function SmartInput({ spec, value, onChange, inputKey = '', classType = '' }) {
   const inputStyle = {
     flex: 1, padding: '4px 8px', borderRadius: 4, fontSize: 12,
     border: '1px solid var(--accent, #7c6af7)',
@@ -309,6 +452,18 @@ function SmartInput({ spec, value, onChange, inputKey = '' }) {
 
   // Dropdown: first element is an array of option strings
   if (Array.isArray(typeOrOpts)) {
+    // Only image/video loader nodes get the file picker.
+    // Checkpoint loaders, LoRA loaders, etc. keep the SearchableSelect.
+    const FILE_PICKER_NODE_TYPES = new Set([
+      'LoadImage', 'LoadImageOutput',
+      'LoadVideo', 'LoadVideoOutput',
+      'LoadImageFromUrl', 'LoadVideoFromUrl',
+      'ComfyUI-Core-LoadImage',
+    ])
+    const isFileSpec = FILE_PICKER_NODE_TYPES.has(classType) && typeOrOpts.length > 0
+    if (isFileSpec) {
+      return <SmartFileInput options={typeOrOpts} value={value} onChange={onChange} />
+    }
     return <SearchableSelect options={typeOrOpts} value={value} onChange={onChange} />
   }
 
@@ -382,6 +537,37 @@ function SmartInput({ spec, value, onChange, inputKey = '' }) {
       onChange={e => onChange(e.target.value)}
       style={{ ...inputStyle, fontFamily: 'monospace' }}
     />
+  )
+}
+
+function SmartFileInput({ options, value, onChange }) {
+  const [showPicker, setShowPicker] = useState(false)
+  const triggerStyle = {
+    flex: 1, padding: '4px 8px', borderRadius: 4, fontSize: 12, cursor: 'pointer',
+    border: '1px solid var(--accent, #7c6af7)',
+    background: 'var(--bg)', color: 'var(--text)', outline: 'none',
+    display: 'flex', alignItems: 'center', userSelect: 'none',
+  }
+
+  return (
+    <>
+      <div style={triggerStyle} onClick={() => setShowPicker(true)}>
+        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {String(value ?? '') || 'Select file…'}
+        </span>
+        <span style={{ fontSize: 10, marginLeft: 6, opacity: 0.5, flexShrink: 0 }}>📁</span>
+      </div>
+      {showPicker && (
+        <FilePickerModal
+          value={value}
+          onClose={() => setShowPicker(false)}
+          onSelect={fileName => {
+            onChange(fileName)
+            setShowPicker(false)
+          }}
+        />
+      )}
+    </>
   )
 }
 
@@ -670,6 +856,7 @@ function FavoritesTab({ editedJson, favorites, onUpdate, onRemoveFavorite, nodeI
                     value={m.value}
                     onChange={v => onUpdate(setAtPath(editedJson, m.path, v))}
                     inputKey={m.input_key}
+                    classType={m.class_type}
                   />
                 </div>
               </div>

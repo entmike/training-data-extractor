@@ -2472,28 +2472,38 @@ def delete_input(filename):
 
 @app.route('/api/inputs/thumb/<filename>')
 def input_thumbnail(filename):
-    """Serve a thumbnail for an uploaded file (image or first-frame of video)."""
+    """Serve a cached thumbnail for any uploaded file (image or video).
+
+    Both images and videos are scaled down to a small width (default 320px)
+    and cached under .cache/input_thumbs/ so the browser never loads full-res
+    images as thumbnails.
+    """
     target = INPUTS_DIR / filename
     if not target.exists():
         return jsonify({"error": "Not found"}), 404
 
-    ext = target.suffix.lower()
-    IMAGE_EXTS_SERVER = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif'}
+    cache_dir = _CACHE_DIR / 'input_thumbs'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    thumb_path = cache_dir / f"{target.stem}.jpg"
 
-    if ext in IMAGE_EXTS_SERVER:
-        # Serve the image directly
-        mime_suffix = ext[1:]
-        if mime_suffix == 'tif':
-            mime_suffix = 'tiff'
-        content_type = f'image/{mime_suffix}'
-        return send_file(str(target), mimetype=content_type)
-    else:
-        # For videos, extract first frame as thumbnail
-        cache_dir = _CACHE_DIR / 'input_thumbs'
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        thumb_path = cache_dir / f"{target.stem}.jpg"
+    if not thumb_path.exists():
+        ext = target.suffix.lower()
+        IMAGE_EXTS_SERVER = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif'}
 
-        if not thumb_path.exists():
+        if ext in IMAGE_EXTS_SERVER:
+            # Image → use ffmpeg to scale + save as cached JPEG
+            try:
+                subprocess.run(
+                    [
+                        'ffmpeg', '-y', '-i', str(target),
+                        '-vf', 'scale=320:-1', str(thumb_path)
+                    ],
+                    capture_output=True, timeout=30
+                )
+            except Exception:
+                return jsonify({"error": "Could not generate thumbnail"}), 500
+        else:
+            # Video → extract first frame + scale
             try:
                 subprocess.run(
                     [
@@ -2506,9 +2516,9 @@ def input_thumbnail(filename):
             except Exception:
                 return jsonify({"error": "Could not generate thumbnail"}), 500
 
-        if thumb_path.exists():
-            return send_file(str(thumb_path), mimetype='image/jpeg')
-        return jsonify({"error": "No thumbnail available"}), 404
+    if thumb_path.exists():
+        return send_file(str(thumb_path), mimetype='image/jpeg')
+    return jsonify({"error": "No thumbnail available"}), 404
 
 
 @app.route('/api/inputs/preview/<filename>')

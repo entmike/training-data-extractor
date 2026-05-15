@@ -91,11 +91,9 @@ export default function InputsPage() {
     })
   }
 
-  // Thumbnail URL for images: serve directly from inputs dir
+  // Thumbnail URL — always uses the thumb endpoint (cached, scaled)
   function thumbUrl(file) {
-    return IMAGE_EXTS.has(file.ext)
-      ? `/api/inputs/thumb/${encodeURIComponent(file.name)}`
-      : `/api/inputs/preview/${encodeURIComponent(file.name)}`
+    return `/api/inputs/thumb/${encodeURIComponent(file.name)}`
   }
 
   return (
