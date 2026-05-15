@@ -136,7 +136,7 @@ def poll_once(db, endpoint: str, outputs_dir: Optional[Path] = None) -> Dict[str
         out_dir = outputs_dir or (Path.cwd() / "output")
         try:
             from .outputs.scan import scan_outputs
-            scan_outputs(out_dir, db)
+            scan_outputs(out_dir, db, incremental=True)
         except Exception:
             logger.exception("Output scan after queue completion failed")
 

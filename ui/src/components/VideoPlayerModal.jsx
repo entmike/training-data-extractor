@@ -650,6 +650,28 @@ export default function VideoPlayerModal({ player, onClose, pageMode = false }) 
     setTimeout(() => setCopied(false), 2000)
   }
 
+  // ── Frame extraction ──────────────────────────────────
+  async function handleExtractFrame() {
+    // Use the current absolute source frame number
+    const url = `/api/frame/${sceneId}?frame=${currentAbsFrame}`
+    // Fetch the PNG and trigger a browser download
+    const res = await fetch(url)
+    if (!res.ok) {
+      alert(`Frame extraction failed: ${res.status}`)
+      return
+    }
+    const blob = await res.blob()
+    const a = document.createElement('a')
+    const videoName = videoPath?.split('/').pop()?.replace(/\.[^.]+$/, '') || 'scene'
+    const baseName = videoName || `scene_${sceneId}`
+    a.href = URL.createObjectURL(blob)
+    a.download = `${baseName}_f${currentAbsFrame}.png`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(a.href)
+  }
+
   // ── Render ─────────────────────────────────────────────
   const wrapperProps = pageMode ? {
     className: 'video-page-wrap',
@@ -876,6 +898,13 @@ export default function VideoPlayerModal({ player, onClose, pageMode = false }) 
                 {playEntireScene ? 'Bucket' : 'Full'}
               </button>
             )}
+            <button
+              className="detect-bucket-btn detect-bucket-btn--frame"
+              onClick={handleExtractFrame}
+              title="Extract current frame as tone-mapped PNG"
+            >
+              📷 Extract Frame
+            </button>
             {bucketData && (
               <FrameCountStepper
                 frameCount={bucketFrameCount}

@@ -137,7 +137,7 @@ def run_daemon(db, endpoint_override: Optional[str] = None, outputs_dir: Optiona
                     try:
                         from .outputs.scan import scan_outputs
                         out_dir = outputs_dir or (Path.cwd() / "output")
-                        scan_outputs(out_dir, db)
+                        scan_outputs(out_dir, db, incremental=True)
                     except Exception:
                         logger.exception("Output scan after job completion failed")
 
@@ -152,6 +152,13 @@ def run_daemon(db, endpoint_override: Optional[str] = None, outputs_dir: Optiona
 
     def on_open(ws):
         logger.info("Node timing daemon connected to ComfyUI")
+        # Scan outputs after reconnect to catch files produced during disconnect
+        try:
+            from .outputs.scan import scan_outputs
+            out_dir = outputs_dir or (Path.cwd() / "output")
+            scan_outputs(out_dir, db)
+        except Exception:
+            logger.exception("Output scan on reconnect failed")
         # Sync state on connect: check if a job is already running and
         # create a timing row for the currently-active node so subsequent
         # events attach correctly.

@@ -317,6 +317,11 @@ Examples:
         help="Directory to scan for ComfyUI outputs (used with --step scan-outputs; default: ./output)"
     )
     parser.add_argument(
+        "--full-scan",
+        action="store_true",
+        help="Do a full scan of all files (default is incremental: skip files already in DB)"
+    )
+    parser.add_argument(
         "--daemon-interval",
         type=int,
         default=30,
@@ -600,7 +605,7 @@ Examples:
             from .utils.io import Database
             outputs_dir = Path(args.outputs_dir) if args.outputs_dir else Path.cwd() / "output"
             db = Database(config.dsn)
-            scan_outputs(outputs_dir, db)
+            scan_outputs(outputs_dir, db, incremental=not args.full_scan)
         elif args.step == "scan-comfy-queue":
             from .comfy.queue_poll import run_daemon as run_queue_daemon, poll_once
             from .utils.io import Database
