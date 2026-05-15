@@ -243,10 +243,11 @@ export default function App() {
   )
 
   return (
-    <AppContext.Provider value={{
+      <AppContext.Provider value={{
       tagMap, openPlayer, refreshTags: fetchTags, nsfwEnabled, setNsfwEnabled,
       configOpen, toggleConfig: () => setConfigOpen(o => !o),
       queueOpen, toggleQueue: () => setQueueOpen(o => !o),
+      addToast,
       comfyQueue, comfyHistory, comfyProgress, comfyError,
       fetchComfyQueue, deleteQueueItem, clearComfyQueue,
     }}>

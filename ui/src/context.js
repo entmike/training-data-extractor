@@ -10,6 +10,7 @@ export const AppContext = createContext({
   toggleConfig: () => {},
   queueOpen: false,
   toggleQueue: () => {},
+  addToast: () => {},
   // ComfyUI queue (polled at app level)
   comfyQueue: null,      // { running, pending } | null
   comfyHistory: null,    // { history } | null

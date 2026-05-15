@@ -18,7 +18,7 @@ export default function VideoPlayerModal({ player, onClose, pageMode = false }) 
   const mouseDownOnOverlay = useRef(false)
   const [copied, setCopied] = useState(false)
 
-  const { tagMap, refreshTags } = useContext(AppContext)
+  const { tagMap, refreshTags, addToast } = useContext(AppContext)
   const { sceneId, videoPath, startTime, endTime, fps = 24, frameOffset = 0, startFrame, endFrame: initialEndFrame, videoTotalFrames = 0, blurhash, videoWidth = 0, videoHeight = 0 } = player
   const blurhashDataUrl = useMemo(() => blurhashToDataURL(blurhash), [blurhash])
 
@@ -684,9 +684,9 @@ export default function VideoPlayerModal({ player, onClose, pageMode = false }) 
       })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || 'Save failed')
-      alert(`Saved to inputs: ${d.filename}`)
+      addToast(`Frame saved: ${d.filename}`, 'success')
     } catch (e) {
-      alert(`Failed to save: ${e.message}`)
+      addToast(`Failed to save: ${e.message}`, 'error')
     }
   }
 
