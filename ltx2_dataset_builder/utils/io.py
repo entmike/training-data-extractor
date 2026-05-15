@@ -835,7 +835,7 @@ class Database:
     def get_output_by_path(self, path: str) -> Optional[Dict[str, Any]]:
         with self._connection() as conn:
             row = conn.execute(
-                "SELECT id, sha256, prompt_id FROM outputs WHERE path = %s", (path,)
+                "SELECT id, sha256, prompt_hash, prompt_id FROM outputs WHERE path = %s", (path,)
             ).fetchone()
             return dict(row) if row else None
 

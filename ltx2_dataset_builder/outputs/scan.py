@@ -132,23 +132,41 @@ def scan_outputs(scan_dir: Path, db, stat_cache: Optional[Dict] = None) -> Dict[
             continue
 
         # Fast path: stat matches cache → file unchanged, no sha256 needed
+        existing = db.get_output_by_path(path_str)
+        stat_unchanged = False
         if stat_cache is not None:
             cached = stat_cache.get(path_str)
             if cached and cached == (st.st_mtime_ns, st.st_size):
+                stat_unchanged = True
+                # Even if the file is unchanged, we still need to re-upsert if
+                # the DB record is missing prompt_id or prompt_hash (they may now
+                # be resolvable from a newly-arrived comfy_queue row).
+                if existing and existing.get('prompt_id') is not None and existing.get('prompt_hash') is not None:
+                    skipped += 1
+                    continue
+                # File unchanged but missing metadata — fall through to re-upsert
+                # (skip sha256 since stat_cache already confirmed it's unchanged)
+        elif existing and existing.get('prompt_id') is not None and existing.get('prompt_hash') is not None:
+            # Cache miss but DB record is complete — still need sha256 to verify
+            pass
+
+        # Compute sha256 only if not stat_unchanged
+        if stat_unchanged:
+            sha256 = existing['sha256']  # reuse from DB
+        else:
+            sha256 = _sha256(file_path)
+            # Refresh existing to check for changes
+            existing = db.get_output_by_path(path_str)
+
+        # Determine if we need to re-upsert
+        if existing and existing['sha256'] == sha256:
+            if existing.get('prompt_id') is not None and existing.get('prompt_hash') is not None:
+                # Record is complete and unchanged — skip
+                if stat_cache is not None:
+                    stat_cache[path_str] = (st.st_mtime_ns, st.st_size)
                 skipped += 1
                 continue
-
-        sha256 = _sha256(file_path)
-
-        existing = db.get_output_by_path(path_str)
-        # If the file already exists but lacks prompt_id, we still need to
-        # call upsert_output so the time-based matching can populate it.
-        needs_update = existing and existing['sha256'] == sha256 and existing.get('prompt_id') is None
-        if existing and existing['sha256'] == sha256 and not needs_update:
-            if stat_cache is not None:
-                stat_cache[path_str] = (st.st_mtime_ns, st.st_size)
-            skipped += 1
-            continue
+            # Missing prompt_id or prompt_hash — re-upsert to try resolving
 
         file_size = st.st_size
         file_mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
