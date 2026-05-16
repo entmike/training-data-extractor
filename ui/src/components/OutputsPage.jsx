@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useContext } from 'react'
+import { useState, useEffect, useCallback, useRef, useContext, useId, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import JsonView from '@uiw/react-json-view'
@@ -6,6 +6,7 @@ import { darkTheme } from '@uiw/react-json-view/dark'
 import Header from './Header'
 import NodeTimingTable from './NodeTimingTable'
 import { AppContext } from '../context'
+import FileBrowser from './FileBrowser'
 
 const PAGE_SIZE = 50
 
@@ -289,243 +290,21 @@ function getInputSpec(nodeInfo, class_type, input_key) {
 }
 
 function FilePickerModal({ onClose, onSelect, value }) {
-  const [files, setFiles] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [filterType, setFilterType] = useState('all')
-  const [viewMode, setViewMode] = useState('grid')
-  const [currentDir, setCurrentDir] = useState('')
-
-  const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif'])
-  const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv'])
-
-  const loadFiles = useCallback((dirPath) => {
-    const url = dirPath
-      ? `/api/inputs?dir_path=${encodeURIComponent(dirPath)}`
-      : '/api/inputs'
-    setLoading(true)
-    fetch(url)
-      .then(r => r.json())
-      .then(d => { setFiles(d.files || []); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [])
-
-  useEffect(() => {
-    loadFiles(currentDir)
-  }, [loadFiles, currentDir])
-
-  // Breadcrumb parts
-  const breadcrumbs = currentDir ? ['📁 Inputs'] : ['📁 Inputs']
-  if (currentDir) {
-    const parts = currentDir.split('/').filter(Boolean)
-    for (const part of parts) {
-      breadcrumbs.push(part)
-    }
-  }
-
-  function handleDirClick(dirName) {
-    if (dirName === '..') {
-      const parts = currentDir.split('/').filter(Boolean)
-      parts.pop()
-      setCurrentDir(parts.join('/'))
-    } else if (dirName === '📁 Inputs') {
-      setCurrentDir('')
-    } else {
-      const newDir = currentDir ? `${currentDir}/${dirName}` : dirName
-      setCurrentDir(newDir)
-    }
-  }
-
-  const filtered = files.filter(f => {
-    // Keep directories (for navigation)
-    if (f.type === 'dir') return true
-    // Skip files without ext (shouldn't happen, but safe guard)
-    if (!f.ext) return false
-    const ext = f.ext.toLowerCase()
-    if (filterType === 'image' && !IMAGE_EXTS.has(ext)) return false
-    if (filterType === 'video' && !VIDEO_EXTS.has(ext)) return false
-    if (searchQuery && !f.name.toLowerCase().includes(searchQuery.toLowerCase())) return false
-    return true
-  })
-
-  function thumbUrl(file) {
-    const qs = currentDir ? `?dir_path=${encodeURIComponent(currentDir)}` : ''
-    return `/api/inputs/thumb/${encodeURIComponent(file.name)}${qs}`
-  }
-
   return createPortal(
-    <div className="modal-overlay file-picker-overlay" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="file-picker-modal" onClick={e => e.stopPropagation()}>
-        {/* Breadcrumb */}
-        <div className="file-picker-breadcrumb">
-          {breadcrumbs.map((crumb, i) => (
-            <span key={i} className="file-picker-breadcrumb-item">
-              <span
-                className="file-picker-breadcrumb-link"
-                onClick={() => handleDirClick(crumb)}
-              >
-                {crumb}
-                {i < breadcrumbs.length - 1 ? '  ›  ' : ''}
-              </span>
-            </span>
-          ))}
-          {currentDir && (
-            <span className="file-picker-breadcrumb-parent" onClick={() => handleDirClick('..')}>
-              ↑ Parent
-            </span>
-          )}
-        </div>
-
-        <div className="file-picker-header">
-          <h2 className="file-picker-title">Select File</h2>
-          <button className="modal-close-btn" onClick={onClose} aria-label="Close">✕</button>
-        </div>
-
-        <div className="file-picker-toolbar">
-          <input
-            className="file-picker-search"
-            type="text"
-            placeholder="Search files…"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-          />
-          <div className="file-picker-filters">
-            {['all', 'image', 'video'].map(t => (
-              <button
-                key={t}
-                className={`file-picker-filter-btn${filterType === t ? ' file-picker-filter-btn--active' : ''}`}
-                onClick={() => setFilterType(t)}
-              >{t === 'all' ? 'All' : t === 'image' ? 'Images' : 'Videos'}</button>
-            ))}
-          </div>
-          <div className="file-picker-view-toggle">
-            <button
-              className={`file-picker-view-btn${viewMode === 'grid' ? ' file-picker-view-btn--active' : ''}`}
-              onClick={() => setViewMode('grid')}
-            >⊞</button>
-            <button
-              className={`file-picker-view-btn${viewMode === 'list' ? ' file-picker-view-btn--active' : ''}`}
-              onClick={() => setViewMode('list')}
-            >☰</button>
-          </div>
-        </div>
-
-        <div className="file-picker-content">
-          {loading ? (
-            <div className="file-picker-empty"><span>Loading…</span></div>
-          ) : filtered.length === 0 ? (
-            <div className="file-picker-empty"><span>No matching files</span></div>
-          ) : viewMode === 'grid' ? (
-            <div className="file-picker-grid">
-              {filtered.map(f => (
-                f.type === 'dir' ? (
-                  <FilePickerDirThumb
-                    key={f.name}
-                    file={f}
-                    onNavigate={handleDirClick}
-                  />
-                ) : (
-                  <FilePickerThumb
-                    key={f.name}
-                    file={f}
-                    thumbUrl={thumbUrl(f)}
-                    isSelected={f.name === value}
-                    onClick={() => onSelect(currentDir ? `${currentDir}/${f.name}` : f.name)}
-                  />
-                )
-              ))}
-            </div>
-          ) : (
-            <div className="file-picker-list">
-              {filtered.map(f => (
-                f.type === 'dir' ? (
-                  <FilePickerDirListItem
-                    key={f.name}
-                    file={f}
-                    onNavigate={handleDirClick}
-                  />
-                ) : (
-                  <FilePickerListItem
-                    key={f.name}
-                    file={f}
-                    isSelected={(currentDir ? `${currentDir}/${f.name}` : f.name) === value}
-                    onClick={() => onSelect(currentDir ? `${currentDir}/${f.name}` : f.name)}
-                  />
-                )
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>,
+    <FileBrowser
+      onClose={onClose}
+      onSelect={(path) => {
+        onSelect(path)
+        onClose()
+      }}
+      value={value}
+      title="Select File"
+    />,
     document.body
   )
 }
 
-// Directory thumbnail in file picker
-function FilePickerDirThumb({ file, onNavigate }) {
-  return (
-    <div className="file-picker-thumb file-picker-dir-thumb" onClick={() => onNavigate(file.name)}>
-      <div className="file-picker-thumb__media">
-        <div className="file-picker-thumb__blur" />
-        <div className="file-picker-thumb__dir-icon">📁</div>
-      </div>
-      <div className="file-picker-thumb__info">
-        <div className="file-picker-thumb__name" title={file.name}>{file.name}</div>
-        <div className="file-picker-thumb__meta">
-          <span className="file-picker-thumb__dir-label">Directory</span>
-        </div>
-      </div>
-    </div>
-  )}
-
-function FilePickerThumb({ file, thumbUrl, isSelected, onClick }) {
-  const [imgLoaded, setImgLoaded] = useState(false)
-  const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif'])
-  const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv'])
-  const isVideo = VIDEO_EXTS.has(file.ext)
-
-  return (
-    <div className={`file-picker-thumb${isSelected ? ' file-picker-thumb--selected' : ''}`} onClick={onClick}>
-      <div className="file-picker-thumb__media">
-        <div className="file-picker-thumb__blur" />
-        <img
-          src={thumbUrl}
-          alt={file.name}
-          loading="lazy"
-          onLoad={() => setImgLoaded(true)}
-          style={{ opacity: imgLoaded ? 1 : 0 }}
-        />
-        {isVideo && <div className="file-picker-thumb__play">▶</div>}
-        {isSelected && <div className="file-picker-thumb__check">✓</div>}
-      </div>
-      <div className="file-picker-thumb__info">
-        <div className="file-picker-thumb__name" title={file.name}>{file.name}</div>
-        <div className="file-picker-thumb__meta">
-          <span>{(file.size / 1024).toFixed(0)} KB</span>
-          <span>{file.ext}</span>
-        </div>
-      </div>
-    </div>
-  )}
-
-function FilePickerDirListItem({ file, onNavigate }) {
-  return (
-    <div className="file-picker-list-item" onClick={() => onNavigate(file.name)}>
-      <span className="file-picker-list-icon">📁</span>
-      <span className="file-picker-list-name">{file.name}</span>
-      <span className="file-picker-list-size">Directory</span>
-    </div>
-  )}
-
-function FilePickerListItem({ file, isSelected, onClick }) {
-  return (
-    <div className={`file-picker-list-item${isSelected ? ' file-picker-list-item--selected' : ''}`} onClick={onClick}>
-      <span className="file-picker-list-icon">{file.ext}</span>
-      <span className="file-picker-list-name">{file.name}</span>
-      <span className="file-picker-list-size">{(file.size / 1024).toFixed(0)} KB</span>
-    </div>
-  )}
+// Shared FileBrowser component handles file browsing
 
 function SmartInput({ spec, value, onChange, inputKey = '', classType = '' }) {
   const inputStyle = {
