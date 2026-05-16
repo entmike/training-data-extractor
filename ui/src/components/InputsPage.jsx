@@ -264,6 +264,7 @@ export default function InputsPage() {
                   key={f.name}
                   file={f}
                   onNavigate={handleDirClick}
+                  currentDir={currentDir}
                 />
               ) : (
                 <InputThumb
@@ -301,7 +302,32 @@ export default function InputsPage() {
   )}
 
 // --- Grid item for directories ---
-function DirThumb({ file, onNavigate }) {
+function DirThumb({ file, onNavigate, currentDir }) {
+  const [thumbSrc, setThumbSrc] = useState(null)
+  const [thumbError, setThumbError] = useState(false)
+
+  useEffect(() => {
+    setThumbSrc(null)
+    setThumbError(false)
+    const qs = currentDir ? `?dir_path=${encodeURIComponent(currentDir)}` : ''
+    const url = `/api/inputs/dir-thumb/${encodeURIComponent(file.name)}${qs}`
+    fetch(url)
+      .then(r => {
+        if (!r.ok) {
+          setThumbError(true)
+          return null
+        }
+        return r.blob()
+      })
+      .then(blob => {
+        if (blob) {
+          const url = URL.createObjectURL(blob)
+          setThumbSrc(url)
+        }
+      })
+      .catch(() => setThumbError(true))
+  }, [file.name, currentDir])
+
   return (
     <div
       className="input-thumb dir-thumb"
@@ -310,7 +336,16 @@ function DirThumb({ file, onNavigate }) {
     >
       <div className="input-thumb__media">
         <div className="input-thumb__blur" style={{ background: '#2a2a2e' }} />
-        <div className="input-thumb__dir-icon">📁</div>
+        {thumbSrc && !thumbError ? (
+          <img
+            className="input-thumb__img"
+            src={thumbSrc}
+            alt={file.name}
+            style={{ opacity: 1 }}
+          />
+        ) : (
+          <div className="input-thumb__dir-icon">📁</div>
+        )}
       </div>
       <div className="input-thumb__info">
         <div className="input-thumb__name" title={file.name}>{file.name}</div>

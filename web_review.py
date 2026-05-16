@@ -57,6 +57,8 @@ DEBUG_SCENES_DIR  = _CACHE_DIR / "previews"
 WAVEFORMS_DIR     = _CACHE_DIR / "waveforms"
 CLIPS_DIR         = _CACHE_DIR / "clips"
 CLUSTER_CACHE_DIR = _CACHE_DIR / "clusters"
+DIR_THUMB_CACHE_DIR = _CACHE_DIR / "dir_thumbs"
+DIR_THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 SOURCE_DIR        = _resolve(config.get("source_dir", "./vids"))
 INPUTS_DIR        = _resolve(config.get("inputs_dir", "./inputs"))
 
@@ -2585,6 +2587,12 @@ def upload_input():
         return jsonify({"error": f"{f.filename} already exists in inputs directory"}), 409
 
     f.save(str(dest))
+    # Invalidate root-level dir-thumbs since a new file appeared in inputs root
+    for f2 in DIR_THUMB_CACHE_DIR.glob("dir_thumb_*.jpg"):
+        try:
+            f2.unlink(missing_ok=True)
+        except Exception:
+            pass
     return jsonify({"filename": f.filename, "path": str(dest), "ext": ext}), 201
 
 
@@ -2640,6 +2648,11 @@ def delete_input(filename):
     if not target.exists() or not target.is_file():
         return jsonify({"error": "File not found"}), 404
     target.unlink()
+    # Invalidate the parent directory's cached thumbnail
+    parent_cache_key = dir_path if dir_path else ""
+    if parent_cache_key:
+        cache_file = DIR_THUMB_CACHE_DIR / f"dir_thumb_{parent_cache_key}.jpg"
+        cache_file.unlink(missing_ok=True)
     return jsonify({"deleted": filename}), 200
 
 
@@ -2745,6 +2758,136 @@ def input_video_preview(filename):
     resp.headers['Content-Length'] = stat.st_size
     resp.headers['Content-Type'] = content_type
     return resp
+
+
+# ── Folder thumbnails ──────────────────────────────────────────────────────
+DIR_MEDIA_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif',
+                    '.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv'}
+
+def _collect_media_files(folder_path: Path, max_files=4):
+    """Recursively find up to max_files media files inside a folder."""
+    results = []
+    for p in folder_path.rglob('*'):
+        if len(results) >= max_files:
+            break
+        if p.is_file() and p.suffix.lower() in DIR_MEDIA_EXTS:
+            results.append(p)
+    return results
+
+def _make_dir_thumbnail(folder_path: Path, cache_key: str, max_files=4):
+    """Compose a 2x2 grid thumbnail from up to 4 media files in the folder.
+    Returns the cache path if created, None otherwise."""
+    files = _collect_media_files(folder_path, max_files)
+    if not files:
+        return None
+
+    cache_path = DIR_THUMB_CACHE_DIR / f"dir_thumb_{cache_key}.jpg"
+
+    # Scale each image/video frame to 160x160 and composite into a 320x320 grid
+    temp_frames = []
+    for f in files:
+        ext = f.suffix.lower()
+        temp_frame = DIR_THUMB_CACHE_DIR / f"tmp_{cache_key}_{f.name}.jpg"
+        IMAGE_EXTS_SERVER = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif'}
+        try:
+            if ext in IMAGE_EXTS_SERVER:
+                subprocess.run(
+                    ['ffmpeg', '-y', '-i', str(f), '-vf', 'scale=160:160', str(temp_frame)],
+                    capture_output=True, timeout=15
+                )
+            else:
+                subprocess.run(
+                    ['ffmpeg', '-y', '-i', str(f), '-ss', '1', '-frames:v', '1',
+                     '-vf', 'scale=160:160', str(temp_frame)],
+                    capture_output=True, timeout=15
+                )
+            temp_frames.append(temp_frame)
+        except Exception:
+            continue
+
+    if not temp_frames:
+        return None
+
+    # Build a 2x2 (or 1xN) grid with ffmpeg hstack/vstack
+    n = len(temp_frames)
+    if n == 1:
+        # Just copy the single frame
+        subprocess.run(
+            ['ffmpeg', '-y', '-i', str(temp_frames[0]), str(cache_path)],
+            capture_output=True, timeout=15
+        )
+    elif n == 2:
+        subprocess.run(
+            ['ffmpeg', '-y', '-i', str(temp_frames[0]), '-i', str(temp_frames[1]),
+             '-filter_complex', '[0:v][1:v]hstack=2:1', str(cache_path)],
+            capture_output=True, timeout=15
+        )
+    elif n == 3:
+        # Top: 2 side-by-side, bottom: 1 centered (use pad for center)
+        # [0:v] scale=160:160 [a]; [1:v] scale=160:160 [b]; [2:v] scale=160:160, pad=320:320:80:0 [c]
+        # [a][b] hstack [ab]; [ab][c] vstack
+        filter_str = '[0:v]scale=160:160[a];[1:v]scale=160:160[b];[2:v]scale=160:160,pad=320:320:80:0[c];[a][b]hstack=2:1[ab];[ab][c]vstack=2:1'
+        subprocess.run(
+            ['ffmpeg', '-y',
+             '-i', str(temp_frames[0]),
+             '-i', str(temp_frames[1]),
+             '-i', str(temp_frames[2]),
+             '-filter_complex', filter_str,
+             str(cache_path)],
+            capture_output=True, timeout=15
+        )
+    else:
+        # 4 files: 2x2 grid
+        filter_str = ('[0:v]scale=160:160[t0];[1:v]scale=160:160[t1];'
+                       '[2:v]scale=160:160[t2];[3:v]scale=160:160[t3];'
+                       '[t0][t1]hstack=2:1[top];[t2][t3]hstack=2:1[bot];[top][bot]vstack=2:1')
+        cmd = ['ffmpeg', '-y']
+        for tf in temp_frames:
+            cmd += ['-i', str(tf)]
+        cmd += ['-filter_complex', filter_str, str(cache_path)]
+        subprocess.run(cmd, capture_output=True, timeout=15)
+
+    # Clean up temp frames
+    for tf in temp_frames:
+        try:
+            tf.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    return cache_path
+
+@app.route('/api/inputs/dir-thumb/<dirname>')
+def get_dir_thumbnail(dirname):
+    """Get or generate a cached 2x2 grid thumbnail for an inputs subdirectory."""
+    dir_path = request.args.get('dir_path', '')
+    if dir_path:
+        folder = INPUTS_DIR / dir_path / dirname
+    else:
+        folder = INPUTS_DIR / dirname
+
+    if not folder.exists() or not folder.is_dir():
+        return jsonify({"error": "Directory not found"}), 404
+
+    cache_key = dir_path + "::" + dirname if dir_path else dirname
+    cache_path = DIR_THUMB_CACHE_DIR / f"dir_thumb_{cache_key}.jpg"
+
+    if not cache_path.exists():
+        cache_path = _make_dir_thumbnail(folder, cache_key)
+
+    if cache_path and cache_path.exists():
+        return send_file(str(cache_path), mimetype='image/jpeg')
+    return jsonify({"error": "No media found in directory"}), 404
+
+
+@app.route('/api/inputs/dir-thumb', methods=['POST'])
+def invalidate_dir_thumbnails():
+    """Invalidate all directory thumbnails (called on full scan)."""
+    for f in DIR_THUMB_CACHE_DIR.glob("dir_thumb_*.jpg"):
+        try:
+            f.unlink()
+        except Exception:
+            pass
+    return jsonify({"invalidated": True})
 
 
 @app.route('/api/videos/<int:video_id>', methods=['DELETE'])
