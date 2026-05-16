@@ -259,13 +259,31 @@ export default function InputsPage() {
         ) : viewMode === 'grid' ? (
           <div className="inputs-grid">
             {filtered.map(f => (
-              f.type === 'dir' ? (
+              f.type === 'dir' && f.name !== '..' ? (
                 <DirThumb
                   key={f.name}
                   file={f}
                   onNavigate={handleDirClick}
                   currentDir={currentDir}
                 />
+              ) : f.type === 'dir' && f.name === '..' ? (
+                <div
+                  key=".."
+                  className="input-thumb dir-thumb"
+                  onClick={() => handleDirClick('..')}
+                  style={{ cursor: 'pointer' }}
+                >
+                  <div className="input-thumb__media">
+                    <div className="input-thumb__blur" style={{ background: '#2a2a2e' }} />
+                    <div className="input-thumb__dir-icon">↑</div>
+                  </div>
+                  <div className="input-thumb__info">
+                    <div className="input-thumb__name">Parent</div>
+                    <div className="input-thumb__meta">
+                      <span className="input-thumb__dir-label">Go up</span>
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <InputThumb
                   key={f.name}
@@ -281,12 +299,24 @@ export default function InputsPage() {
         ) : (
           <div className="inputs-list">
             {filtered.map(f => (
-              f.type === 'dir' ? (
+              f.type === 'dir' && f.name !== '..' ? (
                 <DirListItem
                   key={f.name}
                   file={f}
                   onNavigate={handleDirClick}
                 />
+              ) : f.type === 'dir' && f.name === '..' ? (
+                <div
+                  key=".."
+                  className="input-list-item"
+                  onClick={() => handleDirClick('..')}
+                  style={{ cursor: 'pointer' }}
+                >
+                  <span className="input-list-icon">↑</span>
+                  <span className="input-list-name">Parent</span>
+                  <span className="input-list-size">Go up</span>
+                  <span className="input-list-delete" style={{ visibility: 'hidden' }}>✕</span>
+                </div>
               ) : (
                 <InputListItem
                   key={f.name}

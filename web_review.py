@@ -2651,7 +2651,8 @@ def delete_input(filename):
     # Invalidate the parent directory's cached thumbnail
     parent_cache_key = dir_path if dir_path else ""
     if parent_cache_key:
-        cache_file = DIR_THUMB_CACHE_DIR / f"dir_thumb_{parent_cache_key}.jpg"
+        safe_parent = parent_cache_key.replace('/', '_').replace('\\', '_').replace('"', '').replace("'", '')
+        cache_file = DIR_THUMB_CACHE_DIR / f"dir_thumb_{safe_parent}.jpg"
         cache_file.unlink(missing_ok=True)
     return jsonify({"deleted": filename}), 200
 
@@ -2781,7 +2782,9 @@ def _make_dir_thumbnail(folder_path: Path, cache_key: str, max_files=4):
     if not files:
         return None
 
-    cache_path = DIR_THUMB_CACHE_DIR / f"dir_thumb_{cache_key}.jpg"
+    # Sanitize cache_key: replace path separators with underscores for safe filenames
+    safe_key = cache_key.replace('/', '_').replace('\\', '_').replace('"', '').replace("'", '')
+    cache_path = DIR_THUMB_CACHE_DIR / f"dir_thumb_{safe_key}.jpg"
 
     # Scale each image/video frame to 160x160 and composite into a 320x320 grid
     temp_frames = []
@@ -2869,10 +2872,11 @@ def get_dir_thumbnail(dirname):
         return jsonify({"error": "Directory not found"}), 404
 
     cache_key = dir_path + "::" + dirname if dir_path else dirname
-    cache_path = DIR_THUMB_CACHE_DIR / f"dir_thumb_{cache_key}.jpg"
+    safe_key = cache_key.replace('/', '_').replace('\\', '_').replace('"', '').replace("'", '')
+    cache_path = DIR_THUMB_CACHE_DIR / f"dir_thumb_{safe_key}.jpg"
 
     if not cache_path.exists():
-        cache_path = _make_dir_thumbnail(folder, cache_key)
+        cache_path = _make_dir_thumbnail(folder, safe_key)
 
     if cache_path and cache_path.exists():
         return send_file(str(cache_path), mimetype='image/jpeg')
