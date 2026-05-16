@@ -135,7 +135,7 @@ def run_daemon(db, endpoint_override: Optional[str] = None, outputs_dir: Optiona
 
                     # Trigger output scan on job completion
                     try:
-                        from .outputs.scan import scan_outputs
+                        from ..outputs.scan import scan_outputs
                         out_dir = outputs_dir or (Path.cwd() / "output")
                         scan_outputs(out_dir, db, incremental=True)
                     except Exception:
@@ -154,7 +154,7 @@ def run_daemon(db, endpoint_override: Optional[str] = None, outputs_dir: Optiona
         logger.info("Node timing daemon connected to ComfyUI")
         # Scan outputs after reconnect to catch files produced during disconnect
         try:
-            from .outputs.scan import scan_outputs
+            from ..outputs.scan import scan_outputs
             out_dir = outputs_dir or (Path.cwd() / "output")
             scan_outputs(out_dir, db)
         except Exception:
