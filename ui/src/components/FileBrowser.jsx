@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 /**
  * Reusable file browser with folder thumbnails.
@@ -8,28 +8,30 @@ import { useState, useEffect, useCallback } from 'react'
  *   onClose?        — called when the browser should close (for modal usage)
  *   onSelect?       — called when a file is selected (for modal usage)
  *   value?           — pre-selected file path (for modal usage)
+ *   initialDir?      — initial directory path (for URL-routed InputsPage)
+ *   onDirChange?     — called when directory changes (for URL routing)
  *   className?       — extra class for the root element
  *   title?           — header title text (default: 'Inputs')
  */
-export default function FileBrowser({ onClose, onSelect, value, className = '', title = 'Inputs' }) {
+export default function FileBrowser({ onClose, onSelect, value, initialDir = '', onDirChange, className = '', title = 'Inputs' }) {
   const isModal = onClose !== undefined
+  const isRouted = onDirChange !== undefined
 
-  // Derive the basename from the full path for selection matching
-  const valueBasename = value ? value.substring(value.lastIndexOf('/') + 1) : ''
+  // Ref to distinguish user navigation from router-initiated dir change
+  const userNavigateRef = useRef(false)
 
   const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif'])
   const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv'])
 
-  // Synchronously determine initial directory + filter from value to avoid race with useEffect
-  const initDir = isModal && value && value.lastIndexOf('/') !== -1
-    ? value.substring(0, value.lastIndexOf('/'))
-    : ''
+  // Derive the basename from the full path for selection matching
+  const valueBasename = value ? value.substring(value.lastIndexOf('/') + 1) : ''
 
   function getInitFilter() {
-    if (!isModal || !valueBasename) return 'all'
-    const ext = valueBasename.substring(valueBasename.lastIndexOf('.')).toLowerCase()
-    if (IMAGE_EXTS.has(ext)) return 'image'
-    if (VIDEO_EXTS.has(ext)) return 'video'
+    if (isModal && valueBasename) {
+      const ext = valueBasename.substring(valueBasename.lastIndexOf('.')).toLowerCase()
+      if (IMAGE_EXTS.has(ext)) return 'image'
+      if (VIDEO_EXTS.has(ext)) return 'video'
+    }
     return 'all'
   }
 
@@ -38,7 +40,7 @@ export default function FileBrowser({ onClose, onSelect, value, className = '', 
   const [searchQuery, setSearchQuery] = useState('')
   const [filterType, setFilterType] = useState(getInitFilter())
   const [viewMode, setViewMode] = useState('grid')
-  const [currentDir, setCurrentDir] = useState(initDir)
+  const [currentDir, setCurrentDir] = useState(isRouted ? initialDir : '')
 
   const loadFiles = useCallback((dirPath) => {
     const url = dirPath
@@ -55,15 +57,29 @@ export default function FileBrowser({ onClose, onSelect, value, className = '', 
     loadFiles(currentDir)
   }, [loadFiles, currentDir])
 
-  const breadcrumbs = currentDir ? ['Inputs'] : ['Inputs']
+  // When initialDir changes (browser back/forward), sync currentDir without updating URL
+  useEffect(() => {
+    if (isRouted) {
+      setCurrentDir(prev => prev !== initialDir ? initialDir : prev)
+    }
+  }, [initialDir])
+
+  // Only update URL when the user navigated (not when initialDir changed)
+  useEffect(() => {
+    if (userNavigateRef.current && onDirChange) {
+      onDirChange(currentDir || null)
+      userNavigateRef.current = false
+    }
+  }, [currentDir])
+
+  const breadcrumbs = ['Inputs']
   if (currentDir) {
     const parts = currentDir.split('/').filter(Boolean)
-    for (const part of parts) {
-      breadcrumbs.push(part)
-    }
+    breadcrumbs.push(...parts)
   }
 
   function handleBreadcrumbClick(crumb) {
+    userNavigateRef.current = true
     if (crumb === 'Inputs') {
       setCurrentDir('')
       return
@@ -76,6 +92,7 @@ export default function FileBrowser({ onClose, onSelect, value, className = '', 
   }
 
   function handleFolderNavigate(folderName) {
+    userNavigateRef.current = true
     if (folderName === '..') {
       const parts = currentDir.split('/').filter(Boolean)
       parts.pop()
@@ -96,7 +113,6 @@ export default function FileBrowser({ onClose, onSelect, value, className = '', 
     return true
   })
 
-  // Sort: parent (..) first, then directories alphabetically, then files alphabetically
   const sorted = filtered.slice().sort((a, b) => {
     const aIsParent = a.name === '..'
     const bIsParent = b.name === '..'
@@ -275,7 +291,8 @@ function FileBrowserDirThumb({ file, onNavigate, currentDir }) {
       .then(r => {
         if (!r.ok) { setThumbError(true); return null }
         return r.blob()
-      })
+      }
+      )
       .then(blob => {
         if (blob) {
           const url = URL.createObjectURL(blob)

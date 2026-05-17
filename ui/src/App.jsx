@@ -258,6 +258,7 @@ export default function App() {
         <Route path="/videos/:videoId" element={pageLayout(<VideosPage tagMap={tagMap} allTags={allTags} />)} />
         <Route path="/clips/:clipId?/:itemId?" element={<ClipsPage tagMap={tagMap} isLoading={isLoading} />} />
         <Route path="/inputs" element={pageLayout(<InputsPage />)} />
+        <Route path="/inputs/*" element={pageLayout(<InputsPage />)} />
         <Route path="/tags" element={pageLayout(<TagsPage />)} />
         <Route path="/tags/:tag" element={pageLayout(<TagsPage />)} />
         <Route path="/discover" element={pageLayout(<DiscoverPage />)} />

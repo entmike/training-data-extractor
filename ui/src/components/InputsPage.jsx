@@ -1,16 +1,30 @@
 import { useState, useContext } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
 import { AppContext } from '../context'
 import FileBrowser from './FileBrowser'
-import BlurhashCanvas from './BlurhashCanvas'
 
 export default function InputsPage() {
   const { openPlayer } = useContext(AppContext)
+  const { '*': wildcardPath } = useParams()
+  const navigate = useNavigate()
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadResult, setUploadResult] = useState(null)
   const uploadInputRef = { current: null }
 
   const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv'])
+
+  // Determine initial directory from URL wildcard
+  const initialDir = wildcardPath ? wildcardPath : ''
+
+  // Callback to sync directory changes back to the URL
+  function handleDirChange(newDir) {
+    if (newDir) {
+      navigate(`/inputs/${newDir}`)
+    } else {
+      navigate('/inputs')
+    }
+  }
 
   function handleUploadInput(e) {
     const file = e.target.files?.[0]
@@ -31,7 +45,6 @@ export default function InputsPage() {
       const d = JSON.parse(xhr.responseText)
       if (xhr.status === 200 || xhr.status === 201) {
         setUploadResult({ name: d.filename, ext: d.ext })
-        // Trigger a refresh by toggling a key — the FileBrowser will re-fetch
         setRefreshKey(k => k + 1)
       } else {
         setUploadResult({ error: d.error || 'Upload failed' })
@@ -97,7 +110,7 @@ export default function InputsPage() {
 
       {/* Shared file browser */}
       <div key={refreshKey} style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        <FileBrowser />
+        <FileBrowser initialDir={initialDir} onDirChange={handleDirChange} />
       </div>
     </div>
   )
