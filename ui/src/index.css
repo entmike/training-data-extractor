@@ -4473,7 +4473,7 @@ html, body {
 }
 
 .inputs-search {
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 10px;
@@ -4493,7 +4493,7 @@ html, body {
 }
 
 .inputs-filter-btn {
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px 12px;
@@ -4514,7 +4514,7 @@ html, body {
 }
 
 .inputs-view-btn {
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px 8px;
@@ -4553,7 +4553,7 @@ html, body {
 .inputs-upload-progress {
   width: 200px;
   height: 20px;
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   border-radius: 4px;
   overflow: hidden;
   position: relative;
@@ -4624,7 +4624,7 @@ html, body {
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
@@ -4756,7 +4756,7 @@ html, body {
 .input-list-icon {
   font-size: 11px;
   font-weight: 600;
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 2px 6px;
@@ -4804,7 +4804,7 @@ html, body {
   gap: 4px;
   padding: 8px 12px;
   margin-bottom: 8px;
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 13px;
@@ -4875,7 +4875,7 @@ html, body {
   align-items: center;
   gap: 4px;
   padding: 8px 12px;
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   border-bottom: 1px solid var(--border);
   font-size: 13px;
   min-height: 36px;
@@ -4941,7 +4941,7 @@ html, body {
   max-width: 900px;
   height: 70vh;
   max-height: 600px;
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   border: 1px solid var(--border);
   border-radius: 8px;
   display: flex;
@@ -5236,7 +5236,7 @@ html, body {
   border-radius: 4px;
 }
 .frame-extract-option:hover {
-  background: var(--bg-active);
+  background: var(--bg-hover);
 }
 
 /* ═══════════════════════════════════════════════
@@ -5248,6 +5248,8 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  flex: 1;
+  min-height: 0;
 }
 
 /* Modal wrapper */
@@ -5262,7 +5264,7 @@ html, body {
 }
 
 .file-browser-modal {
-  background: var(--bg-primary);
+  background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 20px;
@@ -5279,7 +5281,7 @@ html, body {
   flex-wrap: wrap;
   gap: 2px;
   padding: 8px 12px;
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   border-radius: 6px;
   border: 1px solid var(--border);
 }
@@ -5297,35 +5299,9 @@ html, body {
 }
 
 .file-browser-breadcrumb-link:hover {
-  background: var(--bg-active);
+  background: var(--bg-hover);
 }
 
-.file-browser-breadcrumb-parent {
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 13px;
-  padding: 4px 8px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-}
-
-.file-browser-breadcrumb-parent:hover {
-  color: var(--fg-primary);
-  border-color: var(--blue);
-}
-
-/* Header */
-.file-browser-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.file-browser-title {
-  font-size: 18px;
-  font-weight: 600;
-  margin: 0;
-}
 
 .file-browser-close-btn {
   background: none;
@@ -5339,7 +5315,7 @@ html, body {
 
 .file-browser-close-btn:hover {
   color: var(--fg-primary);
-  background: var(--bg-active);
+  background: var(--bg-hover);
 }
 
 /* Toolbar */
@@ -5354,7 +5330,7 @@ html, body {
   flex: 1;
   min-width: 160px;
   padding: 6px 10px;
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--fg-primary);
@@ -5374,7 +5350,7 @@ html, body {
 
 .file-browser-filter-btn {
   padding: 6px 12px;
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text-muted);
@@ -5392,7 +5368,7 @@ html, body {
 .file-browser-view-toggle {
   display: flex;
   gap: 2px;
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 2px;
@@ -5416,6 +5392,8 @@ html, body {
 
 /* Content area */
 .file-browser-content {
+  flex: 1;
+  overflow-y: auto;
   min-height: 200px;
 }
 
@@ -5441,7 +5419,7 @@ html, body {
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
   cursor: pointer;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
@@ -5550,7 +5528,7 @@ html, body {
 
 .file-browser-thumb__dir-label {
   font-size: 11px;
-  background: var(--bg-active);
+  background: var(--bg-hover);
   padding: 2px 6px;
   border-radius: 4px;
   color: var(--text-muted);
@@ -5575,7 +5553,7 @@ html, body {
 }
 
 .file-browser-list-item:hover {
-  background: var(--bg-active);
+  background: var(--bg-hover);
   border-color: var(--border);
 }
 

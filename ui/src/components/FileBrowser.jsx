@@ -9,20 +9,36 @@ import { useState, useEffect, useCallback } from 'react'
  *   onSelect?       — called when a file is selected (for modal usage)
  *   value?           — pre-selected file path (for modal usage)
  *   className?       — extra class for the root element
- *   title?           — header title text (default: '📥 Inputs')
+ *   title?           — header title text (default: 'Inputs')
  */
-export default function FileBrowser({ onClose, onSelect, value, className = '', title = '📥 Inputs' }) {
+export default function FileBrowser({ onClose, onSelect, value, className = '', title = 'Inputs' }) {
   const isModal = onClose !== undefined
+
+  // Derive the basename from the full path for selection matching
+  const valueBasename = value ? value.substring(value.lastIndexOf('/') + 1) : ''
+
+  const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif'])
+  const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv'])
+
+  // Synchronously determine initial directory + filter from value to avoid race with useEffect
+  const initDir = isModal && value && value.lastIndexOf('/') !== -1
+    ? value.substring(0, value.lastIndexOf('/'))
+    : ''
+
+  function getInitFilter() {
+    if (!isModal || !valueBasename) return 'all'
+    const ext = valueBasename.substring(valueBasename.lastIndexOf('.')).toLowerCase()
+    if (IMAGE_EXTS.has(ext)) return 'image'
+    if (VIDEO_EXTS.has(ext)) return 'video'
+    return 'all'
+  }
 
   const [files, setFiles] = useState([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
-  const [filterType, setFilterType] = useState('all')
+  const [filterType, setFilterType] = useState(getInitFilter())
   const [viewMode, setViewMode] = useState('grid')
-  const [currentDir, setCurrentDir] = useState('')
-
-  const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif'])
-  const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv'])
+  const [currentDir, setCurrentDir] = useState(initDir)
 
   const loadFiles = useCallback((dirPath) => {
     const url = dirPath
@@ -39,7 +55,7 @@ export default function FileBrowser({ onClose, onSelect, value, className = '', 
     loadFiles(currentDir)
   }, [loadFiles, currentDir])
 
-  const breadcrumbs = currentDir ? ['📁 Inputs'] : ['📁 Inputs']
+  const breadcrumbs = currentDir ? ['Inputs'] : ['Inputs']
   if (currentDir) {
     const parts = currentDir.split('/').filter(Boolean)
     for (const part of parts) {
@@ -47,15 +63,25 @@ export default function FileBrowser({ onClose, onSelect, value, className = '', 
     }
   }
 
-  function handleDirClick(dirName) {
-    if (dirName === '..') {
+  function handleBreadcrumbClick(crumb) {
+    if (crumb === 'Inputs') {
+      setCurrentDir('')
+      return
+    }
+    const parts = currentDir.split('/').filter(Boolean)
+    const idx = parts.indexOf(crumb)
+    if (idx !== -1) {
+      setCurrentDir(parts.slice(0, idx + 1).join('/'))
+    }
+  }
+
+  function handleFolderNavigate(folderName) {
+    if (folderName === '..') {
       const parts = currentDir.split('/').filter(Boolean)
       parts.pop()
       setCurrentDir(parts.join('/'))
-    } else if (dirName === '📁 Inputs') {
-      setCurrentDir('')
     } else {
-      const newDir = currentDir ? `${currentDir}/${dirName}` : dirName
+      const newDir = currentDir ? `${currentDir}/${folderName}` : folderName
       setCurrentDir(newDir)
     }
   }
@@ -68,6 +94,18 @@ export default function FileBrowser({ onClose, onSelect, value, className = '', 
     if (filterType === 'video' && !VIDEO_EXTS.has(ext)) return false
     if (searchQuery && !f.name.toLowerCase().includes(searchQuery.toLowerCase())) return false
     return true
+  })
+
+  // Sort: parent (..) first, then directories alphabetically, then files alphabetically
+  const sorted = filtered.slice().sort((a, b) => {
+    const aIsParent = a.name === '..'
+    const bIsParent = b.name === '..'
+    if (aIsParent) return -1
+    if (bIsParent) return 1
+    if (a.type !== b.type) {
+      return (a.type === 'dir' ? -1 : 1)
+    }
+    return a.name.localeCompare(b.name)
   })
 
   function thumbUrl(file) {
@@ -85,23 +123,13 @@ export default function FileBrowser({ onClose, onSelect, value, className = '', 
           <span key={i} className="file-browser-breadcrumb-item">
             <span
               className="file-browser-breadcrumb-link"
-              onClick={() => handleDirClick(crumb)}
+              onClick={() => handleBreadcrumbClick(crumb)}
             >
               {crumb}
               {i < breadcrumbs.length - 1 ? '  ›  ' : ''}
             </span>
           </span>
         ))}
-        {currentDir && (
-          <span className="file-browser-breadcrumb-parent" onClick={() => handleDirClick('..')}>
-            ↑ Parent
-          </span>
-        )}
-      </div>
-
-      {/* Header */}
-      <div className="file-browser-header">
-        <h2 className="file-browser-title">{title}</h2>
         {isModal && (
           <button className="file-browser-close-btn" onClick={onClose} aria-label="Close">✕</button>
         )}
@@ -141,23 +169,23 @@ export default function FileBrowser({ onClose, onSelect, value, className = '', 
       <div className="file-browser-content">
         {loading ? (
           <div className="file-browser-empty"><span>Loading…</span></div>
-        ) : filtered.length === 0 ? (
+        ) : sorted.length === 0 ? (
           <div className="file-browser-empty"><span>No matching files</span></div>
         ) : viewMode === 'grid' ? (
           <div className="file-browser-grid">
-            {filtered.map(f => (
+            {sorted.map(f => (
               f.type === 'dir' && f.name !== '..' ? (
                 <FileBrowserDirThumb
                   key={f.name}
                   file={f}
-                  onNavigate={handleDirClick}
+                  onNavigate={handleFolderNavigate}
                   currentDir={currentDir}
                 />
               ) : f.type === 'dir' && f.name === '..' ? (
                 <div
                   key=".."
                   className="file-browser-thumb file-browser-dir-thumb"
-                  onClick={() => handleDirClick('..')}
+                  onClick={() => handleFolderNavigate('..')}
                 >
                   <div className="file-browser-thumb__media">
                     <div className="file-browser-thumb__blur" />
@@ -175,7 +203,7 @@ export default function FileBrowser({ onClose, onSelect, value, className = '', 
                   key={f.name}
                   file={f}
                   thumbUrl={thumbUrl(f)}
-                  isSelected={isModal && f.name === value}
+                  isSelected={isModal && f.name === valueBasename}
                   onClick={() => {
                     if (onSelect) {
                       onSelect(currentDir ? `${currentDir}/${f.name}` : f.name)
@@ -188,18 +216,18 @@ export default function FileBrowser({ onClose, onSelect, value, className = '', 
           </div>
         ) : (
           <div className="file-browser-list">
-            {filtered.map(f => (
+            {sorted.map(f => (
               f.type === 'dir' && f.name !== '..' ? (
                 <FileBrowserDirListItem
                   key={f.name}
                   file={f}
-                  onNavigate={handleDirClick}
+                  onNavigate={handleFolderNavigate}
                 />
               ) : f.type === 'dir' && f.name === '..' ? (
                 <div
                   key=".."
                   className="file-browser-list-item"
-                  onClick={() => handleDirClick('..')}
+                  onClick={() => handleFolderNavigate('..')}
                 >
                   <span className="file-browser-list-icon">↑</span>
                   <span className="file-browser-list-name">Parent</span>

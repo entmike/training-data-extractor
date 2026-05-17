@@ -96,7 +96,7 @@ export default function InputsPage() {
       </div>
 
       {/* Shared file browser */}
-      <div key={refreshKey}>
+      <div key={refreshKey} style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <FileBrowser />
       </div>
     </div>
