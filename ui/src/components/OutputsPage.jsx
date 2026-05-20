@@ -1103,8 +1103,7 @@ function OutputCard({ output, onClick, inTrash, onRestore, onDelete, onLikeToggl
             >⚠</button>
             {onDelete && !output.liked && (
               <button
-                className="output-nsfw-btn"
-                style={{ color: 'var(--error, #e55)' }}
+                className="output-trash-btn"
                 onClick={e => { e.stopPropagation(); onDelete() }}
                 title="Delete"
               >🗑</button>
@@ -1456,6 +1455,7 @@ function OutputsView() {
               onClick={() => navigate(`/outputs/${o.id}`)}
               onLikeToggle={handleLikeToggle}
               onNsfwToggle={handleNsfwToggle}
+              onDelete={() => handleDelete(o)}
             />
           ))}
         </div>
@@ -1789,7 +1789,10 @@ function OutputDetailPage({ outputId, navigate }) {
       onPrev={handlePrev}
       onNext={handleNext}
       onDelete={() => {
-        fetch(`/api/outputs/${outputId}/delete`, { method: 'POST' }).then(() => handleBack())
+        fetch(`/api/outputs/${outputId}/delete`, { method: 'POST' }).then(() => {
+          if (nextId != null) navigate(`/outputs/${nextId}`)
+          else handleBack()
+        })
       }}
       inTrash={false}
       onRestore={null}
@@ -1801,7 +1804,10 @@ function OutputDetailPage({ outputId, navigate }) {
       onNsfwToggle={() => {
         const newNsfw = !output.nsfw
         fetch(`/api/outputs/${outputId}/${newNsfw ? 'nsfw' : 'unnsfw'}`, { method: 'POST' })
-        if (newNsfw) handleBack()
+        if (newNsfw) {
+          if (nextId != null) navigate(`/outputs/${nextId}`)
+          else handleBack()
+        }
         else setOutput({ ...output, nsfw: false })
       }}
     />
