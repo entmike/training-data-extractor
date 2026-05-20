@@ -5061,6 +5061,96 @@ def comfyui_node_timing_by_prompt(prompt_id: str):
     return jsonify({'node_timing': rows})
 
 
+# ── GPU Metrics endpoint ──────────────────────────────────────────────────────
+
+@app.route('/api/gpu-metrics', methods=['GET'])
+def gpu_metrics():
+    """Return GPU metrics: utilization, temperature, power draw from nvidia-smi."""
+    try:
+        result = subprocess.run(
+            [
+                'nvidia-smi',
+                '--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit',
+                '--format=csv,noheader,nounits',
+                '--id=0',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return jsonify({'error': f'nvidia-smi failed: {result.stderr.strip()}'}), 500
+
+        parts = result.stdout.strip().split(',')
+        if len(parts) < 6:
+            return jsonify({'error': 'Unexpected nvidia-smi output format'}), 500
+
+        try:
+            gpu_util = int(parts[0].strip())
+            mem_used = int(parts[1].strip())
+            mem_total = int(parts[2].strip())
+            temp = int(parts[3].strip())
+            power_draw = float(parts[4].strip())
+            power_limit = float(parts[5].strip())
+        except (ValueError, IndexError):
+            return jsonify({'error': 'Failed to parse nvidia-smi output'}), 500
+
+        mem_used_gb = mem_used / 1024  # nvidia-smi returns MB, convert to GB
+        mem_total_gb = mem_total / 1024
+        mem_pct = (mem_used / mem_total * 100) if mem_total > 0 else 0
+
+        # Also fetch ComfyUI system_stats for VRAM free (from ComfyUI's own tracking)
+        system_stats = None
+        try:
+            endpoint = _comfyui_endpoint()
+            if endpoint:
+                stats_url = f"{endpoint.rstrip('/')}/api/system_stats"
+                import urllib.request as _urllib_request
+                req = _urllib_request.Request(stats_url, headers={'Accept': 'application/json'})
+                with _urllib_request.urlopen(req, timeout=10) as resp:
+                    system_stats = json.loads(resp.read())
+        except Exception:
+            system_stats = None
+
+        # Merge nvidia-smi data with ComfyUI system_stats
+        device_info = None
+        vram_total = None
+        vram_free = None
+        torch_vram_total = None
+        torch_vram_free = None
+        if system_stats and system_stats.get('devices'):
+            device = system_stats['devices'][0]
+            device_info = device.get('name')
+            vram_total = device.get('vram_total')
+            vram_free = device.get('vram_free')
+            torch_vram_total = device.get('torch_vram_total')
+            torch_vram_free = device.get('torch_vram_free')
+
+        return jsonify({
+            'gpu_utilization': gpu_util,
+            'gpu_temperature': temp,
+            'gpu_power_draw': power_draw,
+            'gpu_power_limit': power_limit,
+            'gpu_memory_used_mb': mem_used,
+            'gpu_memory_total_mb': mem_total,
+            'gpu_memory_used_gb': round(mem_used_gb, 2),
+            'gpu_memory_total_gb': round(mem_total_gb, 2),
+            'gpu_memory_pct': round(mem_pct, 1),
+            'device_name': device_info,
+            'comfyui_vram_total': vram_total,
+            'comfyui_vram_free': vram_free,
+            'torch_vram_total': torch_vram_total,
+            'torch_vram_free': torch_vram_free,
+        })
+
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'nvidia-smi timed out'}), 500
+    except FileNotFoundError:
+        return jsonify({'error': 'nvidia-smi not found — is nvidia-driver installed?'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     import argparse
     

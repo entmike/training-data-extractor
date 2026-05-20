@@ -1,6 +1,7 @@
 import { useState, useContext } from 'react'
 import { AppContext } from '../context'
 import NodeTimingTable from './NodeTimingTable'
+import GpuMetricsCard from './GpuMetricsCard'
 
 function fmtDuration(seconds) {
   if (seconds == null || seconds == undefined) return '—'
@@ -90,6 +91,9 @@ export default function ComfyQueuePage() {
 
   return (
     <div className="cq-page">
+      {/* GPU Metrics Card */}
+      <GpuMetricsCard fetchInterval={5000} />
+
       <div className="cq-header">
         <h2 className="cq-title">ComfyUI Queue</h2>
         <div className="cq-header-actions">

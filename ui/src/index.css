@@ -5595,3 +5595,113 @@ html, body {
   white-space: nowrap;
 }
 
+/* ── GPU Metrics Card ──────────────────────────────────────── */
+.gmc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-bottom: 24px;
+  overflow: hidden;
+}
+.gmc--error {
+  border-color: #ef4444;
+}
+.gmc--loading,
+.gmc--empty {
+  border-color: var(--border);
+}
+.gmc-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 20px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.gmc-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.gmc-poll-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10b981;
+  animation: gmc-pulse 2s infinite;
+}
+@keyframes gmc-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.gmc-body {
+  padding: 16px 20px 20px;
+}
+.gmc-device {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gmc-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.gmc-grid--2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+.gmc-card {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+.gmc-card-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+.gmc-bar-bg {
+  height: 6px;
+  background: var(--bg-raised);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.gmc-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+.gmc-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+.gmc-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.gmc-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+@media (max-width: 600px) {
+  .gmc-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .gmc-grid--2 {
+    grid-template-columns: 1fr;
+  }
+}
+
